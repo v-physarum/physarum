@@ -69,6 +69,18 @@ Scripts are written in Rust, not shell.
 
 Benchmarks use hyperfine.
 
+## Pull request rules
+
+Numbering continues after rule 7. This section states rules 8 and 9. Later rules use the next integer and do not renumber these rules.
+
+### 8. Own pull request
+
+AGENTS.md may be edited only in its own pull request. Do not mix AGENTS.md edits with other changes.
+
+### 9. One crate
+
+Each pull request works on its own crate and does not touch other crates.
+
 ## Build, lint, and test
 
 From the repository root, with the pinned toolchain:
