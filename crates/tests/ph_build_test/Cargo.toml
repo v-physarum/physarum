@@ -5,7 +5,7 @@ edition = "2024"
 rust-version = "1.100"
 license = "MIT"
 repository = "https://github.com/v-physarum/physarum"
-description = "Release rustc probe that emits LLVM IR and assembly."
+description = "Debug rustc probe that returns compiler diagnostics."
 
 [lints.rust]
 unsafe_code = "forbid"
@@ -16,4 +16,6 @@ all = { level = "warn", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
 
 [dependencies]
+serde = { version = "1.0.229", default-features = false, features = ["derive"] }
+serde_json = { version = "1.0.154", default-features = false, features = ["std"] }
 thiserror = { version = "2.0.21", default-features = false, features = ["std"] }

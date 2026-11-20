@@ -1,15 +1,15 @@
-//! Release probe compiler used by `ph_test_asm`.
+//! Debug probe driver.
 //!
-//! [`Probe`] invokes `rustc` and emits LLVM IR plus assembly. [`Assembly`]
-//! parses that text into [`Function`], [`Loop`], and [`Check`] values.
-//! The crate does not choose a profile other than release.
+//! [`Probe`] builds one crate with `rustc` at `opt-level=0` and returns the
+//! compiler diagnostics. Compile errors are [`Diagnostics`]. [`Error`] is
+//! reserved for a `rustc` run that does not start or whose output cannot be read.
 
 #![forbid(unsafe_code)]
 
+mod diagnostics;
 mod error;
-mod ir;
 mod probe;
 
+pub use diagnostics::{Diagnostic, Diagnostics, Level, Span};
 pub use error::{Error, Result};
-pub use ir::{Assembly, Check, CheckKind, Function, Loop};
 pub use probe::Probe;

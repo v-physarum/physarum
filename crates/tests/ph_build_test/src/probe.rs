@@ -1,29 +1,25 @@
-//! `rustc` invocation for one release probe.
+//! `rustc` invocation for one debug probe.
 
 use std::env;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use crate::diagnostics::{self, Diagnostics};
 use crate::error::{ErrorKind, Result};
-use crate::ir::Assembly;
 
 const EDITION: &str = "2024";
 const CRATE_NAME: &str = "probe";
-const OPT_LEVEL: &str = "3";
-const DEBUGINFO: &str = "0";
-const CODEGEN_UNITS: &str = "1";
 
-/// One Rust probe compiled to LLVM IR and assembly.
+/// One Rust probe built for compiler diagnostics.
 ///
-/// [`Probe::emit`] runs only after [`Probe::release`]. There is no debug profile.
+/// [`Probe::diagnostics`] runs `rustc` at `opt-level=0` and reads JSON
+/// diagnostics. It does not emit LLVM IR or assembly.
 #[must_use]
 #[derive(Debug)]
 pub struct Probe {
     source: PathBuf,
-    target: Option<String>,
-    released: bool,
 }
 
 impl Probe {
@@ -31,96 +27,47 @@ impl Probe {
     pub fn new(source: impl Into<PathBuf>) -> Self {
         Self {
             source: source.into(),
-            target: None,
-            released: false,
         }
     }
 
-    /// Compiles the probe as release: `opt-level=3`, no debug info.
-    pub fn release(mut self) -> Self {
-        self.released = true;
-        self
-    }
-
-    /// Passes `--target` to `rustc`.
-    pub fn target(mut self, triple: impl Into<String>) -> Self {
-        self.target = Some(triple.into());
-        self
-    }
-
-    /// Emits LLVM IR and assembly.
+    /// Builds the probe and returns the compiler diagnostics.
+    ///
+    /// An error diagnostic is part of the returned value. [`Err`] means `rustc`
+    /// did not start, or it failed without a JSON diagnostic.
     ///
     /// # Errors
     ///
-    /// Returns an error when [`Probe::release`] was skipped, `rustc` fails,
-    /// or the output cannot be read.
-    pub fn emit(self) -> Result<Assembly> {
-        let Self {
-            source,
-            target,
-            released,
-        } = self;
-        if !released {
-            return Err(ErrorKind::NotRelease.into());
-        }
-        let request = EmitRequest {
-            source: &source,
-            target: target.as_deref(),
-        };
-        let emitted = request.run()?;
-        Ok(Assembly::parse(emitted.ir, emitted.asm))
-    }
-}
-
-struct EmitRequest<'a> {
-    source: &'a Path,
-    target: Option<&'a str>,
-}
-
-struct Emitted {
-    ir: String,
-    asm: String,
-}
-
-impl EmitRequest<'_> {
-    fn run(self) -> Result<Emitted> {
+    /// Returns an error when `rustc` cannot start, its stderr is not UTF-8,
+    /// a diagnostic line is not JSON, or `rustc` fails without a diagnostic.
+    pub fn diagnostics(self) -> Result<Diagnostics> {
         let dir = scratch_dir()?;
         let _guard = TempDir(dir.clone());
         let mut command = Command::new(rustc_program());
         command.arg("--edition").arg(EDITION);
         command.arg("--crate-type").arg("lib");
         command.arg("--crate-name").arg(CRATE_NAME);
-        command.arg("-C").arg(format!("opt-level={OPT_LEVEL}"));
-        command.arg("-C").arg(format!("debuginfo={DEBUGINFO}"));
-        command.arg("-C").arg("debug-assertions=off");
-        command.arg("-C").arg("overflow-checks=off");
-        command
-            .arg("-C")
-            .arg(format!("codegen-units={CODEGEN_UNITS}"));
-        command.arg("--emit=llvm-ir,asm");
+        command.arg("-C").arg("opt-level=0");
+        command.arg("--error-format").arg("json");
+        command.arg("--color").arg("never");
+        command.arg("--emit=metadata");
         command.arg("--out-dir").arg(&dir);
-        if let Some(target) = self.target {
-            command.arg("--target").arg(target);
-        }
-        command.arg(self.source);
+        command.arg(&self.source);
         let output = command
             .output()
             .map_err(|source| ErrorKind::RustcStart { source })?;
-        if !output.status.success() {
-            let stderr = String::from_utf8(output.stderr).map_err(|source| ErrorKind::Utf8 {
-                what: "rustc stderr",
-                source,
-            })?;
-            return Err(ErrorKind::RustcFailed {
+        let stderr = String::from_utf8(output.stderr).map_err(|source| ErrorKind::Utf8 {
+            what: "rustc stderr",
+            source,
+        })?;
+        let parsed = diagnostics::parse(output.status.success(), &stderr)?;
+        if !output.status.success() && parsed.is_empty() {
+            return Err(ErrorKind::ProbeFailed {
                 path: self.source.display().to_string(),
                 stderr,
             }
             .into());
         }
-        Ok(Emitted {
-            ir: read_emit(&dir, "ll", "LLVM IR")?,
-            asm: read_emit(&dir, "s", "assembly")?,
-        })
+        Ok(parsed)
     }
 }
 
@@ -142,24 +89,4 @@ impl Drop for TempDir {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.0);
     }
-}
-
-fn read_emit(dir: &Path, extension: &str, what: &'static str) -> Result<String> {
-    let mut paths = Vec::new();
-    for entry in fs::read_dir(dir)? {
-        let path = entry?.path();
-        if path.extension().and_then(|ext| ext.to_str()) == Some(extension) {
-            paths.push(path);
-        }
-    }
-    paths.sort();
-    if paths.is_empty() {
-        return Err(ErrorKind::EmptyEmit { what }.into());
-    }
-    let mut text = String::new();
-    for path in paths {
-        text.push_str(&fs::read_to_string(path)?);
-        text.push('\n');
-    }
-    Ok(text)
 }
