@@ -1,8 +1,12 @@
 # ph_test_errors
 
-Compile-fail asserts for debug probes. `ErrorTester` is the public API. Each probe is its own crate. The check builds it with `rustc` at `opt-level=0` and edition 2024, then matches an error code and a description without allocating. A mismatch panics with the codes and messages that arrived.
+`ErrorTester` is the only public type.
 
-This crate does not emit LLVM IR or assembly.
+- `file` reads a probe from a path.
+- `source` uses the given text. `rustc` sees it as `probe.rs`.
+- `assert_code_description` is success when an error has that code and its message contains the description. A mismatch panics with the codes and messages that arrived.
+
+Each probe is its own crate, built with `rustc` at `opt-level=0` and edition 2024. The match does not allocate. This crate does not emit LLVM IR or assembly.
 
 ```rust
 use ph_test_errors::ErrorTester;
