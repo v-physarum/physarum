@@ -1009,17 +1009,18 @@ impl<'a> Emitting<'a> {
     }
 
     fn emit_pasted(&mut self, base: &str, index: i128, span: Span) -> Result<()> {
-        let Ok(value) = u128::try_from(index) else {
+        let Ok(raw) = u128::try_from(index) else {
             return Err(Error::new(span, ErrorKind::NegativePaste));
         };
+        let value = Decimal::new(raw);
         let mut stack = [0u8; Paste::CAP];
-        if let Some(text) = Paste::write(&mut stack, base, value) {
+        if let Some(text) = Paste::write(&mut stack, base, &value) {
             self.out.extend([TokenTree::Ident(Ident::new(text, span))]);
             return Ok(());
         }
-        let mut heap = String::with_capacity(base.len().saturating_add(Decimal::len(value)));
+        let mut heap = String::with_capacity(base.len().saturating_add(value.len()));
         heap.push_str(base);
-        Decimal::push(&mut heap, value);
+        value.push(&mut heap);
         self.out.extend([TokenTree::Ident(Ident::new(&heap, span))]);
         Ok(())
     }
@@ -1073,20 +1074,22 @@ struct Paste;
 impl Paste {
     const CAP: usize = 128;
 
-    fn write<'a>(buf: &'a mut [u8], base: &str, value: u128) -> Option<&'a str> {
-        let digits = Decimal::len(value);
+    fn write<'a>(buf: &'a mut [u8], base: &str, value: &Decimal) -> Option<&'a str> {
+        let digits = value.len();
         let len = base.len().checked_add(digits)?;
         if len > buf.len() {
             return None;
         }
         buf[..base.len()].copy_from_slice(base.as_bytes());
-        Decimal::write(&mut buf[base.len()..len], value);
+        value.write(&mut buf[base.len()..len]);
         std::str::from_utf8(&buf[..len]).ok()
     }
 }
 
-/// Decimal text of a `u128` index.
-struct Decimal;
+/// Decimal digits of one non-negative index.
+struct Decimal {
+    value: u128,
+}
 
 impl Decimal {
     const RADIX: u128 = 10;
@@ -1095,17 +1098,22 @@ impl Decimal {
     const ZERO: u8 = b'0';
     const DIGITS: &[u8] = b"0123456789";
 
-    fn len(value: u128) -> usize {
-        if value == 0 {
+    fn new(value: u128) -> Self {
+        Self { value }
+    }
+
+    fn len(&self) -> usize {
+        if self.value == 0 {
             return 1;
         }
-        match usize::try_from(value.ilog10()) {
+        match usize::try_from(self.value.ilog10()) {
             Ok(width) => width + 1,
             Err(_) => Self::MAX_DIGITS,
         }
     }
 
-    fn write(slot: &mut [u8], mut value: u128) {
+    fn write(&self, slot: &mut [u8]) {
+        let mut value = self.value;
         if slot.is_empty() {
             return;
         }
@@ -1119,7 +1127,8 @@ impl Decimal {
         }
     }
 
-    fn push(out: &mut String, mut value: u128) {
+    fn push(&self, out: &mut String) {
+        let mut value = self.value;
         if value == 0 {
             out.push(char::from(Self::ZERO));
             return;
