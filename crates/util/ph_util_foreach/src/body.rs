@@ -52,9 +52,7 @@ impl Call for TokenStream {
         let tokens: Vec<TokenTree> = self.into_iter().collect();
         let span = tokens.first().map_or_else(Span::call_site, TokenTree::span);
         let Some(comma_at) = tokens.iter().position(OneToken::is_comma) else {
-            if tokens.iter().any(|token| {
-                matches!(token, TokenTree::Group(group) if group.delimiter() == Delimiter::Brace)
-            }) {
+            if tokens.iter().any(OneToken::is_brace) {
                 return Err(Error::new(span, ErrorKind::CallForm));
             }
             return Err(Error::new(
@@ -79,12 +77,17 @@ impl Call for TokenStream {
 
 trait OneToken {
     fn is_comma(&self) -> bool;
+    fn is_brace(&self) -> bool;
     fn opens_piece(&self) -> bool;
 }
 
 impl OneToken for TokenTree {
     fn is_comma(&self) -> bool {
         matches!(self, TokenTree::Punct(punct) if punct.as_char() == ',')
+    }
+
+    fn is_brace(&self) -> bool {
+        matches!(self, TokenTree::Group(group) if group.delimiter() == Delimiter::Brace)
     }
 
     fn opens_piece(&self) -> bool {
@@ -106,7 +109,7 @@ impl ArgTokens for [TokenTree] {
         let Some(TokenTree::Ident(name)) = self.first() else {
             return Err(Error::new(span, ErrorKind::CallForm));
         };
-        if !matches!(self.get(1), Some(TokenTree::Punct(punct)) if punct.as_char() == '=') {
+        if !self.is_punct_at(1, '=') {
             return Err(Error::new(name.span(), ErrorKind::CallForm));
         }
         Ok((name.to_string(), self[2..].to_vec()))
@@ -447,7 +450,7 @@ impl Program {
     }
     fn push_named(&mut self, span: Span, raw: &str, pattern: Pattern) -> Result<(u32, bool)> {
         let fan = pattern.uses_index();
-        let op = if matches!(pattern, Pattern::Shorthand { .. }) && raw == "Off" {
+        let op = if pattern.is_off(raw) {
             Op::Off(Ident::new("Off", span))
         } else {
             let base = raw.paste_base();
@@ -481,9 +484,7 @@ impl Program {
         let prepared = {
             let tokens = self.source_slice(source)?;
             match tokens.get(index) {
-                Some(TokenTree::Ident(name))
-                    if tokens.is_plus_at(index + 1) && tokens.is_bare_hash(index + 2) =>
-                {
+                Some(TokenTree::Ident(name)) if tokens.is_paste_suffix(index) => {
                     Some((name.paste_base(), name.span()))
                 }
                 _ => None,
@@ -746,15 +747,10 @@ impl Program {
     }
     fn reject_spaced_ident_hash(&self, source: Source, index: usize) -> Result<()> {
         let tokens = self.source_slice(source)?;
-        if !matches!(tokens.get(index), Some(TokenTree::Ident(_)))
-            || !tokens.is_bare_hash(index + 1)
-        {
+        let Some(span) = tokens.spaced_paste_span(index) else {
             return Ok(());
-        }
-        Err(Error::new(
-            tokens.hash_span(index + 1),
-            ErrorKind::SpacedPaste,
-        ))
+        };
+        Err(Error::new(span, ErrorKind::SpacedPaste))
     }
 
     fn mark(&self) -> BufferMark {
@@ -1108,6 +1104,10 @@ trait SourceTokens {
     fn hash_is_attribute(&self, hash_index: usize) -> bool;
     fn hash_span(&self, index: usize) -> Span;
     fn is_plus_at(&self, index: usize) -> bool;
+    fn is_punct_at(&self, index: usize, mark: char) -> bool;
+    fn is_ident_at(&self, index: usize) -> bool;
+    fn is_paste_suffix(&self, index: usize) -> bool;
+    fn spaced_paste_span(&self, index: usize) -> Option<Span>;
 }
 
 impl SourceTokens for [TokenTree] {
@@ -1123,7 +1123,7 @@ impl SourceTokens for [TokenTree] {
     }
 
     fn is_hash(&self, index: usize) -> bool {
-        matches!(self.get(index), Some(TokenTree::Punct(punct)) if punct.as_char() == '#')
+        self.is_punct_at(index, '#')
     }
 
     fn hash_is_attribute(&self, hash_index: usize) -> bool {
@@ -1140,7 +1140,27 @@ impl SourceTokens for [TokenTree] {
     }
 
     fn is_plus_at(&self, index: usize) -> bool {
-        matches!(self.get(index), Some(TokenTree::Punct(punct)) if punct.as_char() == '+')
+        self.is_punct_at(index, '+')
+    }
+
+    fn is_punct_at(&self, index: usize, mark: char) -> bool {
+        matches!(self.get(index), Some(TokenTree::Punct(punct)) if punct.as_char() == mark)
+    }
+
+    fn is_ident_at(&self, index: usize) -> bool {
+        matches!(self.get(index), Some(TokenTree::Ident(_)))
+    }
+
+    fn is_paste_suffix(&self, index: usize) -> bool {
+        self.is_plus_at(index + 1) && self.is_bare_hash(index + 2)
+    }
+
+    fn spaced_paste_span(&self, index: usize) -> Option<Span> {
+        if self.is_ident_at(index) && self.is_bare_hash(index + 1) {
+            Some(self.hash_span(index + 1))
+        } else {
+            None
+        }
     }
 }
 

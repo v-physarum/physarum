@@ -20,6 +20,12 @@ pub(crate) enum BoundStyle {
     Step,
 }
 
+impl BoundStyle {
+    fn is_last_index(self, magnitude: i128) -> bool {
+        self == Self::Pattern && magnitude == 1
+    }
+}
+
 /// A bound before it is evaluated.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Bound {
@@ -106,6 +112,12 @@ impl RangeExpr {
             .end(Some(SpannedBound::here(0, span)))
             .end_inclusive(true)
             .build()
+    }
+
+    fn mentions_index(self) -> bool {
+        let start = self.start.is_some_and(SpannedBound::mentions_index);
+        let end = self.end.is_some_and(SpannedBound::mentions_index);
+        start || end
     }
 
     /// Parses `tokens` as one range. `style` decides what `-1` and `#` mean.
@@ -261,10 +273,7 @@ impl Pattern {
     pub(crate) fn uses_index(self) -> bool {
         match self {
             Self::Shorthand { .. } => true,
-            Self::Range(range) => {
-                range.start.is_some_and(SpannedBound::mentions_index)
-                    || range.end.is_some_and(SpannedBound::mentions_index)
-            }
+            Self::Range(range) => range.mentions_index(),
         }
     }
 
@@ -274,6 +283,11 @@ impl Pattern {
             Self::Shorthand { span } => RangeExpr::shorthand(span),
             Self::Range(range) => range,
         }
+    }
+
+    /// `Off[#]`: the shorthand pattern on the name `Off`.
+    pub(crate) fn is_off(self, raw: &str) -> bool {
+        raw == "Off" && matches!(self, Self::Shorthand { .. })
     }
 }
 
@@ -789,6 +803,14 @@ impl<'a> Cursor<'a> {
             .map_or_else(Span::call_site, TokenTree::span)
     }
 
+    fn punct_if(&self, mark: char) -> Option<&'a Punct> {
+        self.punct(0).filter(|punct| punct.as_char() == mark)
+    }
+
+    fn holds(&self, mark: char) -> bool {
+        self.punct_if(mark).is_some()
+    }
+
     fn punct(&self, offset: usize) -> Option<&'a Punct> {
         match self.tokens.get(self.index + offset) {
             Some(TokenTree::Punct(punct)) => Some(punct),
@@ -798,11 +820,7 @@ impl<'a> Cursor<'a> {
 
     fn starts_with_joint(&self, first: char, second: char) -> bool {
         match (self.punct(0), self.punct(1)) {
-            (Some(left), Some(right)) => {
-                left.as_char() == first
-                    && right.as_char() == second
-                    && left.spacing() == Spacing::Joint
-            }
+            (Some(left), Some(right)) => left.opens(right, first, second),
             _ => false,
         }
     }
@@ -825,7 +843,7 @@ impl<'a> Cursor<'a> {
         let Some(first) = self.punct(0) else {
             return Err(Error::new(self.error_span(), ErrorKind::ExpectedDots));
         };
-        if first.as_char() != '.' || first.spacing() != Spacing::Joint {
+        if !first.is_joint('.') {
             return Err(Error::new(first.span(), ErrorKind::ExpectedDots));
         }
         let start_span = first.span();
@@ -839,11 +857,11 @@ impl<'a> Cursor<'a> {
         self.bump();
         // `..#` and `..::S` keep the second `.` joint because `#` and `:` are
         // punctuation. Only a following `=` makes the operator inclusive.
-        if self.punct(0).is_some_and(|punct| punct.as_char() == '=') {
+        if self.holds('=') {
             self.bump();
             return Ok(true);
         }
-        if self.punct(0).is_some_and(|punct| punct.as_char() == '.') {
+        if self.holds('.') {
             return Err(Error::new(start_span, ErrorKind::ExpectedDots));
         }
         Ok(false)
@@ -875,13 +893,13 @@ impl<'a> Cursor<'a> {
     }
 
     fn parse_bound(&mut self, style: BoundStyle) -> BoundResult {
-        if let Some(hash) = self.punct(0).filter(|punct| punct.as_char() == '#') {
+        if let Some(hash) = self.punct_if('#') {
             let span = hash.span();
             self.bump();
             let offset = self.parse_hash_offset()?;
             return Ok(SpannedBound::here(offset, span));
         }
-        if self.punct(0).is_some_and(|punct| punct.as_char() == '-') {
+        if self.holds('-') {
             let parsed = match (self.punct(0), self.tokens.get(self.index + 1)) {
                 (Some(minus), Some(TokenTree::Literal(literal))) => {
                     Some((minus.span(), Radix::parse(literal)?))
@@ -893,7 +911,7 @@ impl<'a> Cursor<'a> {
             };
             self.bump();
             self.bump();
-            if style == BoundStyle::Pattern && magnitude == 1 {
+            if style.is_last_index(magnitude) {
                 return Ok(SpannedBound::last_index(span));
             }
             let signed = magnitude
@@ -971,7 +989,7 @@ impl Radix {
 
     fn parse_digits(text: &str, span: Span) -> Result<i128> {
         let (radix, digits) = Self::split(text);
-        if digits.is_empty() || !digits.bytes().all(|byte| RadixDigit::is(byte, radix)) {
+        if !RadixDigit::covers(digits, radix) {
             return Err(Error::new(span, ErrorKind::UnsuffixedLiteral));
         }
         i128::from_str_radix(digits, radix)
@@ -1011,6 +1029,10 @@ impl RadixDigit {
     const UPPER_A: u8 = b'A';
     const UPPER_Z: u8 = b'Z';
 
+    fn covers(digits: &str, radix: u32) -> bool {
+        !digits.is_empty() && digits.bytes().all(|byte| Self::is(byte, radix))
+    }
+
     fn is(byte: u8, radix: u32) -> bool {
         let value = match byte {
             Self::ZERO..=Self::NINE => u32::from(byte - Self::ZERO),
@@ -1020,5 +1042,20 @@ impl RadixDigit {
             _ => return false,
         };
         value < radix
+    }
+}
+
+trait JointMark {
+    fn is_joint(&self, mark: char) -> bool;
+    fn opens(&self, next: &Punct, first: char, second: char) -> bool;
+}
+
+impl JointMark for Punct {
+    fn is_joint(&self, mark: char) -> bool {
+        self.as_char() == mark && self.spacing() == Spacing::Joint
+    }
+
+    fn opens(&self, next: &Punct, first: char, second: char) -> bool {
+        self.is_joint(first) && next.as_char() == second
     }
 }
