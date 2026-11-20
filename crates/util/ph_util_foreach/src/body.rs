@@ -31,13 +31,17 @@ pub(crate) fn expand(input: TokenStream) -> Result<TokenStream> {
         outer.each(|index| {
             let domain = Domain::prefix(index);
             let tape = Tape::new(0, stat.logical);
-            output.emit_seq(&program, tape, &EvalCtx::new(index, &domain))
+            output
+                .with_program(&program)
+                .emit_seq(tape, &EvalCtx::new(index, &domain))
         })?;
     } else {
         let domain = Domain::flat(&outer);
         outer.each(|index| {
             let tape = Tape::new(0, stat.logical);
-            output.emit_seq(&program, tape, &EvalCtx::new(index, &domain))
+            output
+                .with_program(&program)
+                .emit_seq(tape, &EvalCtx::new(index, &domain))
         })?;
     }
     Ok(output)
@@ -848,57 +852,46 @@ impl RowHead {
     }
 }
 
-trait Emit {
-    fn emit_seq(&mut self, prog: &Program, tape: Tape, ctx: &EvalCtx<'_>) -> Result<()>;
-
-    fn emit_group(&mut self, prog: &Program, group: GroupEmit, ctx: &EvalCtx<'_>) -> Result<()>;
-
-    fn emit_list(&mut self, prog: &Program, tape: Tape, ctx: &EvalCtx<'_>) -> Result<()>;
-
-    fn emit_piece(&mut self, prog: &Program, at: usize, out: &mut ListOut<'_>) -> Result<()>;
-
-    fn emit_copy(&mut self, prog: &Program, at: u32, len: u32) -> Result<()>;
-
-    fn push_comma(&mut self, emitted: &mut bool);
-
-    fn emit_pasted(&mut self, base: &str, index: i128, span: Span) -> Result<()>;
-
-    fn emit_ident(&mut self, emitted: &mut bool, ident: Ident);
-
-    fn emit_named(&mut self, out: &mut ListOut<'_>, name: NameEmit<'_>) -> Result<()>;
-
-    fn emit_rows(&mut self, prog: &Program, out: &mut ListOut<'_>, row: RowHead) -> Result<()>;
+/// An output stream bound to the program it reads.
+struct Emitting<'a> {
+    out: &'a mut TokenStream,
+    prog: &'a Program,
 }
 
-impl Emit for TokenStream {
-    fn emit_seq(&mut self, prog: &Program, tape: Tape, ctx: &EvalCtx<'_>) -> Result<()> {
+impl<'a> Emitting<'a> {
+    fn new(out: &'a mut TokenStream, prog: &'a Program) -> Self {
+        Self { out, prog }
+    }
+
+    fn emit_seq(&mut self, tape: Tape, ctx: &EvalCtx<'_>) -> Result<()> {
         let mut at = tape.at;
         for _ in 0..tape.count {
-            let inst = prog.ops.get(at).cloned().ok_or_else(too_large)?;
+            let inst = self.prog.ops.get(at).cloned().ok_or_else(too_large)?;
             let width = widen(inst.width)?;
             if width == 0 {
                 return Err(too_large());
             }
             match inst.op {
-                Op::Copy { at: tok_at, len } => self.emit_copy(prog, tok_at, len)?,
+                Op::Copy { at: tok_at, len } => self.emit_copy(tok_at, len)?,
                 Op::Group { delimiter, span, body } => {
                     let group = GroupEmit::new(at, delimiter, span, body);
-                    self.emit_group(prog, group, ctx)?;
+                    self.emit_group(&group, ctx)?;
                 }
                 Op::Index { span } => {
-                    self.extend([TokenTree::Literal(ctx.index_literal(span))]);
+                    self.out
+                        .extend([TokenTree::Literal(ctx.index_literal(span))]);
                 }
                 Op::Paste { at: base_at, len, span } => {
-                    self.emit_pasted(prog.text(base_at, len)?, ctx.index, span)?;
+                    self.emit_pasted(self.prog.text(base_at, len)?, ctx.index, span)?;
                 }
                 Op::List { pieces } => {
                     let body_at = at.checked_add(1).ok_or_else(too_large)?;
-                    self.emit_list(prog, Tape::new(body_at, pieces), ctx)?;
+                    self.emit_list(Tape::new(body_at, pieces), ctx)?;
                 }
                 Op::Ident(_) | Op::Off(_) | Op::Named { .. } | Op::Rows { .. } => {
                     let mut emitted = false;
                     let mut out = ListOut::new(ctx, &mut emitted);
-                    self.emit_piece(prog, at, &mut out)?;
+                    self.emit_piece(at, &mut out)?;
                 }
             }
             at = at.checked_add(width).ok_or_else(too_large)?;
@@ -906,22 +899,24 @@ impl Emit for TokenStream {
         Ok(())
     }
 
-    fn emit_group(&mut self, prog: &Program, group: GroupEmit, ctx: &EvalCtx<'_>) -> Result<()> {
+    fn emit_group(&mut self, group: &GroupEmit, ctx: &EvalCtx<'_>) -> Result<()> {
         let mut inner = TokenStream::new();
         let body_at = group.at.checked_add(1).ok_or_else(too_large)?;
-        inner.emit_seq(prog, Tape::new(body_at, group.body), ctx)?;
+        let tape = Tape::new(body_at, group.body);
+        inner.with_program(self.prog).emit_seq(tape, ctx)?;
         let mut built = Group::new(group.delimiter, inner);
         built.set_span(group.span);
-        self.extend([TokenTree::Group(built)]);
+        self.out.extend([TokenTree::Group(built)]);
         Ok(())
     }
 
-    fn emit_list(&mut self, prog: &Program, tape: Tape, ctx: &EvalCtx<'_>) -> Result<()> {
+    fn emit_list(&mut self, tape: Tape, ctx: &EvalCtx<'_>) -> Result<()> {
         let mut emitted = false;
         let mut out = ListOut::new(ctx, &mut emitted);
         let mut at = tape.at;
         for _ in 0..tape.count {
-            let width = prog
+            let width = self
+                .prog
                 .ops
                 .get(at)
                 .map(|inst| inst.width)
@@ -930,26 +925,27 @@ impl Emit for TokenStream {
             if width == 0 {
                 return Err(too_large());
             }
-            self.emit_piece(prog, at, &mut out)?;
+            self.emit_piece(at, &mut out)?;
             at = at.checked_add(width).ok_or_else(too_large)?;
         }
         Ok(())
     }
 
-    fn emit_piece(&mut self, prog: &Program, at: usize, out: &mut ListOut<'_>) -> Result<()> {
-        let op = prog.ops.get(at).cloned().ok_or_else(too_large)?.op;
+    fn emit_piece(&mut self, at: usize, out: &mut ListOut<'_>) -> Result<()> {
+        let op = self.prog.ops.get(at).cloned().ok_or_else(too_large)?.op;
         match op {
             Op::Ident(ident) | Op::Off(ident) => {
                 self.emit_ident(out.emitted, ident);
                 Ok(())
             }
             Op::Named { at: base_at, len, span, pattern } => {
-                let name = NameEmit::new(prog.text(base_at, len)?, span, pattern);
-                self.emit_named(out, name)
+                let name = NameEmit::new(self.prog.text(base_at, len)?, span, pattern);
+                self.emit_named(out, &name)
             }
             Op::Rows { span, pattern, body } => {
                 let body_at = at.checked_add(1).ok_or_else(too_large)?;
-                self.emit_rows(prog, out, RowHead::new(body_at, span, pattern, body))
+                let row = RowHead::new(body_at, span, pattern, body);
+                self.emit_rows(out, &row)
             }
             Op::Copy { .. }
             | Op::Group { .. }
@@ -959,19 +955,20 @@ impl Emit for TokenStream {
         }
     }
 
-    fn emit_copy(&mut self, prog: &Program, at: u32, len: u32) -> Result<()> {
+    fn emit_copy(&mut self, at: u32, len: u32) -> Result<()> {
         let start = widen(at)?;
         let end = start.checked_add(widen(len)?).ok_or_else(too_large)?;
-        let Some(tokens) = prog.tokens.get(start..end) else {
+        let Some(tokens) = self.prog.tokens.get(start..end) else {
             return Err(too_large());
         };
-        self.extend(tokens.iter().cloned());
+        self.out.extend(tokens.iter().cloned());
         Ok(())
     }
 
     fn push_comma(&mut self, emitted: &mut bool) {
         if *emitted {
-            self.extend([TokenTree::Punct(Punct::new(',', Spacing::Alone))]);
+            self.out
+                .extend([TokenTree::Punct(Punct::new(',', Spacing::Alone))]);
         }
         *emitted = true;
     }
@@ -982,22 +979,22 @@ impl Emit for TokenStream {
         };
         let mut stack = [0u8; Paste::CAP];
         if let Some(text) = Paste::write(&mut stack, base, value) {
-            self.extend([TokenTree::Ident(Ident::new(text, span))]);
+            self.out.extend([TokenTree::Ident(Ident::new(text, span))]);
             return Ok(());
         }
         let mut heap = String::with_capacity(base.len().saturating_add(Decimal::len(value)));
         heap.push_str(base);
         Decimal::push(&mut heap, value);
-        self.extend([TokenTree::Ident(Ident::new(&heap, span))]);
+        self.out.extend([TokenTree::Ident(Ident::new(&heap, span))]);
         Ok(())
     }
 
     fn emit_ident(&mut self, emitted: &mut bool, ident: Ident) {
         self.push_comma(emitted);
-        self.extend([TokenTree::Ident(ident)]);
+        self.out.extend([TokenTree::Ident(ident)]);
     }
 
-    fn emit_named(&mut self, out: &mut ListOut<'_>, name: NameEmit<'_>) -> Result<()> {
+    fn emit_named(&mut self, out: &mut ListOut<'_>, name: &NameEmit<'_>) -> Result<()> {
         let ctx = *out.ctx;
         let range = name.pattern.to_range();
         range.visit(&ctx, |index| {
@@ -1006,20 +1003,32 @@ impl Emit for TokenStream {
         })
     }
 
-    fn emit_rows(&mut self, prog: &Program, out: &mut ListOut<'_>, row: RowHead) -> Result<()> {
+    fn emit_rows(&mut self, out: &mut ListOut<'_>, row: &RowHead) -> Result<()> {
         let ctx = *out.ctx;
         let domain = ctx.domain;
         let range = row.pattern.to_range();
         range.visit(&ctx, |index| {
             let mut inner = TokenStream::new();
             let tape = Tape::new(row.at, row.body);
-            inner.emit_seq(prog, tape, &EvalCtx::new(index, domain))?;
+            inner
+                .with_program(self.prog)
+                .emit_seq(tape, &EvalCtx::new(index, domain))?;
             self.push_comma(out.emitted);
             let mut group = Group::new(Delimiter::Parenthesis, inner);
             group.set_span(row.span);
-            self.extend([TokenTree::Group(group)]);
+            self.out.extend([TokenTree::Group(group)]);
             Ok(())
         })
+    }
+}
+
+trait WithProgram {
+    fn with_program<'a>(&'a mut self, prog: &'a Program) -> Emitting<'a>;
+}
+
+impl WithProgram for TokenStream {
+    fn with_program<'a>(&'a mut self, prog: &'a Program) -> Emitting<'a> {
+        Emitting::new(self, prog)
     }
 }
 
