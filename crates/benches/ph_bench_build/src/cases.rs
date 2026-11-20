@@ -1,7 +1,7 @@
 //! Case groups read from a directory layout.
 //!
-//! Group folders name the runs. Marker file names name the cases. `.rs` files
-//! next to those folders are the source.
+//! Group and kind are folders. Each count is a non-empty `.rs` file in the
+//! kind folder, and that file is the source.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -38,14 +38,6 @@ pub(crate) struct Groups {
     pub(crate) release: Vec<Case>,
 }
 
-struct TemplateFile {
-    path: PathBuf,
-}
-
-struct Templates {
-    files: Vec<TemplateFile>,
-}
-
 #[derive(Default)]
 struct GroupPaths {
     warmup: Option<PathBuf>,
@@ -54,44 +46,23 @@ struct GroupPaths {
     release: Option<PathBuf>,
 }
 
-struct Marker {
-    name: String,
-    /// `name` is `{kind}_{count}`. `kind` is the borrowed prefix.
-    kind_len: usize,
-    count: u32,
+struct KindDir {
+    path: PathBuf,
+    counts: Vec<CountFile>,
+    item: Option<PathBuf>,
 }
 
-impl Marker {
-    fn kind(&self) -> &str {
-        &self.name[..self.kind_len]
-    }
-
-    fn parse(path: &Path) -> Result<Self> {
-        let stem = file_stem(path).ok_or_else(|| unexpected(path))?;
-        let Some((kind, count_text)) = stem.rsplit_once('_') else {
-            return Err(Error::unknown_case(stem));
-        };
-        if kind.is_empty() {
-            return Err(Error::unknown_case(stem));
-        }
-        let Ok(count) = count_text.parse::<u32>() else {
-            return Err(Error::unknown_case(stem));
-        };
-        let kind_len = kind.len();
-        Ok(Self {
-            name: case_name(kind, count),
-            kind_len,
-            count,
-        })
-    }
+struct CountFile {
+    count: u32,
+    path: PathBuf,
 }
 
 /// Reads `directory` into warmup, debug, incremental, and release cases.
 ///
 /// # Errors
 ///
-/// Returns an error when the directory is not a case layout, a marker or
-/// template is missing or duplicated, or a template file cannot be read.
+/// Returns an error when the directory is not a case layout, a count file is
+/// missing or duplicated, or a source file cannot be read.
 pub(crate) fn load(directory: &Path) -> Result<Groups> {
     if !directory.is_dir() {
         return Err(ErrorKind::NotACaseDirectory {
@@ -99,40 +70,29 @@ pub(crate) fn load(directory: &Path) -> Result<Groups> {
         }
         .into());
     }
-    let (templates, groups) = split(directory)?;
+    let groups = split(directory)?;
     let mut discovered = Groups::default();
-    push_group(&mut discovered.warmup, groups.warmup.as_deref(), &templates)?;
-    push_group(&mut discovered.debug, groups.debug.as_deref(), &templates)?;
-    push_group(
-        &mut discovered.incremental,
-        groups.incremental.as_deref(),
-        &templates,
-    )?;
-    push_group(
-        &mut discovered.release,
-        groups.release.as_deref(),
-        &templates,
-    )?;
+    push_group(&mut discovered.warmup, groups.warmup.as_deref())?;
+    push_group(&mut discovered.debug, groups.debug.as_deref())?;
+    push_group(&mut discovered.incremental, groups.incremental.as_deref())?;
+    push_group(&mut discovered.release, groups.release.as_deref())?;
     if discovered.warmup.is_empty() {
         return Err(ErrorKind::MissingWarmup.into());
     }
     Ok(discovered)
 }
 
-fn split(directory: &Path) -> Result<(Templates, GroupPaths)> {
+fn split(directory: &Path) -> Result<GroupPaths> {
     let paths = list(directory)?;
-    let mut files = Vec::with_capacity(paths.len());
     let mut groups = GroupPaths::default();
     for path in paths {
         if path.is_dir() {
             assign(&mut groups, path)?;
-        } else if path.is_file() && is_rust_source(&path) && file_stem(&path).is_some() {
-            files.push(TemplateFile { path });
         } else {
             return Err(unexpected(&path));
         }
     }
-    Ok((Templates { files }, groups))
+    Ok(groups)
 }
 
 fn assign(groups: &mut GroupPaths, path: PathBuf) -> Result<()> {
@@ -160,67 +120,113 @@ enum Group {
     Release,
 }
 
-fn push_group(out: &mut Vec<Case>, directory: Option<&Path>, templates: &Templates) -> Result<()> {
+fn push_group(out: &mut Vec<Case>, directory: Option<&Path>) -> Result<()> {
     let Some(directory) = directory else {
         return Ok(());
     };
     let paths = list(directory)?;
-    let mut markers = Vec::with_capacity(paths.len());
+    let mut kinds = Vec::with_capacity(paths.len());
     for path in paths {
-        if !path.is_file() {
+        if !path.is_dir() {
             return Err(unexpected(&path));
         }
-        markers.push(Marker::parse(&path)?);
+        kinds.push(read_kind(path)?);
     }
-    markers.sort_by(|left, right| {
-        left.kind()
-            .cmp(right.kind())
-            .then(left.count.cmp(&right.count))
-    });
-    out.reserve(markers.len());
-    for marker in markers {
-        if out.iter().any(|case| case.name == marker.name) {
-            return Err(ErrorKind::DuplicateCase { case: marker.name }.into());
+    let total = kinds.iter().map(|kind| kind.counts.len()).sum();
+    out.reserve(total);
+    for kind in &kinds {
+        let name = file_name(&kind.path)?;
+        reject_duplicates(name, &kind.counts)?;
+        for count in &kind.counts {
+            out.push(Case {
+                name: case_name(name, count.count),
+                source: source_for(count, kind.item.as_deref())?,
+            });
         }
-        let source = templates.source(marker.kind(), marker.count)?;
-        out.push(Case {
-            name: marker.name,
-            source,
-        });
     }
     Ok(())
 }
 
-impl Templates {
-    fn source(&self, kind: &str, count: u32) -> Result<String> {
-        let Some(header) = self
-            .files
-            .iter()
-            .find(|file| file_stem(&file.path) == Some(kind))
-        else {
-            return Err(ErrorKind::MissingTemplate {
-                case: case_name(kind, count),
-                template: format!("{kind}.rs"),
-            }
-            .into());
-        };
-        if let Some(item) = singular(&self.files, kind) {
-            let header_text = read_exact(&header.path)?;
-            let item_text = read_exact(&item.path)?;
-            let next = item_text.contains(NEXT_KEY).then_some(NEXT_KEY);
-            return Ok(render(&header_text, &item_text, count, next));
-        }
-        let text = read_exact(&header.path)?;
-        Ok(fill_count(&text, CASE_LEN, count))
+fn read_kind(path: PathBuf) -> Result<KindDir> {
+    let children = list(&path)?;
+    if children.is_empty() {
+        return Err(unexpected(&path));
     }
+    let kind = file_name(&path)?;
+    let mut counts = Vec::with_capacity(children.len());
+    let mut item = None;
+    for child in children {
+        match classify(&child, kind)? {
+            Class::Count(count) => counts.push(CountFile { count, path: child }),
+            Class::Item => {
+                if item.is_some() {
+                    return Err(unexpected(&child));
+                }
+                item = Some(child);
+            }
+        }
+    }
+    if counts.is_empty() {
+        return Err(unexpected(&path));
+    }
+    counts.sort_unstable_by_key(|file| file.count);
+    Ok(KindDir { path, counts, item })
 }
 
-/// `{kind}` without a trailing `s`, when that stem is one of the templates.
-fn singular<'a>(files: &'a [TemplateFile], kind: &str) -> Option<&'a TemplateFile> {
-    let stem = kind.strip_suffix('s').filter(|stem| !stem.is_empty())?;
-    files
-        .iter()
-        .find(|file| file_stem(&file.path) == Some(stem))
+enum Class {
+    Count(u32),
+    Item,
+}
+
+fn classify(path: &Path, kind: &str) -> Result<Class> {
+    if !path.is_file() || !is_rust_source(path) {
+        return Err(unexpected(path));
+    }
+    if fs::metadata(path)?.len() == 0 {
+        return Err(unexpected(path));
+    }
+    let stem = file_stem(path).ok_or_else(|| unexpected(path))?;
+    if let Some(count) = parse_count(stem) {
+        return Ok(Class::Count(count));
+    }
+    if singular_stem(kind) == Some(stem) {
+        return Ok(Class::Item);
+    }
+    Err(Error::unknown_case(stem))
+}
+
+fn source_for(count: &CountFile, item: Option<&Path>) -> Result<String> {
+    let header = read_exact(&count.path)?;
+    let Some(item) = item else {
+        return Ok(fill_count(&header, CASE_LEN, count.count));
+    };
+    let item_text = read_exact(item)?;
+    let next = item_text.contains(NEXT_KEY).then_some(NEXT_KEY);
+    Ok(render(&header, &item_text, count.count, next))
+}
+
+fn parse_count(stem: &str) -> Option<u32> {
+    if stem.is_empty() || !stem.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    stem.parse().ok()
+}
+
+/// `{kind}` without a trailing `s`.
+fn singular_stem(kind: &str) -> Option<&str> {
+    kind.strip_suffix('s').filter(|stem| !stem.is_empty())
+}
+
+fn reject_duplicates(kind: &str, counts: &[CountFile]) -> Result<()> {
+    for pair in counts.windows(2) {
+        if pair[0].count == pair[1].count {
+            return Err(ErrorKind::DuplicateCase {
+                case: case_name(kind, pair[0].count),
+            }
+            .into());
+        }
+    }
+    Ok(())
 }
 
 fn list(directory: &Path) -> Result<Vec<PathBuf>> {
@@ -267,24 +273,21 @@ mod tests {
     #[test]
     fn directory_selects_groups_and_renders_source() {
         let tree = Tree::new();
-        tree.file("flat_structs.rs", "len = CASE_LEN;\n");
-        tree.file("hand_structs.rs", "use crate;\n");
-        tree.file("hand_struct.rs", "struct IxINDEX;\n");
-        tree.file("many_calls.rs", "use crate;\n\n");
-        tree.file("many_call.rs", "range = INDEX..NEXT;\n");
-        tree.file("fan_rows.rs", "rows = CASE_LEN;\n");
-        tree.file("fan_take.rs", "take = CASE_LEN;\n");
-        tree.file("warmup/hand_structs_1", "IGNORE");
-        tree.file("warmup/flat_structs_1", "IGNORE");
-        tree.file("debug/flat_structs_1024", "IGNORE");
-        tree.file("debug/hand_structs_2", "IGNORE");
-        tree.file("debug/flat_structs_64", "IGNORE");
-        tree.file("debug/many_calls_2", "IGNORE");
-        tree.file("debug/fan_take_16", "IGNORE");
-        tree.file("debug/fan_rows_4", "IGNORE");
-        tree.file("incremental/flat_structs_1024", "");
-        tree.file("release/hand_structs_2", "");
-        tree.file("release/fan_rows_4", "");
+        tree.file("warmup/hand_structs/1.rs", "use crate;\n");
+        tree.file("warmup/hand_structs/hand_struct.rs", "struct IxINDEX;\n");
+        tree.file("warmup/flat_structs/1.rs", "len = CASE_LEN;\n");
+        tree.file("debug/flat_structs/1024.rs", "len = CASE_LEN;\n");
+        tree.file("debug/hand_structs/2.rs", "use crate;\n");
+        tree.file("debug/hand_structs/hand_struct.rs", "struct IxINDEX;\n");
+        tree.file("debug/flat_structs/64.rs", "len = CASE_LEN;\n");
+        tree.file("debug/many_calls/2.rs", "use crate;\n\n");
+        tree.file("debug/many_calls/many_call.rs", "range = INDEX..NEXT;\n");
+        tree.file("debug/fan_take/16.rs", "take = CASE_LEN;\n");
+        tree.file("debug/fan_rows/4.rs", "rows = CASE_LEN;\n");
+        tree.file("incremental/flat_structs/1024.rs", "len = CASE_LEN;\n");
+        tree.file("release/hand_structs/2.rs", "use crate;\n");
+        tree.file("release/hand_structs/hand_struct.rs", "struct IxINDEX;\n");
+        tree.file("release/fan_rows/4.rs", "rows = CASE_LEN;\n");
 
         let groups = load(&tree.0).unwrap();
         assert_eq!(names(&groups.warmup), ["flat_structs_1", "hand_structs_1"]);
@@ -302,7 +305,6 @@ mod tests {
             ]
         );
         assert_eq!(groups.debug[2].source, "len = 64;\n");
-        assert!(!groups.debug[2].source.contains("IGNORE"));
         assert_eq!(
             groups.debug[4].source,
             "use crate;\n\nstruct Ix0;\nstruct Ix1;\n"
@@ -315,13 +317,16 @@ mod tests {
         assert_eq!(groups.incremental[0].source, "len = 1024;\n");
         assert_eq!(names(&groups.release), ["fan_rows_4", "hand_structs_2"]);
         assert_eq!(groups.release[0].source, "rows = 4;\n");
+        assert_eq!(
+            groups.release[1].source,
+            "use crate;\n\nstruct Ix0;\nstruct Ix1;\n"
+        );
     }
 
     #[test]
     fn absent_groups_are_empty_when_warmup_exists() {
         let tree = Tree::new();
-        tree.file("flat_structs.rs", "len = CASE_LEN;\n");
-        tree.file("warmup/flat_structs_1", "");
+        tree.file("warmup/flat_structs/1.rs", "len = CASE_LEN;\n");
         let groups = load(&tree.0).unwrap();
         assert!(groups.debug.is_empty());
         assert!(groups.incremental.is_empty());
@@ -331,8 +336,7 @@ mod tests {
     #[test]
     fn missing_warmup_is_an_error() {
         let tree = Tree::new();
-        tree.file("flat_structs.rs", "len = CASE_LEN;\n");
-        tree.file("debug/flat_structs_1", "");
+        tree.file("debug/flat_structs/1.rs", "len = CASE_LEN;\n");
         let error = load(&tree.0).unwrap_err().to_string();
         assert!(error.contains("warmup"), "{error}");
     }
@@ -353,55 +357,74 @@ mod tests {
     }
 
     #[test]
-    fn unknown_marker_is_an_error() {
+    fn unknown_count_is_an_error() {
         let tree = Tree::new();
-        tree.file("flat_structs.rs", "len = CASE_LEN;\n");
-        tree.file("warmup/flat_structs_1", "");
-        tree.file("debug/flat", "");
+        tree.file("warmup/flat_structs/1.rs", "len = CASE_LEN;\n");
+        tree.file("debug/flat_structs/flat.rs", "len = CASE_LEN;\n");
         let error = load(&tree.0).unwrap_err().to_string();
         assert!(error.contains("unknown case"), "{error}");
     }
 
     #[test]
-    fn missing_template_names_the_kind() {
-        let tree = Tree::new();
-        tree.file("flat_structs.rs", "len = CASE_LEN;\n");
-        tree.file("warmup/flat_structs_1", "");
-        tree.file("debug/one_call_256", "");
-        let error = load(&tree.0).unwrap_err().to_string();
-        assert!(error.contains("one_call.rs"), "{error}");
-    }
-
-    #[test]
     fn duplicate_counts_are_an_error() {
         let tree = Tree::new();
-        tree.file("flat_structs.rs", "len = CASE_LEN;\n");
-        tree.file("warmup/flat_structs_1", "");
-        tree.file("debug/flat_structs_64", "");
-        tree.file("debug/flat_structs_064", "");
+        tree.file("warmup/flat_structs/1.rs", "len = CASE_LEN;\n");
+        tree.file("debug/flat_structs/64.rs", "len = CASE_LEN;\n");
+        tree.file("debug/flat_structs/064.rs", "len = 64;\n");
         let error = load(&tree.0).unwrap_err().to_string();
         assert!(error.contains("duplicate case"), "{error}");
     }
 
     #[test]
+    fn empty_files_and_directories_are_an_error() {
+        let empty_file = Tree::new();
+        empty_file.file("warmup/flat_structs/1.rs", "len = CASE_LEN;\n");
+        empty_file.file("debug/flat_structs/64.rs", "");
+        let error = load(&empty_file.0).unwrap_err().to_string();
+        assert!(error.contains("unexpected entry"), "{error}");
+
+        let gitkeep = Tree::new();
+        gitkeep.file("warmup/flat_structs/1.rs", "len = CASE_LEN;\n");
+        gitkeep.file("debug/flat_structs/.gitkeep", "keep\n");
+        let error = load(&gitkeep.0).unwrap_err().to_string();
+        assert!(error.contains("unexpected entry"), "{error}");
+
+        let count_dir = Tree::new();
+        count_dir.file("warmup/flat_structs/1.rs", "len = CASE_LEN;\n");
+        count_dir.dir("debug/flat_structs/64");
+        let error = load(&count_dir.0).unwrap_err().to_string();
+        assert!(error.contains("unexpected entry"), "{error}");
+
+        let empty_kind = Tree::new();
+        empty_kind.file("warmup/flat_structs/1.rs", "len = CASE_LEN;\n");
+        empty_kind.dir("debug/flat_structs");
+        let error = load(&empty_kind.0).unwrap_err().to_string();
+        assert!(error.contains("unexpected entry"), "{error}");
+    }
+
+    #[test]
     fn unexpected_entries_are_an_error() {
         let tree = Tree::new();
-        tree.file("flat_structs.rs", "len = CASE_LEN;\n");
+        tree.file("warmup/flat_structs/1.rs", "len = CASE_LEN;\n");
         tree.file("readme.md", "notes");
         let error = load(&tree.0).unwrap_err().to_string();
         assert!(error.contains("unexpected entry"), "{error}");
 
         let nested = Tree::new();
-        nested.file("flat_structs.rs", "len = CASE_LEN;\n");
-        nested.file("warmup/flat_structs_1", "");
+        nested.file("warmup/flat_structs/1.rs", "len = CASE_LEN;\n");
         nested.dir("extra");
         let error = load(&nested.0).unwrap_err().to_string();
         assert!(error.contains("unexpected entry"), "{error}");
 
-        let marker_dir = Tree::new();
-        marker_dir.file("flat_structs.rs", "len = CASE_LEN;\n");
-        marker_dir.dir("debug/flat_structs_1");
-        let error = load(&marker_dir.0).unwrap_err().to_string();
+        let root_template = Tree::new();
+        root_template.file("flat_structs.rs", "len = CASE_LEN;\n");
+        root_template.file("warmup/flat_structs/1.rs", "len = CASE_LEN;\n");
+        let error = load(&root_template.0).unwrap_err().to_string();
+        assert!(error.contains("unexpected entry"), "{error}");
+
+        let marker_file = Tree::new();
+        marker_file.file("warmup/flat_structs_1", "len = CASE_LEN;\n");
+        let error = load(&marker_file.0).unwrap_err().to_string();
         assert!(error.contains("unexpected entry"), "{error}");
     }
 
