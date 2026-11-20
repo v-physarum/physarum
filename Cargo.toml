@@ -16,6 +16,7 @@ all = { level = "warn", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
 
 [dev-dependencies]
+ph_proc_macro_dylib = { path = "crates/tests/ph_proc_macro_dylib" }
 ph_test_errors = { path = "crates/tests/ph_test_errors" }
 ph_util_foreach = { path = "crates/util/ph_util_foreach" }
 
