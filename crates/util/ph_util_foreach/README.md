@@ -156,4 +156,4 @@ An empty hole-edge slice expands to no tokens.
 
 ## License
 
-Licensed under the [MIT License](../../../LICENSE).
+Licensed under the [GNU GPL v3 or later](../../../LICENSE) (`GPL-3.0-or-later`).
