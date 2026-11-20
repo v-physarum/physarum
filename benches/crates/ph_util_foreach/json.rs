@@ -25,16 +25,19 @@ pub(crate) struct WallClock {
     pub(crate) stddev: f64,
 }
 
+impl WallClock {
+    fn new(median: f64, stddev: f64) -> Self {
+        Self { median, stddev }
+    }
+}
+
 pub(crate) fn wall_clock(json: &str) -> Result<WallClock, ReadError> {
     let report: HyperfineReport = serde_json::from_str(json).map_err(ReadError::Hyperfine)?;
     let Some(result) = report.results.first() else {
         return Err(ReadError::MissingWallClock);
     };
     let stat = &result.summary.time_wall_clock;
-    Ok(WallClock {
-        median: stat.median,
-        stddev: stat.stddev,
-    })
+    Ok(WallClock::new(stat.median, stat.stddev))
 }
 
 pub(crate) fn runtime_executable(log: &str) -> Result<PathBuf, ReadError> {

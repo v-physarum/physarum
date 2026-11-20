@@ -72,14 +72,24 @@ pub(crate) struct RangeExpr {
 }
 
 impl RangeExpr {
-    fn builder(span: Span) -> RangeExprBuilder {
-        RangeExprBuilder {
-            start: None,
-            end: None,
-            end_inclusive: false,
-            step: None,
+    fn new(
+        start: Option<SpannedBound>,
+        end: Option<SpannedBound>,
+        end_inclusive: bool,
+        step: Option<SpannedBound>,
+        span: Span,
+    ) -> Self {
+        Self {
+            start,
+            end,
+            end_inclusive,
+            step,
             span,
         }
+    }
+
+    fn builder(span: Span) -> RangeExprBuilder {
+        RangeExprBuilder::new(span)
     }
 }
 
@@ -94,6 +104,16 @@ struct RangeExprBuilder {
 }
 
 impl RangeExprBuilder {
+    fn new(span: Span) -> Self {
+        Self {
+            start: None,
+            end: None,
+            end_inclusive: false,
+            step: None,
+            span,
+        }
+    }
+
     fn start(mut self, start: Option<SpannedBound>) -> Self {
         self.start = start;
         self
@@ -115,13 +135,13 @@ impl RangeExprBuilder {
     }
 
     fn build(self) -> RangeExpr {
-        RangeExpr {
-            start: self.start,
-            end: self.end,
-            end_inclusive: self.end_inclusive,
-            step: self.step,
-            span: self.span,
-        }
+        RangeExpr::new(
+            self.start,
+            self.end,
+            self.end_inclusive,
+            self.step,
+            self.span,
+        )
     }
 }
 
@@ -186,24 +206,20 @@ pub(crate) struct Domain {
 }
 
 impl Domain {
+    fn new(lo: i128, hi: i128, gap: i128) -> Self {
+        Self { lo, hi, gap }
+    }
+
     /// Domain of a fan iteration: the prefix `0..=outer`.
     ///
     /// `outer` is already known to be non-negative. The caller checks that once.
     pub(crate) fn prefix(outer: i128) -> Self {
-        Self {
-            lo: 0,
-            hi: outer,
-            gap: 1,
-        }
+        Self::new(0, outer, 1)
     }
 
     /// Domain of a flat iteration: the outer progression.
     pub(crate) fn flat(outer: &OuterRange) -> Self {
-        Self {
-            lo: outer.lo,
-            hi: outer.hi,
-            gap: outer.gap,
-        }
+        Self::new(outer.lo, outer.hi, outer.gap)
     }
 
     fn contains(&self, value: i128) -> bool {
@@ -233,7 +249,12 @@ pub(crate) struct EvalCtx<'a> {
     pub(crate) domain: &'a Domain,
 }
 
-impl EvalCtx<'_> {
+impl<'a> EvalCtx<'a> {
+    /// The index and domain for one substitution.
+    pub(crate) fn new(index: i128, domain: &'a Domain) -> Self {
+        Self { index, domain }
+    }
+
     fn eval_step(self, step: Option<SpannedBound>) -> Result<i128> {
         let Some(step) = step else {
             return Ok(1);
@@ -260,6 +281,10 @@ pub(crate) struct OuterRange {
 }
 
 impl OuterRange {
+    fn new(lo: i128, hi: i128, gap: i128, count: usize) -> Self {
+        Self { lo, hi, gap, count }
+    }
+
     /// `true` when the range selects no indices.
     pub(crate) fn is_empty(self) -> bool {
         self.count == 0
@@ -408,12 +433,7 @@ pub(crate) fn compile_outer(range: &RangeExpr) -> Result<OuterRange> {
         return Err(Error::new(range.span, ErrorKind::RangeTooLarge));
     };
     if count == 0 {
-        return Ok(OuterRange {
-            lo: start,
-            hi: start,
-            gap,
-            count,
-        });
+        return Ok(OuterRange::new(start, start, gap, count));
     }
     let Ok(steps) = i128::try_from(count - 1) else {
         return Err(Error::new(range.span, ErrorKind::RangeTooLarge));
@@ -424,12 +444,7 @@ pub(crate) fn compile_outer(range: &RangeExpr) -> Result<OuterRange> {
     else {
         return Err(Error::new(range.span, ErrorKind::RangeTooLarge));
     };
-    Ok(OuterRange {
-        lo: start,
-        hi,
-        gap,
-        count,
-    })
+    Ok(OuterRange::new(start, hi, gap, count))
 }
 
 /// Calls `visit` for each index `range` selects inside `ctx.domain`.

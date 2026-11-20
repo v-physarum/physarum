@@ -52,6 +52,12 @@ struct Timing {
     stddev: f64,
 }
 
+impl Timing {
+    fn new(median: f64, stddev: f64) -> Self {
+        Self { median, stddev }
+    }
+}
+
 struct Report {
     file: File,
     rows: Vec<String>,
@@ -331,10 +337,7 @@ fn time_build(
     run_combined(&mut command, &log, label)?;
     let text = fs::read_to_string(&json)?;
     let clock = json::wall_clock(&text)?;
-    Ok(Timing {
-        median: clock.median,
-        stddev: clock.stddev,
-    })
+    Ok(Timing::new(clock.median, clock.stddev))
 }
 
 fn cargo(cwd: &Path, target_dir: &Path, incremental: bool) -> Command {

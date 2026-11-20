@@ -37,10 +37,7 @@ pub(crate) fn expand(input: TokenStream) -> Result<TokenStream> {
                 &program,
                 0,
                 stat.logical,
-                &EvalCtx {
-                    index,
-                    domain: &domain,
-                },
+                &EvalCtx::new(index, &domain),
                 &mut output,
             )
         })?;
@@ -51,10 +48,7 @@ pub(crate) fn expand(input: TokenStream) -> Result<TokenStream> {
                 &program,
                 0,
                 stat.logical,
-                &EvalCtx {
-                    index,
-                    domain: &domain,
-                },
+                &EvalCtx::new(index, &domain),
                 &mut output,
             )
         })?;
@@ -148,6 +142,12 @@ struct Inst {
     width: u32,
 }
 
+impl Inst {
+    fn new(op: Op, width: u32) -> Self {
+        Self { op, width }
+    }
+}
+
 #[derive(Clone)]
 enum Op {
     Copy {
@@ -194,6 +194,17 @@ struct SeqStat {
     fan: bool,
 }
 
+impl SeqStat {
+    fn new(logical: u32, physical: u32, expands: bool, fan: bool) -> Self {
+        Self {
+            logical,
+            physical,
+            expands,
+            fan,
+        }
+    }
+}
+
 struct Counts {
     logical: u32,
     physical: u32,
@@ -207,10 +218,26 @@ struct PendingCopy {
     len: u32,
 }
 
+impl PendingCopy {
+    fn new(at: u32, len: u32) -> Self {
+        Self { at, len }
+    }
+}
+
 struct Pushed {
     physical: u32,
     next: usize,
     fan: bool,
+}
+
+impl Pushed {
+    fn new(physical: u32, next: usize, fan: bool) -> Self {
+        Self {
+            physical,
+            next,
+            fan,
+        }
+    }
 }
 
 enum PieceHead {
@@ -278,12 +305,12 @@ fn compile_seq(prog: &mut Program, source_at: usize, source_len: usize) -> Resul
 fn compile_into(prog: &mut Program, source_at: usize, source_len: usize) -> Result<SeqStat> {
     let mut counts = Counts::new();
     compile_range(prog, &mut counts, source_at, source_len)?;
-    Ok(SeqStat {
-        logical: counts.logical,
-        physical: counts.physical,
-        expands: counts.expands,
-        fan: counts.fan,
-    })
+    Ok(SeqStat::new(
+        counts.logical,
+        counts.physical,
+        counts.expands,
+        counts.fan,
+    ))
 }
 
 fn compile_bracket_sequence(
@@ -345,13 +372,7 @@ fn concat_ident_and_sequence(
         return Ok(None);
     };
     let saved = rewind(prog.ops.len(), first.physical)?;
-    prog.ops.insert(
-        saved,
-        Inst {
-            op: Op::Ident(ident),
-            width: 1,
-        },
-    );
+    prog.ops.insert(saved, Inst::new(Op::Ident(ident), 1));
     let physical = checked_add(1, first.physical)?;
     let (pieces, physical, next, fan) = chain_pieces(
         prog, source_at, source_len, 2, physical, first.next, first.fan,
@@ -415,11 +436,11 @@ fn try_push_piece(
             stream,
         } => push_rows(prog, span, pattern, stream)?,
     };
-    Ok(Some(Pushed {
+    Ok(Some(Pushed::new(
         physical,
-        next: index.checked_add(2).ok_or_else(too_large)?,
+        index.checked_add(2).ok_or_else(too_large)?,
         fan,
-    }))
+    )))
 }
 
 fn push_named(
@@ -441,7 +462,7 @@ fn push_named(
             pattern,
         }
     };
-    prog.ops.push(Inst { op, width: 1 });
+    prog.ops.push(Inst::new(op, 1));
     Ok((1, fan))
 }
 
@@ -456,14 +477,14 @@ fn push_rows(
     let width = checked_add(nested.physical, 1)?;
     prog.ops.insert(
         saved,
-        Inst {
-            op: Op::Rows {
+        Inst::new(
+            Op::Rows {
                 span,
                 pattern,
                 body: nested.logical,
             },
             width,
-        },
+        ),
     );
     Ok((width, pattern.uses_index() || nested.fan))
 }
@@ -652,7 +673,7 @@ fn next_token(index: usize) -> Result<usize> {
 }
 
 fn push_op(prog: &mut Program, counts: &mut Counts, op: Op, fan: bool) -> Result<()> {
-    prog.ops.push(Inst { op, width: 1 });
+    prog.ops.push(Inst::new(op, 1));
     counts.logical = checked_add(counts.logical, 1)?;
     counts.physical = checked_add(counts.physical, 1)?;
     counts.expands = true;
@@ -665,7 +686,7 @@ fn push_verbatim(prog: &mut Program, counts: &mut Counts, token: TokenTree) -> R
     prog.tokens.push(token);
     match &mut counts.pending {
         Some(pending) => pending.len = checked_add(pending.len, 1)?,
-        None => counts.pending = Some(PendingCopy { at, len: 1 }),
+        None => counts.pending = Some(PendingCopy::new(at, 1)),
     }
     Ok(())
 }
@@ -674,13 +695,13 @@ fn flush_copy(prog: &mut Program, counts: &mut Counts) -> Result<()> {
     let Some(pending) = counts.pending.take() else {
         return Ok(());
     };
-    prog.ops.push(Inst {
-        op: Op::Copy {
+    prog.ops.push(Inst::new(
+        Op::Copy {
             at: pending.at,
             len: pending.len,
         },
-        width: 1,
-    });
+        1,
+    ));
     counts.logical = checked_add(counts.logical, 1)?;
     counts.physical = checked_add(counts.physical, 1)?;
     Ok(())
@@ -694,17 +715,17 @@ fn insert_before_body(
     width: u32,
     fan: bool,
 ) -> Result<()> {
-    prog.ops.insert(at, Inst { op, width });
+    prog.ops.insert(at, Inst::new(op, width));
     if let Some(pending) = counts.pending.take() {
         prog.ops.insert(
             at,
-            Inst {
-                op: Op::Copy {
+            Inst::new(
+                Op::Copy {
                     at: pending.at,
                     len: pending.len,
                 },
-                width: 1,
-            },
+                1,
+            ),
         );
         counts.logical = checked_add(counts.logical, 1)?;
         counts.physical = checked_add(counts.physical, 1)?;
@@ -951,7 +972,21 @@ struct ListEmit<'a> {
     out: &'a mut TokenStream,
 }
 
-impl ListEmit<'_> {
+impl<'a> ListEmit<'a> {
+    fn new(
+        prog: &'a Program,
+        ctx: &'a EvalCtx<'a>,
+        emitted: &'a mut bool,
+        out: &'a mut TokenStream,
+    ) -> Self {
+        Self {
+            prog,
+            ctx,
+            emitted,
+            out,
+        }
+    }
+
     fn ident(&mut self, ident: Ident) {
         push_comma(self.emitted, self.out);
         self.out.extend([TokenTree::Ident(ident)]);
@@ -983,7 +1018,13 @@ impl ListEmit<'_> {
         } = self;
         visit_range(&range, ctx, |index| {
             let mut inner = TokenStream::new();
-            emit_seq(prog, body_at, body, &EvalCtx { index, domain }, &mut inner)?;
+            emit_seq(
+                prog,
+                body_at,
+                body,
+                &EvalCtx::new(index, domain),
+                &mut inner,
+            )?;
             push_comma(emitted, out);
             let mut group = Group::new(Delimiter::Parenthesis, inner);
             group.set_span(span);
@@ -1001,12 +1042,7 @@ fn emit_piece(
     out: &mut TokenStream,
 ) -> Result<()> {
     let op = prog.ops.get(at).cloned().ok_or_else(too_large)?.op;
-    let mut emit = ListEmit {
-        prog,
-        ctx,
-        emitted,
-        out,
-    };
+    let mut emit = ListEmit::new(prog, ctx, emitted, out);
     match op {
         Op::Ident(ident) | Op::Off(ident) => {
             emit.ident(ident);
