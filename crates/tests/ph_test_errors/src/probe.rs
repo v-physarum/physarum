@@ -7,7 +7,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::diagnostics::{self, Diagnostics};
-use crate::error::{ErrorKind, Result};
+use crate::error::{Error, Result};
 
 const EDITION: &str = "2024";
 const CRATE_NAME: &str = "probe";
@@ -54,18 +54,14 @@ impl Probe {
         command.arg(&self.source);
         let output = command
             .output()
-            .map_err(|source| ErrorKind::RustcStart { source })?;
-        let stderr = String::from_utf8(output.stderr).map_err(|source| ErrorKind::Utf8 {
-            what: "rustc stderr",
-            source,
-        })?;
+            .map_err(|source| Error::RustcStart { source })?;
+        let stderr = String::from_utf8(output.stderr).map_err(|source| Error::Utf8 { source })?;
         let parsed = diagnostics::parse(output.status.success(), &stderr)?;
         if !output.status.success() && parsed.is_empty() {
-            return Err(ErrorKind::ProbeFailed {
+            return Err(Error::ProbeFailed {
                 path: self.source.display().to_string(),
                 stderr,
-            }
-            .into());
+            });
         }
         Ok(parsed)
     }

@@ -188,10 +188,7 @@ impl ErrorTester {
             });
             self.cached = Some(diagnostics);
         }
-        match self.cached.as_ref() {
-            Some(diagnostics) => diagnostics,
-            None => panic!("debug probe was not built"),
-        }
+        self.cached.as_ref().expect("debug probe was not built")
     }
 
     fn mismatch(mut self, expectation: &str) -> ! {

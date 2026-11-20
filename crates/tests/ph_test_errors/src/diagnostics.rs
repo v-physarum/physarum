@@ -2,7 +2,7 @@
 
 use serde::Deserialize;
 
-use crate::error::{ErrorKind, Result};
+use crate::error::{Error, Result};
 
 /// Diagnostics from one debug `rustc` run.
 ///
@@ -43,7 +43,7 @@ impl Diagnostics {
     /// `rustc` exited successfully and emitted no errors.
     #[must_use]
     pub(crate) fn succeeded(&self) -> bool {
-        self.ok && self.error_count() == 0
+        self.ok && self.messages.iter().all(|item| item.level != Level::Error)
     }
 
     /// Error codes, in emission order.
@@ -70,13 +70,6 @@ impl Diagnostics {
     #[must_use]
     pub(crate) fn messages(&self) -> &[Diagnostic] {
         &self.messages
-    }
-
-    pub(crate) fn error_count(&self) -> usize {
-        self.messages
-            .iter()
-            .filter(|item| item.level == Level::Error)
-            .count()
     }
 
     pub(crate) fn is_empty(&self) -> bool {
@@ -124,7 +117,7 @@ pub(crate) fn parse(ok: bool, stderr: &str) -> Result<Diagnostics> {
             continue;
         }
         let raw: RawDiagnostic =
-            serde_json::from_str(line).map_err(|source| ErrorKind::Json { source })?;
+            serde_json::from_str(line).map_err(|source| Error::Json { source })?;
         if raw
             .message_type
             .as_deref()
