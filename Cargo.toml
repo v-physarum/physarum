@@ -17,13 +17,6 @@ pedantic = { level = "warn", priority = -1 }
 
 [dev-dependencies]
 ph_util_foreach = { path = "crates/util/ph_util_foreach" }
-serde = { version = "1.0.229", default-features = false, features = ["derive"] }
-serde_json = { version = "1.0.154", default-features = false, features = ["std"] }
-thiserror = { version = "2.0.21", default-features = false, features = ["std"] }
-
-[[test]]
-name = "ph_util_foreach_json"
-path = "tests/crates/ph_util_foreach/json.rs"
 
 [[test]]
 name = "ph_util_foreach_errors"
@@ -52,11 +45,6 @@ path = "tests/crates/ph_util_foreach/step_structs.rs"
 [[test]]
 name = "ph_util_foreach_tokens"
 path = "tests/crates/ph_util_foreach/tokens.rs"
-
-[[bench]]
-name = "ph_util_foreach_measure"
-harness = false
-path = "benches/crates/ph_util_foreach/measure.rs"
 
 [[bench]]
 name = "ph_util_foreach_runtime"
