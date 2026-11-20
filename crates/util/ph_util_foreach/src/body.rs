@@ -15,16 +15,17 @@ use crate::range::{
 };
 
 pub(crate) fn expand(input: TokenStream) -> Result<TokenStream> {
-    let (range_tokens, body) = split_input(input)?;
-    let range = parse_range(&range_tokens, BoundStyle::Outer)?;
+    let (tokens, range_len, body) = split_input(input)?;
+    let range = parse_range(&tokens[..range_len], BoundStyle::Outer)?;
     let outer = compile_outer(&range)?;
-    if outer.indices.is_empty() {
+    if outer.is_empty() {
         return Ok(TokenStream::new());
     }
     let compiled = compile_tokens(&body)?;
     let mut output = TokenStream::new();
     if compiled.fan {
-        for index in outer.indices {
+        for position in 0..outer.count() {
+            let index = outer.index_at(position);
             let domain = Domain::fan(index, range.span)?;
             emit(
                 &compiled.nodes,
@@ -36,12 +37,12 @@ pub(crate) fn expand(input: TokenStream) -> Result<TokenStream> {
             )?;
         }
     } else {
-        let domain = Domain::from_indices(outer.indices, outer.gap)?;
-        for position in 0..domain.index_count() {
+        let domain = Domain::flat(&outer);
+        for position in 0..outer.count() {
             emit(
                 &compiled.nodes,
                 &EvalCtx {
-                    index: domain.index_at(position),
+                    index: outer.index_at(position),
                     domain: &domain,
                 },
                 &mut output,
@@ -51,7 +52,7 @@ pub(crate) fn expand(input: TokenStream) -> Result<TokenStream> {
     Ok(output)
 }
 
-fn split_input(input: TokenStream) -> Result<(Vec<TokenTree>, Vec<TokenTree>)> {
+fn split_input(input: TokenStream) -> Result<(Vec<TokenTree>, usize, Vec<TokenTree>)> {
     let tokens: Vec<TokenTree> = input.into_iter().collect();
     let span = tokens.first().map_or_else(Span::call_site, TokenTree::span);
     let body_at = tokens.iter().position(
@@ -77,16 +78,16 @@ fn split_input(input: TokenStream) -> Result<(Vec<TokenTree>, Vec<TokenTree>)> {
     if body_at == 1 {
         return Err(Error::new(span, "expected a range"));
     }
-    let TokenTree::Group(body) = &tokens[body_at] else {
-        return Err(Error::new(
-            span,
-            "expected a `{ ... }` body after the range",
-        ));
+    let body_tokens = {
+        let TokenTree::Group(body) = &tokens[body_at] else {
+            return Err(Error::new(
+                span,
+                "expected a `{ ... }` body after the range",
+            ));
+        };
+        body.stream().into_iter().collect()
     };
-    Ok((
-        tokens[..body_at - 1].to_vec(),
-        body.stream().into_iter().collect(),
-    ))
+    Ok((tokens, body_at - 1, body_tokens))
 }
 
 struct Compiled {

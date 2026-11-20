@@ -103,17 +103,15 @@ fn bound_uses_index(bound: Option<SpannedBound>) -> bool {
 }
 
 /// The indices a pattern is clipped to.
-#[derive(Clone, Debug)]
+///
+/// Every domain is an arithmetic progression, so the bounds are enough.
+/// `lo + n * gap` is index `n`.
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct Domain {
     lo: i128,
     hi: i128,
     /// Outer step. An exclusive end may land up to this far past `hi`.
     gap: i128,
-    /// `true` when every integer from `lo` through `hi` is in the domain.
-    dense: bool,
-    /// Flat domains own the outer index list. Fan prefixes leave this empty and
-    /// use `lo` and `hi` instead, so a fan iteration does not allocate.
-    indices: Vec<i128>,
 }
 
 impl Domain {
@@ -129,45 +127,23 @@ impl Domain {
             lo: 0,
             hi: outer,
             gap: 1,
-            dense: true,
-            indices: Vec::new(),
         })
     }
 
-    /// Domain of a flat iteration. Takes ownership of the outer index list.
-    pub(crate) fn from_indices(indices: Vec<i128>, gap: i128) -> Result<Self> {
-        let (Some(&lo), Some(&hi)) = (indices.first(), indices.last()) else {
-            return Err(Error::new(
-                Span::call_site(),
-                "internal error: empty domain",
-            ));
-        };
-        let dense = gap == 1 && is_contiguous(&indices, lo, hi);
-        Ok(Self {
-            lo,
-            hi,
-            gap,
-            dense,
-            indices,
-        })
-    }
-
-    /// Number of indices in a flat domain.
-    pub(crate) fn index_count(&self) -> usize {
-        self.indices.len()
-    }
-
-    /// Index at `position` in a flat domain.
-    pub(crate) fn index_at(&self, position: usize) -> i128 {
-        self.indices[position]
+    /// Domain of a flat iteration: the outer progression.
+    pub(crate) fn flat(outer: &OuterRange) -> Self {
+        Self {
+            lo: outer.lo,
+            hi: outer.hi,
+            gap: outer.gap,
+        }
     }
 
     fn contains(&self, value: i128) -> bool {
-        if self.dense {
-            self.lo <= value && value <= self.hi
-        } else {
-            self.indices.binary_search(&value).is_ok()
+        if value < self.lo || value > self.hi || self.gap <= 0 {
+            return false;
         }
+        self.gap == 1 || (value - self.lo) % self.gap == 0
     }
 
     fn inclusive_ok(&self, value: i128) -> bool {
@@ -182,16 +158,6 @@ impl Domain {
     }
 }
 
-fn is_contiguous(indices: &[i128], lo: i128, hi: i128) -> bool {
-    let Some(span) = hi.checked_sub(lo).and_then(|diff| diff.checked_add(1)) else {
-        return false;
-    };
-    span == i128::try_from(indices.len()).unwrap_or(i128::MAX)
-        && indices
-            .windows(2)
-            .all(|pair| pair[1] == pair[0].saturating_add(1))
-}
-
 /// Values substituted while a pattern is resolved.
 #[derive(Clone, Copy)]
 pub(crate) struct EvalCtx<'a> {
@@ -200,11 +166,36 @@ pub(crate) struct EvalCtx<'a> {
     pub(crate) domain: &'a Domain,
 }
 
-/// Finite index list of an outer range, plus the step stored as the domain gap.
-#[derive(Clone, Debug)]
+/// Finite outer range stored as an arithmetic progression.
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct OuterRange {
-    pub(crate) indices: Vec<i128>,
-    pub(crate) gap: i128,
+    lo: i128,
+    hi: i128,
+    gap: i128,
+    count: usize,
+}
+
+impl OuterRange {
+    /// `true` when the range selects no indices.
+    pub(crate) fn is_empty(self) -> bool {
+        self.count == 0
+    }
+
+    /// How many indices this range selects.
+    pub(crate) fn count(self) -> usize {
+        self.count
+    }
+
+    /// Index `position` of `lo + position * gap`.
+    pub(crate) fn index_at(self, position: usize) -> i128 {
+        let Ok(pos) = i128::try_from(position) else {
+            return self.lo;
+        };
+        let Some(offset) = pos.checked_mul(self.gap) else {
+            return self.lo;
+        };
+        self.lo.checked_add(offset).unwrap_or(self.lo)
+    }
 }
 
 /// Parses `tokens` as one range. `style` decides what `-1` and `#` mean.
@@ -298,8 +289,32 @@ pub(crate) fn compile_outer(range: &RangeExpr) -> Result<OuterRange> {
         Some(step) => expect_positive_int_step(step)?,
     };
     reject_inverted(start, end, range.end_inclusive, range.span)?;
-    let indices = generate(start, end, range.end_inclusive, gap, None);
-    Ok(OuterRange { indices, gap })
+    let Some(count) = step_len(start, end, range.end_inclusive, gap) else {
+        return Err(Error::new(range.span, "range is too large"));
+    };
+    if count == 0 {
+        return Ok(OuterRange {
+            lo: start,
+            hi: start,
+            gap,
+            count,
+        });
+    }
+    let Ok(steps) = i128::try_from(count - 1) else {
+        return Err(Error::new(range.span, "range is too large"));
+    };
+    let Some(hi) = steps
+        .checked_mul(gap)
+        .and_then(|offset| start.checked_add(offset))
+    else {
+        return Err(Error::new(range.span, "range is too large"));
+    };
+    Ok(OuterRange {
+        lo: start,
+        hi,
+        gap,
+        count,
+    })
 }
 
 /// Calls `visit` for each index `range` selects inside `ctx.domain`.
@@ -427,30 +442,6 @@ fn add_offset(index: i128, offset: i128, span: Span) -> Result<i128> {
         .ok_or_else(|| Error::new(span, "index overflow computing a `#` bound"))
 }
 
-fn generate(
-    start: i128,
-    end: i128,
-    end_inclusive: bool,
-    step: i128,
-    domain: Option<&Domain>,
-) -> Vec<i128> {
-    let mut out = Vec::with_capacity(step_len(start, end, end_inclusive, step));
-    let mut current = start;
-    loop {
-        if past_end(current, end, end_inclusive) {
-            break;
-        }
-        if domain.is_none_or(|domain| domain.contains(current)) {
-            out.push(current);
-        }
-        let Some(next) = advance(current, step) else {
-            break;
-        };
-        current = next;
-    }
-    out
-}
-
 fn walk(
     start: i128,
     end: i128,
@@ -491,23 +482,22 @@ fn advance(current: i128, step: i128) -> Option<i128> {
 }
 
 /// How many indices `start`, `start + step`, ... yields before `end`.
-fn step_len(start: i128, end: i128, end_inclusive: bool, step: i128) -> usize {
+///
+/// `None` means the count does not fit in `usize`.
+fn step_len(start: i128, end: i128, end_inclusive: bool, step: i128) -> Option<usize> {
     if step <= 0 {
-        return 0;
+        return Some(0);
     }
-    let Some(span) = (if end_inclusive {
-        end.checked_sub(start)
+    let span = if end_inclusive {
+        end.checked_sub(start)?
     } else {
-        end.checked_sub(start)
-            .and_then(|width| width.checked_sub(1))
-    }) else {
-        return 0;
+        end.checked_sub(start)?.checked_sub(1)?
     };
     if span < 0 {
-        return 0;
+        return Some(0);
     }
     let steps = span / step;
-    usize::try_from(steps.saturating_add(1)).unwrap_or(0)
+    usize::try_from(steps.checked_add(1)?).ok()
 }
 
 struct Cursor<'a> {
