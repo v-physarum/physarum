@@ -54,33 +54,29 @@ enum Mode {
 
 fn split_input(input: TokenStream) -> Result<(Vec<TokenTree>, Vec<TokenTree>)> {
     let tokens: Vec<TokenTree> = input.into_iter().collect();
-    let body_at = tokens.iter().position(
-        |token| matches!(token, TokenTree::Group(group) if group.delimiter() == Delimiter::Brace),
-    );
-    let Some(body_at) = body_at else {
-        let span = tokens.first().map_or_else(Span::call_site, TokenTree::span);
-        return Err(Error::new(
+    let span = tokens.first().map_or_else(Span::call_site, TokenTree::span);
+    match tokens.as_slice() {
+        [TokenTree::Group(range), TokenTree::Group(body)]
+            if range.delimiter() == Delimiter::Parenthesis
+                && body.delimiter() == Delimiter::Brace =>
+        {
+            let range_tokens: Vec<TokenTree> = range.stream().into_iter().collect();
+            if range_tokens.is_empty() {
+                return Err(Error::new(range.span(), "expected a range"));
+            }
+            Ok((range_tokens, body.stream().into_iter().collect()))
+        }
+        [TokenTree::Group(range)] if range.delimiter() == Delimiter::Parenthesis => Err(
+            Error::new(range.span(), "expected a `{ ... }` body after the range"),
+        ),
+        [TokenTree::Group(range), _, extra, ..] if range.delimiter() == Delimiter::Parenthesis => {
+            Err(Error::new(extra.span(), "unexpected token after the body"))
+        }
+        _ => Err(Error::new(
             span,
-            "expected a `{ ... }` body after the range",
-        ));
-    };
-    if body_at + 1 != tokens.len() {
-        return Err(Error::new(
-            tokens[body_at + 1].span(),
-            "unexpected token after the body",
-        ));
+            "write `impl_foreach! { (range) { body } }`",
+        )),
     }
-    let TokenTree::Group(group) = &tokens[body_at] else {
-        return Err(Error::new(
-            tokens[body_at].span(),
-            "expected a `{ ... }` body after the range",
-        ));
-    };
-    if body_at == 0 {
-        return Err(Error::new(group.span(), "expected a range before the body"));
-    }
-    let body = group.stream().into_iter().collect();
-    Ok((tokens[..body_at].to_vec(), body))
 }
 
 fn uses_fan(tokens: &[TokenTree]) -> Result<bool> {
@@ -186,6 +182,11 @@ fn expand_tokens(tokens: &[TokenTree], ctx: &EvalCtx<'_>) -> Result<TokenStream>
             continue;
         }
         reject_spaced_paste(tokens, index)?;
+        if let Some((stream, next)) = try_prefixed(tokens, index, ctx)? {
+            output.extend(stream);
+            index = next;
+            continue;
+        }
         if is_bare_hash(tokens, index) {
             output.extend([TokenTree::Literal(index_literal(
                 ctx.index,
@@ -207,6 +208,60 @@ fn expand_tokens(tokens: &[TokenTree], ctx: &EvalCtx<'_>) -> Result<TokenStream>
         index += 1;
     }
     Ok(output)
+}
+
+fn try_prefixed(
+    tokens: &[TokenTree],
+    start: usize,
+    ctx: &EvalCtx<'_>,
+) -> Result<Option<(TokenStream, usize)>> {
+    let Some(TokenTree::Ident(name)) = tokens.get(start) else {
+        return Ok(None);
+    };
+    if is_sequence_start(tokens, start)? {
+        return Ok(None);
+    }
+    if is_plus(tokens, start + 1) && is_sequence_start(tokens, start + 2)? {
+        let mut elements = vec![TokenStream::from(TokenTree::Ident(name.clone()))];
+        let mut next = start + 2;
+        loop {
+            let Some(part) = try_one(tokens, next, ctx)? else {
+                break;
+            };
+            elements.extend(part.elements);
+            next = part.next;
+            if is_plus(tokens, next) && is_sequence_start(tokens, next + 1)? {
+                next += 1;
+                continue;
+            }
+            break;
+        }
+        return Ok(Some((join_elements(&elements), next)));
+    }
+    if is_sequence_start(tokens, start + 1)? {
+        return Err(Error::new(
+            name.span(),
+            "write `+` to concatenate; `X Name[..]` is not concatenation",
+        ));
+    }
+    Ok(None)
+}
+
+fn is_sequence_start(tokens: &[TokenTree], index: usize) -> Result<bool> {
+    match (tokens.get(index), tokens.get(index + 1)) {
+        (Some(TokenTree::Ident(_)), Some(TokenTree::Group(brackets)))
+            if brackets.delimiter() == Delimiter::Bracket =>
+        {
+            Ok(matches!(classify(brackets)?, Class::Pattern(_)))
+        }
+        (Some(TokenTree::Group(paren)), Some(TokenTree::Group(brackets)))
+            if paren.delimiter() == Delimiter::Parenthesis
+                && brackets.delimiter() == Delimiter::Bracket =>
+        {
+            Ok(matches!(classify(brackets)?, Class::Pattern(_)))
+        }
+        _ => Ok(false),
+    }
 }
 
 fn try_chain(

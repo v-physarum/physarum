@@ -24,26 +24,24 @@ fn proc_macro_library() -> PathBuf {
     if let Some(workspace) = manifest.ancestors().nth(3) {
         roots.push(workspace.join("target"));
     }
-    for root in &roots {
-        if let Some(found) = find_dylib(root) {
-            return found;
-        }
-    }
-    panic!("could not find libph_util_foreach.so; looked in {roots:?}");
+    let found = roots.iter().filter_map(|root| find_dylib(root)).collect();
+    newest_path(found)
+        .unwrap_or_else(|| panic!("could not find libph_util_foreach.so; looked in {roots:?}"))
 }
 
 fn find_dylib(dir: &Path) -> Option<PathBuf> {
+    let mut found = Vec::new();
     for candidate in [
         dir.join("libph_util_foreach.so"),
         dir.join("debug/libph_util_foreach.so"),
     ] {
         if candidate.is_file() {
-            return Some(candidate);
+            found.push(candidate);
         }
     }
     for deps in [dir.join("deps"), dir.join("debug/deps")] {
-        if let Some(found) = newest_library(&deps) {
-            return Some(found);
+        if let Some(library) = newest_library(&deps) {
+            found.push(library);
         }
     }
     for build in [
@@ -53,17 +51,13 @@ fn find_dylib(dir: &Path) -> Option<PathBuf> {
         let Ok(entries) = std::fs::read_dir(&build) else {
             continue;
         };
-        let mut matches = Vec::new();
         for entry in entries.flatten() {
-            if let Some(found) = newest_library(&entry.path().join("out")) {
-                matches.push(found);
+            if let Some(library) = newest_library(&entry.path().join("out")) {
+                found.push(library);
             }
         }
-        if let Some(path) = newest_path(matches) {
-            return Some(path);
-        }
     }
-    None
+    newest_path(found)
 }
 
 fn newest_library(dir: &Path) -> Option<PathBuf> {
@@ -94,7 +88,7 @@ fn assert_err(input: &str, needle: &str) {
     std::fs::create_dir_all(&dir).unwrap_or_else(|error| panic!("temp dir: {error}"));
     let source = dir.join("input.rs");
     let output = dir.join("input.rmeta");
-    let program = format!("use ph_util_foreach::impl_foreach;\nimpl_foreach!({input});\n");
+    let program = format!("use ph_util_foreach::impl_foreach;\n{input}\n");
     std::fs::write(&source, program).unwrap_or_else(|error| panic!("write source: {error}"));
     let library = proc_macro_library();
     let compiled = std::process::Command::new("rustc")
@@ -126,59 +120,112 @@ fn assert_err(input: &str, needle: &str) {
 
 #[test]
 fn spaced_paste_and_negative_index_are_errors() {
-    assert_err("-1..0 { struct Ix + #; }", "cannot paste a negative index");
     assert_err(
-        "-1..0 { K Name[#]; }",
+        "impl_foreach! { (-1..0) { struct Ix + #; } }",
+        "cannot paste a negative index",
+    );
+    assert_err(
+        "impl_foreach! { (-1..0) { Name[#]; } }",
         "fan mode domain `0..=index` is empty",
     );
-    assert_err("0..1 { struct Ix #; }", "Name + #");
-    assert_err("0..1 { struct Ix#; }", "Name + #");
-    assert_err("0..2 { K (T #)[0..1]; }", "Name + #");
-    assert_err("0..1 { fn at #() {} }", "Name + #");
+    assert_err("impl_foreach! { (0..1) { struct Ix #; } }", "Name + #");
+    assert_err("impl_foreach! { (0..1) { struct Ix#; } }", "Name + #");
+    assert_err("impl_foreach! { (0..2) { (T #)[0..1]; } }", "Name + #");
+    assert_err("impl_foreach! { (0..1) { fn at #() {} } }", "Name + #");
+    assert_err(
+        "impl_foreach! { (0..2) { X Name[0..1]; } }",
+        "not concatenation",
+    );
 }
 
 #[test]
 fn outer_range_errors() {
     for input in [
-        "0.. { K; }",
-        "..4 { K; }",
-        "..=4 { K; }",
-        ".. { K; }",
-        "0..::2 { K; }",
-        "..4::2 { K; }",
-        "..=4::2 { K; }",
-        "..::2 { K; }",
+        "impl_foreach! { (0..) { K; } }",
+        "impl_foreach! { (..4) { K; } }",
+        "impl_foreach! { (..=4) { K; } }",
+        "impl_foreach! { (..) { K; } }",
+        "impl_foreach! { (0..::2) { K; } }",
+        "impl_foreach! { (..4::2) { K; } }",
+        "impl_foreach! { (..=4::2) { K; } }",
+        "impl_foreach! { (..::2) { K; } }",
     ] {
         assert_err(input, "open outer range");
     }
-    assert_err("5..3 { K; }", "invalid range");
-    assert_err("5..=3 { K; }", "invalid range");
-    assert_err("5..4 { K; }", "invalid range");
-    assert_err("0..4::0 { K; }", "step must be a positive integer");
-    assert_err("0..4::-1 { K; }", "step must be a positive integer");
-    assert_err("0..# { K; }", "outer range cannot use `#`");
-    assert_err("0..4::# { K; }", "outer range cannot use `#`");
-    assert_err("0..4", "expected a `{ ... }` body");
-    assert_err("{ K; }", "expected a range");
-    assert_err("0..2 { K; } extra", "unexpected token after the body");
+    assert_err("impl_foreach! { (5..3) { K; } }", "invalid range");
+    assert_err("impl_foreach! { (5..=3) { K; } }", "invalid range");
+    assert_err("impl_foreach! { (5..4) { K; } }", "invalid range");
+    assert_err(
+        "impl_foreach! { (0..4::0) { K; } }",
+        "step must be a positive integer",
+    );
+    assert_err(
+        "impl_foreach! { (0..4::-1) { K; } }",
+        "step must be a positive integer",
+    );
+    assert_err(
+        "impl_foreach! { (0..#) { K; } }",
+        "outer range cannot use `#`",
+    );
+    assert_err(
+        "impl_foreach! { (0..4::#) { K; } }",
+        "outer range cannot use `#`",
+    );
+    assert_err("impl_foreach! { () { K; } }", "expected a range");
+    assert_err(
+        "impl_foreach! { (0..4) }",
+        "expected a `{ ... }` body after the range",
+    );
+    assert_err(
+        "impl_foreach! { (0..2) { K; } extra }",
+        "unexpected token after the body",
+    );
+    assert_err(
+        "impl_foreach!(0..2 { K; });",
+        "write `impl_foreach! { (range) { body } }`",
+    );
 }
 
 #[test]
 fn pattern_errors() {
-    assert_err("0..4 { K Name[0..10]; }", "outside the domain");
-    assert_err("0..10::2 { K Name[0..12]; }", "outside the domain");
-    assert_err("0..=10 { K Name[4..=3]; }", "invalid range");
-    assert_err("0..4 { A[0..#, Off]; }", "exactly one range pattern");
-    assert_err("0..4 { Name[0..1..2]; }", "exactly one range pattern");
-    assert_err("0..4 { Name[0..2::]; }", "expected a step");
     assert_err(
-        "0..4 { K Name[0..4::0]; }",
+        "impl_foreach! { (0..4) { Name[0..10]; } }",
+        "outside the domain",
+    );
+    assert_err(
+        "impl_foreach! { (0..10::2) { Name[0..12]; } }",
+        "outside the domain",
+    );
+    assert_err(
+        "impl_foreach! { (0..=10) { Name[4..=3]; } }",
+        "invalid range",
+    );
+    assert_err(
+        "impl_foreach! { (0..4) { A[0..#, Off]; } }",
+        "exactly one range pattern",
+    );
+    assert_err(
+        "impl_foreach! { (0..4) { Name[0..1..2]; } }",
+        "exactly one range pattern",
+    );
+    assert_err(
+        "impl_foreach! { (0..4) { Name[0..2::]; } }",
+        "expected a step",
+    );
+    assert_err(
+        "impl_foreach! { (0..4) { Name[0..4::0]; } }",
         "step must be a positive integer",
     );
     assert_err(
-        "1..2 { K Name[0..=#::#-1]; }",
+        "impl_foreach! { (1..2) { Name[0..=#::#-1]; } }",
         "step must be a positive integer",
     );
-    assert_err("0..2 { K Name[#-1..=#]; }", "outside the domain");
-    assert_err("0..4 { K Name[#+]; }", "expected an integer literal");
+    assert_err(
+        "impl_foreach! { (0..2) { Name[#-1..=#]; } }",
+        "outside the domain",
+    );
+    assert_err(
+        "impl_foreach! { (0..4) { Name[#+]; } }",
+        "expected an integer literal",
+    );
 }

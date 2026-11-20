@@ -9,12 +9,14 @@ The macro is implemented on the stable `proc_macro` API and has no crate depende
 ```rust
 use ph_util_foreach::impl_foreach;
 
-impl_foreach!(0..4 {
-    pub struct Ix + #;
-});
+impl_foreach! {
+    (0..4) {
+        pub struct Ix + #;
+    }
+}
 ```
 
-The range and the `{ ... }` body are both inside the proc-macro delimiter. The body is an arbitrary token tree. A semicolon only ends a statement that the body already contains. Commas separate fields of a nested macro.
+Rust parses each macro as one delimiter, so the call uses braces. Inside that delimiter the range is a parenthesis group and the body is the following brace group. The body is an arbitrary token tree. A semicolon only ends a statement that the body already contains. Commas separate fields of a nested macro.
 
 `0..4` above expands to:
 
@@ -47,13 +49,13 @@ An open end is clipped to the current domain, and then `::S` is applied.
 
 ### Outer range
 
-`impl_foreach!(<Range>)` uses the forms in the table. The set has to be finite with no parent domain:
+`impl_foreach! { (<Range>) { /* body */ } }` uses the forms in the table. The set has to be finite with no parent domain:
 
 | Outer range | Result |
 | --- | --- |
-| `A..B` | allowed, for example `impl_foreach!(0..4)` |
-| `A..=B` | allowed, for example `impl_foreach!(0..=3)` |
-| `A..B::S` and `A..=B::S` | allowed, for example `impl_foreach!(0..10::2)` |
+| `A..B` | allowed, for example `(0..4)` |
+| `A..=B` | allowed, for example `(0..=3)` |
+| `A..B::S` and `A..=B::S` | allowed, for example `(0..10::2)` |
 | `A..`, `..B`, `..=B`, `..` | rejected, including when written with `::S` |
 
 Inside `Name[<pat>]`, open forms stay valid. The step domain closes them.
@@ -96,7 +98,7 @@ Exactly one pattern is allowed in one pair of brackets. `A[0..#, Off]` is a comp
 
 `Name + #` is the only identifier paste. `Ix + #` expands to `Ix0`, `Ix1`, and so on. The index must be non-negative; pasting a negative index is a compile error. An identifier immediately followed by `#` (`Ix #`) is a compile error.
 
-`X + Y` concatenates sequence expansions such as `Name[<pat>]` and `(…)[<pat>]`. `Ix + #` is paste: the left side is a bare identifier, the right side is `#`, and the expansion is one identifier.
+`X + Y` concatenates sequence expansions such as `Name[<pat>]` and `(…)[<pat>]`. A bare identifier is a one-element piece, so `X + Name[..]` expands to `X, Name0, Name1, ...`. Writing the pieces next to each other (`X Name[..]`) is a compile error. `Ix + #` is paste: the left side is a bare identifier, the right side is `#`, and the expansion is one identifier.
 
 Inside a tuple row, `#` is the row index. `(T + #, U + #)[0..3]` expands to `(T0, U0), (T1, U1), (T2, U2)`.
 
@@ -109,9 +111,11 @@ Inside a tuple row, `#` is the row index. `(T + #, U + #)[0..3]` expands to `(T0
 Flat mode emits one copy per outer index. `#` is that index. The domain is the full outer set. `pub struct Ix + #;` is flat.
 
 ```rust
-impl_foreach!(0..10::2 {
-    pub struct Ix + #;
-});
+impl_foreach! {
+    (0..10::2) {
+        pub struct Ix + #;
+    }
+}
 ```
 
 expands to `Ix0`, `Ix2`, `Ix4`, `Ix6`, and `Ix8`.
@@ -119,14 +123,16 @@ expands to `Ix0`, `Ix2`, `Ix4`, `Ix6`, and `Ix8`.
 Fan mode is used when the body contains a prefix or hole form: `Name[#]`, `Off[#]`, or any range bound that mentions `#` (`T[..=#]`, `T[..#]`, `T[#+1..=#]`, and the same shapes with other names). A step of `#` by itself stays in flat mode. Fan mode still emits one copy per outer index. `#` is that index, the hole is that index, and the domain is `0..=#`.
 
 ```rust
-impl_foreach!(0..4 {
-    impl_take!(
-        args: (T[..=#]),
-        ix: Ix + #,
-        out: T + #,
-        rest: T[..#] + Off[#] + T[#+1..=#],
-    );
-});
+impl_foreach! {
+    (0..4) {
+        impl_take!(
+            args: (T[..=#]),
+            ix: Ix + #,
+            out: T + #,
+            rest: T[..#] + Off[#] + T[#+1..=#],
+        );
+    }
+}
 ```
 
 `impl_take!` is a local `macro_rules!` helper written by the caller. The four copies are:
