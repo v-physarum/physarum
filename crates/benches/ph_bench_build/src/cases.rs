@@ -7,7 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::error::{Error, ErrorKind, Result};
-use crate::source::{Fill, Repeat};
+use crate::source::{case_name, fill_count, read_exact, render};
 
 const WARMUP: &str = "warmup";
 const DEBUG: &str = "debug";
@@ -39,7 +39,6 @@ pub(crate) struct Groups {
 }
 
 struct TemplateFile {
-    stem: String,
     path: PathBuf,
 }
 
@@ -56,14 +55,19 @@ struct GroupPaths {
 }
 
 struct Marker {
-    kind: String,
-    count: u32,
     name: String,
+    /// `name` is `{kind}_{count}`. `kind` is the borrowed prefix.
+    kind_len: usize,
+    count: u32,
 }
 
 impl Marker {
+    fn kind(&self) -> &str {
+        &self.name[..self.kind_len]
+    }
+
     fn parse(path: &Path) -> Result<Self> {
-        let stem = stem_of(path)?;
+        let stem = file_stem(path).ok_or_else(|| unexpected(path))?;
         let Some((kind, count_text)) = stem.rsplit_once('_') else {
             return Err(Error::unknown_case(stem));
         };
@@ -73,10 +77,10 @@ impl Marker {
         let Ok(count) = count_text.parse::<u32>() else {
             return Err(Error::unknown_case(stem));
         };
-        let kind = kind.to_owned();
+        let kind_len = kind.len();
         Ok(Self {
-            name: case_name(&kind, count),
-            kind,
+            name: case_name(kind, count),
+            kind_len,
             count,
         })
     }
@@ -116,16 +120,14 @@ pub(crate) fn load(directory: &Path) -> Result<Groups> {
 }
 
 fn split(directory: &Path) -> Result<(Templates, GroupPaths)> {
-    let mut files = Vec::new();
+    let paths = list(directory)?;
+    let mut files = Vec::with_capacity(paths.len());
     let mut groups = GroupPaths::default();
-    for path in list(directory)? {
+    for path in paths {
         if path.is_dir() {
-            assign(&mut groups, &path)?;
-        } else if path.is_file() && is_rust_source(&path) {
-            files.push(TemplateFile {
-                stem: stem_of(&path)?,
-                path,
-            });
+            assign(&mut groups, path)?;
+        } else if path.is_file() && is_rust_source(&path) && file_stem(&path).is_some() {
+            files.push(TemplateFile { path });
         } else {
             return Err(unexpected(&path));
         }
@@ -133,40 +135,54 @@ fn split(directory: &Path) -> Result<(Templates, GroupPaths)> {
     Ok((Templates { files }, groups))
 }
 
-fn assign(groups: &mut GroupPaths, path: &Path) -> Result<()> {
-    let name = file_name(path)?;
-    let slot = match name.as_str() {
-        WARMUP => &mut groups.warmup,
-        DEBUG => &mut groups.debug,
-        INCREMENTAL => &mut groups.incremental,
-        RELEASE => &mut groups.release,
-        _ => return Err(unexpected(path)),
+fn assign(groups: &mut GroupPaths, path: PathBuf) -> Result<()> {
+    let group = match file_name(&path)? {
+        WARMUP => Group::Warmup,
+        DEBUG => Group::Debug,
+        INCREMENTAL => Group::Incremental,
+        RELEASE => Group::Release,
+        _ => return Err(unexpected(&path)),
     };
-    *slot = Some(path.to_path_buf());
+    let slot = match group {
+        Group::Warmup => &mut groups.warmup,
+        Group::Debug => &mut groups.debug,
+        Group::Incremental => &mut groups.incremental,
+        Group::Release => &mut groups.release,
+    };
+    *slot = Some(path);
     Ok(())
+}
+
+enum Group {
+    Warmup,
+    Debug,
+    Incremental,
+    Release,
 }
 
 fn push_group(out: &mut Vec<Case>, directory: Option<&Path>, templates: &Templates) -> Result<()> {
     let Some(directory) = directory else {
         return Ok(());
     };
-    let mut markers = Vec::new();
-    for path in list(directory)? {
+    let paths = list(directory)?;
+    let mut markers = Vec::with_capacity(paths.len());
+    for path in paths {
         if !path.is_file() {
             return Err(unexpected(&path));
         }
         markers.push(Marker::parse(&path)?);
     }
     markers.sort_by(|left, right| {
-        left.kind
-            .cmp(&right.kind)
+        left.kind()
+            .cmp(right.kind())
             .then(left.count.cmp(&right.count))
     });
+    out.reserve(markers.len());
     for marker in markers {
         if out.iter().any(|case| case.name == marker.name) {
             return Err(ErrorKind::DuplicateCase { case: marker.name }.into());
         }
-        let source = templates.source(&marker.kind, marker.count)?;
+        let source = templates.source(marker.kind(), marker.count)?;
         out.push(Case {
             name: marker.name,
             source,
@@ -177,7 +193,11 @@ fn push_group(out: &mut Vec<Case>, directory: Option<&Path>, templates: &Templat
 
 impl Templates {
     fn source(&self, kind: &str, count: u32) -> Result<String> {
-        let Some(header) = self.files.iter().find(|file| file.stem == kind) else {
+        let Some(header) = self
+            .files
+            .iter()
+            .find(|file| file_stem(&file.path) == Some(kind))
+        else {
             return Err(ErrorKind::MissingTemplate {
                 case: case_name(kind, count),
                 template: format!("{kind}.rs"),
@@ -185,23 +205,22 @@ impl Templates {
             .into());
         };
         if let Some(item) = singular(&self.files, kind) {
-            let text = fs::read_to_string(&item.path)?;
-            let next = text.contains(NEXT_KEY).then_some(NEXT_KEY);
-            return Repeat::new(&header.path, &item.path, count, next).load();
+            let header_text = read_exact(&header.path)?;
+            let item_text = read_exact(&item.path)?;
+            let next = item_text.contains(NEXT_KEY).then_some(NEXT_KEY);
+            return Ok(render(&header_text, &item_text, count, next));
         }
-        let len = count.to_string();
-        header.path.fill(&[(CASE_LEN, len.as_str())])
+        let text = read_exact(&header.path)?;
+        Ok(fill_count(&text, CASE_LEN, count))
     }
 }
 
 /// `{kind}` without a trailing `s`, when that stem is one of the templates.
 fn singular<'a>(files: &'a [TemplateFile], kind: &str) -> Option<&'a TemplateFile> {
     let stem = kind.strip_suffix('s').filter(|stem| !stem.is_empty())?;
-    files.iter().find(|file| file.stem == stem)
-}
-
-fn case_name(kind: &str, count: u32) -> String {
-    format!("{kind}_{count}")
+    files
+        .iter()
+        .find(|file| file_stem(&file.path) == Some(stem))
 }
 
 fn list(directory: &Path) -> Result<Vec<PathBuf>> {
@@ -218,19 +237,16 @@ fn is_rust_source(path: &Path) -> bool {
         .is_some_and(|ext| ext.eq_ignore_ascii_case("rs"))
 }
 
-fn file_name(path: &Path) -> Result<String> {
+fn file_name(path: &Path) -> Result<&str> {
     path.file_name()
         .and_then(|name| name.to_str())
-        .map(str::to_owned)
         .ok_or_else(|| unexpected(path))
 }
 
-fn stem_of(path: &Path) -> Result<String> {
+fn file_stem(path: &Path) -> Option<&str> {
     path.file_stem()
         .and_then(|stem| stem.to_str())
         .filter(|stem| !stem.is_empty())
-        .map(str::to_owned)
-        .ok_or_else(|| unexpected(path))
 }
 
 fn unexpected(path: &Path) -> Error {
