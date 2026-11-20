@@ -8,119 +8,121 @@
 //! mentions `#` (including `Name[#]` and `Off[#]`). Each fan copy still uses one
 //! outer index, but the domain is the prefix `0..=index`.
 
-use proc_macro::{Delimiter, Group, Ident, Literal, Punct, Spacing, Span, TokenStream, TokenTree};
+use proc_macro::{Delimiter, Group, Ident, Punct, Spacing, Span, TokenStream, TokenTree};
 
 use crate::error::{Error, ErrorKind, Result};
-use crate::range::{
-    BoundStyle, Domain, EvalCtx, OuterRange, Pattern, compile_outer, parse_pattern, parse_range,
-    visit_range,
-};
+use crate::range::{BoundStyle, Domain, EvalCtx, Pattern, RangeExpr};
 
 pub(crate) fn expand(input: TokenStream) -> Result<TokenStream> {
-    let (range_tokens, body) = split_input(input)?;
-    let range = parse_range(&range_tokens, BoundStyle::Outer)?;
-    let outer = compile_outer(&range)?;
+    let (range_tokens, body) = input.split_call()?;
+    let range = RangeExpr::parse(&range_tokens, BoundStyle::Outer)?;
+    let outer = range.compile_outer()?;
     if outer.is_empty() {
         return Ok(TokenStream::new());
     }
     let mut program = Program::from_body(body);
     let root = program.source.len();
-    let stat = compile_seq(&mut program, 0, root)?;
+    let stat = program.compile_seq(0, root)?;
     let mut output = TokenStream::new();
     if stat.fan {
         if outer.first() < 0 {
             return Err(Error::new(range.span, ErrorKind::FanEmpty));
         }
-        each_index(outer, |index| {
+        outer.each(|index| {
             let domain = Domain::prefix(index);
-            emit_seq(
-                &program,
-                0,
-                stat.logical,
-                &EvalCtx::new(index, &domain),
-                &mut output,
-            )
+            output.emit_seq(&program, 0, stat.logical, &EvalCtx::new(index, &domain))
         })?;
     } else {
         let domain = Domain::flat(&outer);
-        each_index(outer, |index| {
-            emit_seq(
-                &program,
-                0,
-                stat.logical,
-                &EvalCtx::new(index, &domain),
-                &mut output,
-            )
+        outer.each(|index| {
+            output.emit_seq(&program, 0, stat.logical, &EvalCtx::new(index, &domain))
         })?;
     }
     Ok(output)
 }
 
-fn each_index(outer: OuterRange, mut visit: impl FnMut(i128) -> Result<()>) -> Result<()> {
-    let mut index = outer.first();
-    for position in 0..outer.count() {
-        if position != 0 {
-            index = outer.next_after(index);
-        }
-        visit(index)?;
-    }
-    Ok(())
+trait Call {
+    fn split_call(self) -> Result<(Vec<TokenTree>, Vec<TokenTree>)>;
 }
 
-fn split_input(input: TokenStream) -> Result<(Vec<TokenTree>, Vec<TokenTree>)> {
-    let tokens: Vec<TokenTree> = input.into_iter().collect();
-    let span = tokens.first().map_or_else(Span::call_site, TokenTree::span);
-    let Some(comma_at) = tokens.iter().position(is_comma) else {
-        if tokens.iter().any(|token| {
-            matches!(token, TokenTree::Group(group) if group.delimiter() == Delimiter::Brace)
-        }) {
+impl Call for TokenStream {
+    fn split_call(self) -> Result<(Vec<TokenTree>, Vec<TokenTree>)> {
+        let tokens: Vec<TokenTree> = self.into_iter().collect();
+        let span = tokens.first().map_or_else(Span::call_site, TokenTree::span);
+        let Some(comma_at) = tokens.iter().position(OneToken::is_comma) else {
+            if tokens.iter().any(|token| {
+                matches!(token, TokenTree::Group(group) if group.delimiter() == Delimiter::Brace)
+            }) {
+                return Err(Error::new(span, ErrorKind::CallForm));
+            }
+            return Err(Error::new(
+                tokens.last().map_or(span, TokenTree::span),
+                ErrorKind::ExpectedBody,
+            ));
+        };
+        let (left_name, left_value) = tokens[..comma_at].named_value(span)?;
+        let right_span = tokens.get(comma_at + 1).map_or(span, TokenTree::span);
+        let (right_name, right_value) = tokens[comma_at + 1..].named_value(right_span)?;
+        let (range, body) = match (left_name.as_str(), right_name.as_str()) {
+            ("range", "body") => (left_value, right_value),
+            ("body", "range") => (right_value, left_value),
+            _ => return Err(Error::new(span, ErrorKind::CallForm)),
+        };
+        if range.is_empty() {
+            return Err(Error::new(span, ErrorKind::ExpectedRange));
+        }
+        Ok((range, body.brace_body(span)?))
+    }
+}
+
+trait OneToken {
+    fn is_comma(&self) -> bool;
+    fn opens_piece(&self) -> bool;
+}
+
+impl OneToken for TokenTree {
+    fn is_comma(&self) -> bool {
+        matches!(self, TokenTree::Punct(punct) if punct.as_char() == ',')
+    }
+
+    fn opens_piece(&self) -> bool {
+        match self {
+            TokenTree::Ident(_) => true,
+            TokenTree::Group(group) => group.delimiter() == Delimiter::Parenthesis,
+            TokenTree::Punct(_) | TokenTree::Literal(_) => false,
+        }
+    }
+}
+
+trait ArgTokens {
+    fn named_value(&self, span: Span) -> Result<(String, Vec<TokenTree>)>;
+    fn brace_body(&self, span: Span) -> Result<Vec<TokenTree>>;
+}
+
+impl ArgTokens for [TokenTree] {
+    fn named_value(&self, span: Span) -> Result<(String, Vec<TokenTree>)> {
+        let Some(TokenTree::Ident(name)) = self.first() else {
             return Err(Error::new(span, ErrorKind::CallForm));
+        };
+        if !matches!(self.get(1), Some(TokenTree::Punct(punct)) if punct.as_char() == '=') {
+            return Err(Error::new(name.span(), ErrorKind::CallForm));
         }
-        return Err(Error::new(
-            tokens.last().map_or(span, TokenTree::span),
-            ErrorKind::ExpectedBody,
-        ));
-    };
-    let (left_name, left_value) = named_value(&tokens[..comma_at], span)?;
-    let right_span = tokens.get(comma_at + 1).map_or(span, TokenTree::span);
-    let (right_name, right_value) = named_value(&tokens[comma_at + 1..], right_span)?;
-    let (range, body) = match (left_name.as_str(), right_name.as_str()) {
-        ("range", "body") => (left_value, right_value),
-        ("body", "range") => (right_value, left_value),
-        _ => return Err(Error::new(span, ErrorKind::CallForm)),
-    };
-    if range.is_empty() {
-        return Err(Error::new(span, ErrorKind::ExpectedRange));
+        Ok((name.to_string(), self[2..].to_vec()))
     }
-    Ok((range, brace_body(&body, span)?))
-}
 
-fn is_comma(token: &TokenTree) -> bool {
-    matches!(token, TokenTree::Punct(punct) if punct.as_char() == ',')
-}
-
-fn named_value(tokens: &[TokenTree], span: Span) -> Result<(String, Vec<TokenTree>)> {
-    let Some(TokenTree::Ident(name)) = tokens.first() else {
-        return Err(Error::new(span, ErrorKind::CallForm));
-    };
-    if !matches!(tokens.get(1), Some(TokenTree::Punct(punct)) if punct.as_char() == '=') {
-        return Err(Error::new(name.span(), ErrorKind::CallForm));
-    }
-    Ok((name.to_string(), tokens[2..].to_vec()))
-}
-
-fn brace_body(tokens: &[TokenTree], span: Span) -> Result<Vec<TokenTree>> {
-    match tokens {
-        [TokenTree::Group(group)] if group.delimiter() == Delimiter::Brace => {
-            Ok(group.stream().into_iter().collect())
+    fn brace_body(&self, span: Span) -> Result<Vec<TokenTree>> {
+        match self {
+            [TokenTree::Group(group)] if group.delimiter() == Delimiter::Brace => {
+                Ok(group.stream().into_iter().collect())
+            }
+            [TokenTree::Group(group), extra, ..] if group.delimiter() == Delimiter::Brace => {
+                Err(Error::new(extra.span(), ErrorKind::UnexpectedAfterBody))
+            }
+            _ => Err(Error::new(
+                self.first().map_or(span, TokenTree::span),
+                ErrorKind::ExpectedBody,
+            )),
         }
-        [TokenTree::Group(group), extra, ..] if group.delimiter() == Delimiter::Brace => {
-            Err(Error::new(extra.span(), ErrorKind::UnexpectedAfterBody))
-        }
-        _ => Err(Error::new(
-            tokens.first().map_or(span, TokenTree::span),
-            ErrorKind::ExpectedBody,
-        )),
     }
 }
 
@@ -281,6 +283,538 @@ impl Program {
         let bytes = self.bytes.get(start..end).ok_or_else(too_large)?;
         std::str::from_utf8(bytes).map_err(|_| too_large())
     }
+    fn compile_seq(&mut self, source_at: usize, source_len: usize) -> Result<SeqStat> {
+        let source_limit = self.source.len();
+        let stat = self.compile_into(source_at, source_len)?;
+        self.source.truncate(source_limit);
+        Ok(stat)
+    }
+    fn compile_into(&mut self, source_at: usize, source_len: usize) -> Result<SeqStat> {
+        let mut counts = Counts::new();
+        self.compile_range(&mut counts, source_at, source_len)?;
+        Ok(SeqStat::new(
+            counts.logical,
+            counts.physical,
+            counts.expands,
+            counts.fan,
+        ))
+    }
+    fn compile_bracket_sequence(
+        &mut self,
+        counts: &mut Counts,
+        source_at: usize,
+        source_len: usize,
+        index: usize,
+    ) -> Result<Option<usize>> {
+        let Some(first) = self.try_push_piece(source_at, source_len, index)? else {
+            return Ok(None);
+        };
+        let saved = rewind(self.ops.len(), first.physical)?;
+        let (pieces, physical, next, fan) = self.chain_pieces(
+            source_at,
+            source_len,
+            1,
+            first.physical,
+            first.next,
+            first.fan,
+        )?;
+        let width = checked_add(physical, 1)?;
+        self.insert_before_body(counts, saved, Op::List { pieces }, width, fan)?;
+        Ok(Some(next))
+    }
+    fn compile_prefixed_sequence(
+        &mut self,
+        counts: &mut Counts,
+        source_at: usize,
+        source_len: usize,
+        index: usize,
+    ) -> Result<Option<usize>> {
+        let Some(ident) = self.leading_ident(source_at, source_len, index)? else {
+            return Ok(None);
+        };
+        let Some(after_name) = index.checked_add(1) else {
+            return Ok(None);
+        };
+        if self.is_plus(source_at, source_len, after_name)? {
+            return self
+                .concat_ident_and_sequence(counts, source_at, source_len, ident, after_name);
+        }
+        self.reject_ident_before_sequence(source_at, source_len, &ident, after_name)
+    }
+    fn concat_ident_and_sequence(
+        &mut self,
+        counts: &mut Counts,
+        source_at: usize,
+        source_len: usize,
+        ident: Ident,
+        plus_at: usize,
+    ) -> Result<Option<usize>> {
+        let Some(piece_at) = plus_at.checked_add(1) else {
+            return Ok(None);
+        };
+        let Some(first) = self.try_push_piece(source_at, source_len, piece_at)? else {
+            return Ok(None);
+        };
+        let saved = rewind(self.ops.len(), first.physical)?;
+        self.ops.insert(saved, Inst::new(Op::Ident(ident), 1));
+        let physical = checked_add(1, first.physical)?;
+        let (pieces, physical, next, fan) =
+            self.chain_pieces(source_at, source_len, 2, physical, first.next, first.fan)?;
+        let width = checked_add(physical, 1)?;
+        self.insert_before_body(counts, saved, Op::List { pieces }, width, fan)?;
+        Ok(Some(next))
+    }
+    fn reject_ident_before_sequence(
+        &mut self,
+        source_at: usize,
+        source_len: usize,
+        ident: &Ident,
+        after_name: usize,
+    ) -> Result<Option<usize>> {
+        if self.is_sequence_start(source_at, source_len, after_name)? {
+            return Err(Error::new(ident.span(), ErrorKind::NotConcat));
+        }
+        Ok(None)
+    }
+    fn chain_pieces(
+        &mut self,
+        source_at: usize,
+        source_len: usize,
+        mut pieces: u32,
+        mut physical: u32,
+        mut next: usize,
+        mut fan: bool,
+    ) -> Result<(u32, u32, usize, bool)> {
+        while self.is_plus(source_at, source_len, next)? {
+            let Some(followed) = next.checked_add(1) else {
+                break;
+            };
+            let Some(chained) = self.try_push_piece(source_at, source_len, followed)? else {
+                break;
+            };
+            pieces = checked_add(pieces, 1)?;
+            physical = checked_add(physical, chained.physical)?;
+            next = chained.next;
+            fan |= chained.fan;
+        }
+        Ok((pieces, physical, next, fan))
+    }
+    fn try_push_piece(
+        &mut self,
+        source_at: usize,
+        source_len: usize,
+        index: usize,
+    ) -> Result<Option<Pushed>> {
+        let Some(head) = self.peek_piece(source_at, source_len, index)? else {
+            return Ok(None);
+        };
+        let (physical, fan) = match head {
+            PieceHead::Ident { span, raw, pattern } => self.push_named(span, &raw, pattern)?,
+            PieceHead::Rows {
+                span,
+                pattern,
+                stream,
+            } => self.push_rows(span, pattern, stream)?,
+        };
+        Ok(Some(Pushed::new(
+            physical,
+            index.checked_add(2).ok_or_else(too_large)?,
+            fan,
+        )))
+    }
+    fn push_named(&mut self, span: Span, raw: &str, pattern: Pattern) -> Result<(u32, bool)> {
+        let fan = pattern.uses_index();
+        let op = if matches!(pattern, Pattern::Shorthand { .. }) && raw == "Off" {
+            Op::Off(Ident::new("Off", span))
+        } else {
+            let base = raw.paste_base();
+            let (at, len) = self.pack_str(&base)?;
+            Op::Named {
+                at,
+                len,
+                span,
+                pattern,
+            }
+        };
+        self.ops.push(Inst::new(op, 1));
+        Ok((1, fan))
+    }
+    fn push_rows(
+        &mut self,
+        span: Span,
+        pattern: Pattern,
+        stream: TokenStream,
+    ) -> Result<(u32, bool)> {
+        let saved = self.ops.len();
+        let nested = self.compile_stream(stream)?;
+        let width = checked_add(nested.physical, 1)?;
+        self.ops.insert(
+            saved,
+            Inst::new(
+                Op::Rows {
+                    span,
+                    pattern,
+                    body: nested.logical,
+                },
+                width,
+            ),
+        );
+        Ok((width, pattern.uses_index() || nested.fan))
+    }
+    fn compile_pasted_ident(
+        &mut self,
+        counts: &mut Counts,
+        source_at: usize,
+        source_len: usize,
+        index: usize,
+    ) -> Result<Option<usize>> {
+        let prepared = {
+            let tokens = self.source_slice(source_at, source_len)?;
+            match tokens.get(index) {
+                Some(TokenTree::Ident(name))
+                    if tokens.is_plus_at(index + 1) && tokens.is_bare_hash(index + 2) =>
+                {
+                    Some((name.paste_base(), name.span()))
+                }
+                _ => None,
+            }
+        };
+        let Some((text, span)) = prepared else {
+            return Ok(None);
+        };
+        let (at, len) = self.pack_str(&text)?;
+        self.flush_copy(counts)?;
+        self.push_op(counts, Op::Paste { at, len, span }, false)?;
+        Ok(Some(index + 3))
+    }
+    fn compile_index_literal(
+        &mut self,
+        counts: &mut Counts,
+        source_at: usize,
+        source_len: usize,
+        index: usize,
+    ) -> Result<bool> {
+        let span = {
+            let tokens = self.source_slice(source_at, source_len)?;
+            if !tokens.is_bare_hash(index) {
+                return Ok(false);
+            }
+            tokens.hash_span(index)
+        };
+        self.flush_copy(counts)?;
+        self.push_op(counts, Op::Index { span }, false)?;
+        Ok(true)
+    }
+    fn compile_delimited_group(
+        &mut self,
+        counts: &mut Counts,
+        source_at: usize,
+        index: usize,
+    ) -> Result<bool> {
+        let pos = source_pos(source_at, index)?;
+        let Some((delimiter, span, stream)) = self.group_parts(pos) else {
+            return Ok(false);
+        };
+        let mark = self.mark();
+        let nested = self.compile_stream(stream)?;
+        if nested.expands {
+            self.install_expanding_group(counts, mark.ops, delimiter, span, &nested)?;
+        } else {
+            mark.restore(self);
+            self.keep_original_group(counts, pos)?;
+        }
+        Ok(true)
+    }
+    fn install_expanding_group(
+        &mut self,
+        counts: &mut Counts,
+        at: usize,
+        delimiter: Delimiter,
+        span: Span,
+        nested: &SeqStat,
+    ) -> Result<()> {
+        let width = checked_add(nested.physical, 1)?;
+        self.insert_before_body(
+            counts,
+            at,
+            Op::Group {
+                delimiter,
+                span,
+                body: nested.logical,
+            },
+            width,
+            nested.fan,
+        )
+    }
+    fn keep_original_group(&mut self, counts: &mut Counts, pos: usize) -> Result<()> {
+        self.push_verbatim(counts, self.cloned_token(pos)?)
+    }
+    fn compile_stream(&mut self, stream: TokenStream) -> Result<SeqStat> {
+        let inner_at = self.source.len();
+        self.source.extend(stream);
+        let inner_len = self
+            .source
+            .len()
+            .checked_sub(inner_at)
+            .ok_or_else(too_large)?;
+        let stat = self.compile_into(inner_at, inner_len)?;
+        self.source.truncate(inner_at);
+        Ok(stat)
+    }
+    fn compile_range(
+        &mut self,
+        counts: &mut Counts,
+        source_at: usize,
+        source_len: usize,
+    ) -> Result<()> {
+        let mut index = 0;
+        while index < source_len {
+            index = self.compile_one(counts, source_at, source_len, index)?;
+        }
+        self.flush_copy(counts)
+    }
+    fn compile_one(
+        &mut self,
+        counts: &mut Counts,
+        source_at: usize,
+        source_len: usize,
+        index: usize,
+    ) -> Result<usize> {
+        if let Some(next) = self.compile_bracket_sequence(counts, source_at, source_len, index)? {
+            return Ok(next);
+        }
+        if let Some(next) = self.compile_pasted_ident(counts, source_at, source_len, index)? {
+            return Ok(next);
+        }
+        self.reject_spaced_ident_hash(source_at, source_len, index)?;
+        if let Some(next) = self.compile_prefixed_sequence(counts, source_at, source_len, index)? {
+            return Ok(next);
+        }
+        if self.compile_index_literal(counts, source_at, source_len, index)? {
+            return next_token(index);
+        }
+        if self.compile_delimited_group(counts, source_at, index)? {
+            return next_token(index);
+        }
+        self.copy_verbatim_token(counts, source_at, index)?;
+        next_token(index)
+    }
+    fn copy_verbatim_token(
+        &mut self,
+        counts: &mut Counts,
+        source_at: usize,
+        index: usize,
+    ) -> Result<()> {
+        let token = self.cloned_token(source_pos(source_at, index)?)?;
+        self.push_verbatim(counts, token)
+    }
+    fn push_op(&mut self, counts: &mut Counts, op: Op, fan: bool) -> Result<()> {
+        self.ops.push(Inst::new(op, 1));
+        counts.logical = checked_add(counts.logical, 1)?;
+        counts.physical = checked_add(counts.physical, 1)?;
+        counts.expands = true;
+        counts.fan |= fan;
+        Ok(())
+    }
+    fn push_verbatim(&mut self, counts: &mut Counts, token: TokenTree) -> Result<()> {
+        let at = fit(self.tokens.len())?;
+        self.tokens.push(token);
+        match &mut counts.pending {
+            Some(pending) => pending.len = checked_add(pending.len, 1)?,
+            None => counts.pending = Some(PendingCopy::new(at, 1)),
+        }
+        Ok(())
+    }
+    fn flush_copy(&mut self, counts: &mut Counts) -> Result<()> {
+        let Some(pending) = counts.pending.take() else {
+            return Ok(());
+        };
+        self.ops.push(Inst::new(
+            Op::Copy {
+                at: pending.at,
+                len: pending.len,
+            },
+            1,
+        ));
+        counts.logical = checked_add(counts.logical, 1)?;
+        counts.physical = checked_add(counts.physical, 1)?;
+        Ok(())
+    }
+    fn insert_before_body(
+        &mut self,
+        counts: &mut Counts,
+        at: usize,
+        op: Op,
+        width: u32,
+        fan: bool,
+    ) -> Result<()> {
+        self.ops.insert(at, Inst::new(op, width));
+        if let Some(pending) = counts.pending.take() {
+            self.ops.insert(
+                at,
+                Inst::new(
+                    Op::Copy {
+                        at: pending.at,
+                        len: pending.len,
+                    },
+                    1,
+                ),
+            );
+            counts.logical = checked_add(counts.logical, 1)?;
+            counts.physical = checked_add(counts.physical, 1)?;
+        }
+        counts.logical = checked_add(counts.logical, 1)?;
+        counts.physical = checked_add(counts.physical, width)?;
+        counts.expands = true;
+        counts.fan |= fan;
+        Ok(())
+    }
+    fn peek_piece(
+        &mut self,
+        source_at: usize,
+        source_len: usize,
+        index: usize,
+    ) -> Result<Option<PieceHead>> {
+        let Some(pattern) = self.piece_pattern(source_at, source_len, index)? else {
+            return Ok(None);
+        };
+        let head = source_pos(source_at, index)?;
+        match self.source.get(head) {
+            Some(TokenTree::Ident(name)) => Ok(Some(PieceHead::Ident {
+                span: name.span(),
+                raw: name.to_string(),
+                pattern,
+            })),
+            Some(TokenTree::Group(group)) if group.delimiter() == Delimiter::Parenthesis => {
+                Ok(Some(PieceHead::Rows {
+                    span: group.span(),
+                    pattern,
+                    stream: group.stream(),
+                }))
+            }
+            _ => Ok(None),
+        }
+    }
+    fn is_sequence_start(
+        &mut self,
+        source_at: usize,
+        source_len: usize,
+        index: usize,
+    ) -> Result<bool> {
+        Ok(self.piece_pattern(source_at, source_len, index)?.is_some())
+    }
+    fn piece_pattern(
+        &mut self,
+        source_at: usize,
+        source_len: usize,
+        index: usize,
+    ) -> Result<Option<Pattern>> {
+        let Some(next) = index.checked_add(1) else {
+            return Ok(None);
+        };
+        if next >= source_len {
+            return Ok(None);
+        }
+        let head = source_pos(source_at, index)?;
+        let bracket = source_pos(source_at, next)?;
+        let Some((span, stream)) = self.bracket_of_piece(head, bracket) else {
+            return Ok(None);
+        };
+        match self.classify_stream(stream, span)? {
+            Class::Pattern(pattern) => Ok(Some(pattern)),
+            Class::Pass => Ok(None),
+        }
+    }
+    fn bracket_of_piece(&self, head: usize, bracket: usize) -> Option<(Span, TokenStream)> {
+        let token = self.source.get(head)?;
+        if !token.opens_piece() {
+            return None;
+        }
+        match self.source.get(bracket) {
+            Some(TokenTree::Group(group)) if group.delimiter() == Delimiter::Bracket => {
+                Some((group.span(), group.stream()))
+            }
+            _ => None,
+        }
+    }
+    fn classify_stream(&mut self, stream: TokenStream, span: Span) -> Result<Class> {
+        let start = self.source.len();
+        self.source.extend(stream);
+        let class = self.classify_at(start, span)?;
+        self.source.truncate(start);
+        Ok(class)
+    }
+    fn classify_at(&self, start: usize, span: Span) -> Result<Class> {
+        let Some(tokens) = self.source.get(start..) else {
+            return Err(too_large());
+        };
+        if tokens.is_exactly_hash() {
+            return Ok(Class::Pattern(Pattern::Shorthand { span }));
+        }
+        match RangeExpr::parse_pattern(tokens)? {
+            Some(mut range) => {
+                range.span = span;
+                Ok(Class::Pattern(Pattern::Range(range)))
+            }
+            None => Ok(Class::Pass),
+        }
+    }
+    fn leading_ident(
+        &self,
+        source_at: usize,
+        source_len: usize,
+        index: usize,
+    ) -> Result<Option<Ident>> {
+        let tokens = self.source_slice(source_at, source_len)?;
+        Ok(match tokens.get(index) {
+            Some(TokenTree::Ident(name)) => Some(name.clone()),
+            _ => None,
+        })
+    }
+    fn group_parts(&self, pos: usize) -> Option<(Delimiter, Span, TokenStream)> {
+        match self.source.get(pos) {
+            Some(TokenTree::Group(group)) => {
+                Some((group.delimiter(), group.span(), group.stream()))
+            }
+            _ => None,
+        }
+    }
+    fn cloned_token(&self, pos: usize) -> Result<TokenTree> {
+        self.source.get(pos).cloned().ok_or_else(too_large)
+    }
+    fn is_plus(&self, source_at: usize, source_len: usize, index: usize) -> Result<bool> {
+        let tokens = self.source_slice(source_at, source_len)?;
+        Ok(tokens.is_plus_at(index))
+    }
+    fn source_slice(&self, source_at: usize, source_len: usize) -> Result<&[TokenTree]> {
+        let end = source_at.checked_add(source_len).ok_or_else(too_large)?;
+        self.source.get(source_at..end).ok_or_else(too_large)
+    }
+    fn reject_spaced_ident_hash(
+        &self,
+        source_at: usize,
+        source_len: usize,
+        index: usize,
+    ) -> Result<()> {
+        let tokens = self.source_slice(source_at, source_len)?;
+        if !matches!(tokens.get(index), Some(TokenTree::Ident(_)))
+            || !tokens.is_bare_hash(index + 1)
+        {
+            return Ok(());
+        }
+        Err(Error::new(
+            tokens.hash_span(index + 1),
+            ErrorKind::SpacedPaste,
+        ))
+    }
+
+    fn mark(&self) -> BufferMark {
+        BufferMark {
+            ops: self.ops.len(),
+            tokens: self.tokens.len(),
+            bytes: self.bytes.len(),
+        }
+    }
 }
 
 impl Counts {
@@ -295,267 +829,6 @@ impl Counts {
     }
 }
 
-fn compile_seq(prog: &mut Program, source_at: usize, source_len: usize) -> Result<SeqStat> {
-    let source_limit = prog.source.len();
-    let stat = compile_into(prog, source_at, source_len)?;
-    prog.source.truncate(source_limit);
-    Ok(stat)
-}
-
-fn compile_into(prog: &mut Program, source_at: usize, source_len: usize) -> Result<SeqStat> {
-    let mut counts = Counts::new();
-    compile_range(prog, &mut counts, source_at, source_len)?;
-    Ok(SeqStat::new(
-        counts.logical,
-        counts.physical,
-        counts.expands,
-        counts.fan,
-    ))
-}
-
-fn compile_bracket_sequence(
-    prog: &mut Program,
-    counts: &mut Counts,
-    source_at: usize,
-    source_len: usize,
-    index: usize,
-) -> Result<Option<usize>> {
-    let Some(first) = try_push_piece(prog, source_at, source_len, index)? else {
-        return Ok(None);
-    };
-    let saved = rewind(prog.ops.len(), first.physical)?;
-    let (pieces, physical, next, fan) = chain_pieces(
-        prog,
-        source_at,
-        source_len,
-        1,
-        first.physical,
-        first.next,
-        first.fan,
-    )?;
-    let width = checked_add(physical, 1)?;
-    insert_before_body(prog, counts, saved, Op::List { pieces }, width, fan)?;
-    Ok(Some(next))
-}
-
-fn compile_prefixed_sequence(
-    prog: &mut Program,
-    counts: &mut Counts,
-    source_at: usize,
-    source_len: usize,
-    index: usize,
-) -> Result<Option<usize>> {
-    let Some(ident) = leading_ident(prog, source_at, source_len, index)? else {
-        return Ok(None);
-    };
-    let Some(after_name) = index.checked_add(1) else {
-        return Ok(None);
-    };
-    if is_plus(prog, source_at, source_len, after_name)? {
-        return concat_ident_and_sequence(prog, counts, source_at, source_len, ident, after_name);
-    }
-    reject_ident_before_sequence(prog, source_at, source_len, &ident, after_name)
-}
-
-fn concat_ident_and_sequence(
-    prog: &mut Program,
-    counts: &mut Counts,
-    source_at: usize,
-    source_len: usize,
-    ident: Ident,
-    plus_at: usize,
-) -> Result<Option<usize>> {
-    let Some(piece_at) = plus_at.checked_add(1) else {
-        return Ok(None);
-    };
-    let Some(first) = try_push_piece(prog, source_at, source_len, piece_at)? else {
-        return Ok(None);
-    };
-    let saved = rewind(prog.ops.len(), first.physical)?;
-    prog.ops.insert(saved, Inst::new(Op::Ident(ident), 1));
-    let physical = checked_add(1, first.physical)?;
-    let (pieces, physical, next, fan) = chain_pieces(
-        prog, source_at, source_len, 2, physical, first.next, first.fan,
-    )?;
-    let width = checked_add(physical, 1)?;
-    insert_before_body(prog, counts, saved, Op::List { pieces }, width, fan)?;
-    Ok(Some(next))
-}
-
-fn reject_ident_before_sequence(
-    prog: &mut Program,
-    source_at: usize,
-    source_len: usize,
-    ident: &Ident,
-    after_name: usize,
-) -> Result<Option<usize>> {
-    if is_sequence_start(prog, source_at, source_len, after_name)? {
-        return Err(Error::new(ident.span(), ErrorKind::NotConcat));
-    }
-    Ok(None)
-}
-
-fn chain_pieces(
-    prog: &mut Program,
-    source_at: usize,
-    source_len: usize,
-    mut pieces: u32,
-    mut physical: u32,
-    mut next: usize,
-    mut fan: bool,
-) -> Result<(u32, u32, usize, bool)> {
-    while is_plus(prog, source_at, source_len, next)? {
-        let Some(followed) = next.checked_add(1) else {
-            break;
-        };
-        let Some(chained) = try_push_piece(prog, source_at, source_len, followed)? else {
-            break;
-        };
-        pieces = checked_add(pieces, 1)?;
-        physical = checked_add(physical, chained.physical)?;
-        next = chained.next;
-        fan |= chained.fan;
-    }
-    Ok((pieces, physical, next, fan))
-}
-
-fn try_push_piece(
-    prog: &mut Program,
-    source_at: usize,
-    source_len: usize,
-    index: usize,
-) -> Result<Option<Pushed>> {
-    let Some(head) = peek_piece(prog, source_at, source_len, index)? else {
-        return Ok(None);
-    };
-    let (physical, fan) = match head {
-        PieceHead::Ident { span, raw, pattern } => push_named(prog, span, raw, pattern)?,
-        PieceHead::Rows {
-            span,
-            pattern,
-            stream,
-        } => push_rows(prog, span, pattern, stream)?,
-    };
-    Ok(Some(Pushed::new(
-        physical,
-        index.checked_add(2).ok_or_else(too_large)?,
-        fan,
-    )))
-}
-
-fn push_named(
-    prog: &mut Program,
-    span: Span,
-    raw: String,
-    pattern: Pattern,
-) -> Result<(u32, bool)> {
-    let fan = pattern.uses_index();
-    let op = if matches!(pattern, Pattern::Shorthand { .. }) && raw == "Off" {
-        Op::Off(Ident::new("Off", span))
-    } else {
-        let base = ident_base_owned(raw);
-        let (at, len) = prog.pack_str(&base)?;
-        Op::Named {
-            at,
-            len,
-            span,
-            pattern,
-        }
-    };
-    prog.ops.push(Inst::new(op, 1));
-    Ok((1, fan))
-}
-
-fn push_rows(
-    prog: &mut Program,
-    span: Span,
-    pattern: Pattern,
-    stream: TokenStream,
-) -> Result<(u32, bool)> {
-    let saved = prog.ops.len();
-    let nested = compile_stream(prog, stream)?;
-    let width = checked_add(nested.physical, 1)?;
-    prog.ops.insert(
-        saved,
-        Inst::new(
-            Op::Rows {
-                span,
-                pattern,
-                body: nested.logical,
-            },
-            width,
-        ),
-    );
-    Ok((width, pattern.uses_index() || nested.fan))
-}
-
-fn compile_pasted_ident(
-    prog: &mut Program,
-    counts: &mut Counts,
-    source_at: usize,
-    source_len: usize,
-    index: usize,
-) -> Result<Option<usize>> {
-    let prepared = {
-        let tokens = source_slice(prog, source_at, source_len)?;
-        match tokens.get(index) {
-            Some(TokenTree::Ident(name))
-                if is_plus_at(tokens, index + 1) && is_bare_hash(tokens, index + 2) =>
-            {
-                Some((ident_base(name), name.span()))
-            }
-            _ => None,
-        }
-    };
-    let Some((text, span)) = prepared else {
-        return Ok(None);
-    };
-    let (at, len) = prog.pack_str(&text)?;
-    flush_copy(prog, counts)?;
-    push_op(prog, counts, Op::Paste { at, len, span }, false)?;
-    Ok(Some(index + 3))
-}
-
-fn compile_index_literal(
-    prog: &mut Program,
-    counts: &mut Counts,
-    source_at: usize,
-    source_len: usize,
-    index: usize,
-) -> Result<bool> {
-    let span = {
-        let tokens = source_slice(prog, source_at, source_len)?;
-        if !is_bare_hash(tokens, index) {
-            return Ok(false);
-        }
-        hash_span(tokens, index)
-    };
-    flush_copy(prog, counts)?;
-    push_op(prog, counts, Op::Index { span }, false)?;
-    Ok(true)
-}
-
-fn compile_delimited_group(
-    prog: &mut Program,
-    counts: &mut Counts,
-    source_at: usize,
-    index: usize,
-) -> Result<bool> {
-    let pos = source_pos(source_at, index)?;
-    let Some((delimiter, span, stream)) = group_parts(prog, pos) else {
-        return Ok(false);
-    };
-    let mark = BufferMark::capture(prog);
-    let nested = compile_stream(prog, stream)?;
-    if nested.expands {
-        install_expanding_group(prog, counts, mark.ops, delimiter, span, &nested)?;
-    } else {
-        mark.restore(prog);
-        keep_original_group(prog, counts, pos)?;
-    }
-    Ok(true)
-}
-
 struct BufferMark {
     ops: usize,
     tokens: usize,
@@ -563,14 +836,6 @@ struct BufferMark {
 }
 
 impl BufferMark {
-    fn capture(prog: &Program) -> Self {
-        Self {
-            ops: prog.ops.len(),
-            tokens: prog.tokens.len(),
-            bytes: prog.bytes.len(),
-        }
-    }
-
     fn restore(self, prog: &mut Program) {
         prog.ops.truncate(self.ops);
         prog.tokens.truncate(self.tokens);
@@ -578,510 +843,285 @@ impl BufferMark {
     }
 }
 
-fn install_expanding_group(
-    prog: &mut Program,
-    counts: &mut Counts,
-    at: usize,
-    delimiter: Delimiter,
-    span: Span,
-    nested: &SeqStat,
-) -> Result<()> {
-    let width = checked_add(nested.physical, 1)?;
-    insert_before_body(
-        prog,
-        counts,
-        at,
-        Op::Group {
-            delimiter,
-            span,
-            body: nested.logical,
-        },
-        width,
-        nested.fan,
-    )
-}
-
-fn keep_original_group(prog: &mut Program, counts: &mut Counts, pos: usize) -> Result<()> {
-    push_verbatim(prog, counts, cloned_token(prog, pos)?)
-}
-
-fn compile_stream(prog: &mut Program, stream: TokenStream) -> Result<SeqStat> {
-    let inner_at = prog.source.len();
-    prog.source.extend(stream);
-    let inner_len = prog
-        .source
-        .len()
-        .checked_sub(inner_at)
-        .ok_or_else(too_large)?;
-    let stat = compile_into(prog, inner_at, inner_len)?;
-    prog.source.truncate(inner_at);
-    Ok(stat)
-}
-
-fn compile_range(
-    prog: &mut Program,
-    counts: &mut Counts,
-    source_at: usize,
-    source_len: usize,
-) -> Result<()> {
-    let mut index = 0;
-    while index < source_len {
-        index = compile_one(prog, counts, source_at, source_len, index)?;
-    }
-    flush_copy(prog, counts)
-}
-
-fn compile_one(
-    prog: &mut Program,
-    counts: &mut Counts,
-    source_at: usize,
-    source_len: usize,
-    index: usize,
-) -> Result<usize> {
-    if let Some(next) = compile_bracket_sequence(prog, counts, source_at, source_len, index)? {
-        return Ok(next);
-    }
-    if let Some(next) = compile_pasted_ident(prog, counts, source_at, source_len, index)? {
-        return Ok(next);
-    }
-    reject_spaced_ident_hash(prog, source_at, source_len, index)?;
-    if let Some(next) = compile_prefixed_sequence(prog, counts, source_at, source_len, index)? {
-        return Ok(next);
-    }
-    if compile_index_literal(prog, counts, source_at, source_len, index)? {
-        return next_token(index);
-    }
-    if compile_delimited_group(prog, counts, source_at, index)? {
-        return next_token(index);
-    }
-    copy_verbatim_token(prog, counts, source_at, index)?;
-    next_token(index)
-}
-
-fn copy_verbatim_token(
-    prog: &mut Program,
-    counts: &mut Counts,
-    source_at: usize,
-    index: usize,
-) -> Result<()> {
-    let token = cloned_token(prog, source_pos(source_at, index)?)?;
-    push_verbatim(prog, counts, token)
-}
-
 fn next_token(index: usize) -> Result<usize> {
     index.checked_add(1).ok_or_else(too_large)
-}
-
-fn push_op(prog: &mut Program, counts: &mut Counts, op: Op, fan: bool) -> Result<()> {
-    prog.ops.push(Inst::new(op, 1));
-    counts.logical = checked_add(counts.logical, 1)?;
-    counts.physical = checked_add(counts.physical, 1)?;
-    counts.expands = true;
-    counts.fan |= fan;
-    Ok(())
-}
-
-fn push_verbatim(prog: &mut Program, counts: &mut Counts, token: TokenTree) -> Result<()> {
-    let at = fit(prog.tokens.len())?;
-    prog.tokens.push(token);
-    match &mut counts.pending {
-        Some(pending) => pending.len = checked_add(pending.len, 1)?,
-        None => counts.pending = Some(PendingCopy::new(at, 1)),
-    }
-    Ok(())
-}
-
-fn flush_copy(prog: &mut Program, counts: &mut Counts) -> Result<()> {
-    let Some(pending) = counts.pending.take() else {
-        return Ok(());
-    };
-    prog.ops.push(Inst::new(
-        Op::Copy {
-            at: pending.at,
-            len: pending.len,
-        },
-        1,
-    ));
-    counts.logical = checked_add(counts.logical, 1)?;
-    counts.physical = checked_add(counts.physical, 1)?;
-    Ok(())
-}
-
-fn insert_before_body(
-    prog: &mut Program,
-    counts: &mut Counts,
-    at: usize,
-    op: Op,
-    width: u32,
-    fan: bool,
-) -> Result<()> {
-    prog.ops.insert(at, Inst::new(op, width));
-    if let Some(pending) = counts.pending.take() {
-        prog.ops.insert(
-            at,
-            Inst::new(
-                Op::Copy {
-                    at: pending.at,
-                    len: pending.len,
-                },
-                1,
-            ),
-        );
-        counts.logical = checked_add(counts.logical, 1)?;
-        counts.physical = checked_add(counts.physical, 1)?;
-    }
-    counts.logical = checked_add(counts.logical, 1)?;
-    counts.physical = checked_add(counts.physical, width)?;
-    counts.expands = true;
-    counts.fan |= fan;
-    Ok(())
-}
-
-fn peek_piece(
-    prog: &mut Program,
-    source_at: usize,
-    source_len: usize,
-    index: usize,
-) -> Result<Option<PieceHead>> {
-    let Some(pattern) = piece_pattern(prog, source_at, source_len, index)? else {
-        return Ok(None);
-    };
-    let head = source_pos(source_at, index)?;
-    match prog.source.get(head) {
-        Some(TokenTree::Ident(name)) => Ok(Some(PieceHead::Ident {
-            span: name.span(),
-            raw: name.to_string(),
-            pattern,
-        })),
-        Some(TokenTree::Group(group)) if group.delimiter() == Delimiter::Parenthesis => {
-            Ok(Some(PieceHead::Rows {
-                span: group.span(),
-                pattern,
-                stream: group.stream(),
-            }))
-        }
-        _ => Ok(None),
-    }
-}
-
-fn is_sequence_start(
-    prog: &mut Program,
-    source_at: usize,
-    source_len: usize,
-    index: usize,
-) -> Result<bool> {
-    Ok(piece_pattern(prog, source_at, source_len, index)?.is_some())
-}
-
-fn piece_pattern(
-    prog: &mut Program,
-    source_at: usize,
-    source_len: usize,
-    index: usize,
-) -> Result<Option<Pattern>> {
-    let Some(next) = index.checked_add(1) else {
-        return Ok(None);
-    };
-    if next >= source_len {
-        return Ok(None);
-    }
-    let head = source_pos(source_at, index)?;
-    let bracket = source_pos(source_at, next)?;
-    let Some((span, stream)) = bracket_of_piece(prog, head, bracket) else {
-        return Ok(None);
-    };
-    match classify_stream(prog, stream, span)? {
-        Class::Pattern(pattern) => Ok(Some(pattern)),
-        Class::Pass => Ok(None),
-    }
-}
-
-fn bracket_of_piece(prog: &Program, head: usize, bracket: usize) -> Option<(Span, TokenStream)> {
-    let token = prog.source.get(head)?;
-    if !opens_piece(token) {
-        return None;
-    }
-    match prog.source.get(bracket) {
-        Some(TokenTree::Group(group)) if group.delimiter() == Delimiter::Bracket => {
-            Some((group.span(), group.stream()))
-        }
-        _ => None,
-    }
-}
-
-fn opens_piece(token: &TokenTree) -> bool {
-    match token {
-        TokenTree::Ident(_) => true,
-        TokenTree::Group(group) => group.delimiter() == Delimiter::Parenthesis,
-        TokenTree::Punct(_) | TokenTree::Literal(_) => false,
-    }
-}
-
-fn classify_stream(prog: &mut Program, stream: TokenStream, span: Span) -> Result<Class> {
-    let start = prog.source.len();
-    prog.source.extend(stream);
-    let class = classify_at(prog, start, span)?;
-    prog.source.truncate(start);
-    Ok(class)
-}
-
-fn classify_at(prog: &Program, start: usize, span: Span) -> Result<Class> {
-    let Some(tokens) = prog.source.get(start..) else {
-        return Err(too_large());
-    };
-    if is_exactly_hash(tokens) {
-        return Ok(Class::Pattern(Pattern::Shorthand { span }));
-    }
-    match parse_pattern(tokens)? {
-        Some(mut range) => {
-            range.span = span;
-            Ok(Class::Pattern(Pattern::Range(range)))
-        }
-        None => Ok(Class::Pass),
-    }
-}
-
-fn leading_ident(
-    prog: &Program,
-    source_at: usize,
-    source_len: usize,
-    index: usize,
-) -> Result<Option<Ident>> {
-    let tokens = source_slice(prog, source_at, source_len)?;
-    Ok(match tokens.get(index) {
-        Some(TokenTree::Ident(name)) => Some(name.clone()),
-        _ => None,
-    })
-}
-
-fn group_parts(prog: &Program, pos: usize) -> Option<(Delimiter, Span, TokenStream)> {
-    match prog.source.get(pos) {
-        Some(TokenTree::Group(group)) => Some((group.delimiter(), group.span(), group.stream())),
-        _ => None,
-    }
-}
-
-fn cloned_token(prog: &Program, pos: usize) -> Result<TokenTree> {
-    prog.source.get(pos).cloned().ok_or_else(too_large)
-}
-
-fn is_plus(prog: &Program, source_at: usize, source_len: usize, index: usize) -> Result<bool> {
-    let tokens = source_slice(prog, source_at, source_len)?;
-    Ok(is_plus_at(tokens, index))
-}
-
-fn source_slice(prog: &Program, source_at: usize, source_len: usize) -> Result<&[TokenTree]> {
-    let end = source_at.checked_add(source_len).ok_or_else(too_large)?;
-    prog.source.get(source_at..end).ok_or_else(too_large)
 }
 
 fn source_pos(source_at: usize, index: usize) -> Result<usize> {
     source_at.checked_add(index).ok_or_else(too_large)
 }
 
-fn emit_seq(
-    prog: &Program,
-    mut at: usize,
-    logical: u32,
-    ctx: &EvalCtx<'_>,
-    out: &mut TokenStream,
-) -> Result<()> {
-    for _ in 0..logical {
-        let inst = prog.ops.get(at).cloned().ok_or_else(too_large)?;
-        let width = widen(inst.width)?;
-        if width == 0 {
-            return Err(too_large());
-        }
-        match inst.op {
-            Op::Copy { at: tok_at, len } => emit_copy(prog, tok_at, len, out)?,
-            Op::Group {
-                delimiter,
-                span,
-                body,
-            } => emit_group(prog, at, delimiter, span, body, ctx, out)?,
-            Op::Index { span } => {
-                out.extend([TokenTree::Literal(index_literal(ctx.index, span))]);
+struct RowHead {
+    span: Span,
+    pattern: Pattern,
+    body: u32,
+}
+
+trait Emit {
+    fn emit_seq(
+        &mut self,
+        prog: &Program,
+        at: usize,
+        logical: u32,
+        ctx: &EvalCtx<'_>,
+    ) -> Result<()>;
+
+    fn emit_group(
+        &mut self,
+        prog: &Program,
+        at: usize,
+        delimiter: Delimiter,
+        span: Span,
+        body: u32,
+        ctx: &EvalCtx<'_>,
+    ) -> Result<()>;
+
+    fn emit_list(
+        &mut self,
+        prog: &Program,
+        at: usize,
+        pieces: u32,
+        ctx: &EvalCtx<'_>,
+    ) -> Result<()>;
+
+    fn emit_piece(
+        &mut self,
+        prog: &Program,
+        at: usize,
+        ctx: &EvalCtx<'_>,
+        emitted: &mut bool,
+    ) -> Result<()>;
+
+    fn emit_copy(&mut self, prog: &Program, at: u32, len: u32) -> Result<()>;
+
+    fn push_comma(&mut self, emitted: &mut bool);
+
+    fn emit_pasted(&mut self, base: &str, index: i128, span: Span) -> Result<()>;
+
+    fn emit_ident(&mut self, emitted: &mut bool, ident: Ident);
+
+    fn emit_named(
+        &mut self,
+        ctx: &EvalCtx<'_>,
+        emitted: &mut bool,
+        base: &str,
+        span: Span,
+        pattern: Pattern,
+    ) -> Result<()>;
+
+    fn emit_rows(
+        &mut self,
+        prog: &Program,
+        ctx: &EvalCtx<'_>,
+        emitted: &mut bool,
+        body_at: usize,
+        row: RowHead,
+    ) -> Result<()>;
+}
+
+impl Emit for TokenStream {
+    fn emit_seq(
+        &mut self,
+        prog: &Program,
+        mut at: usize,
+        logical: u32,
+        ctx: &EvalCtx<'_>,
+    ) -> Result<()> {
+        for _ in 0..logical {
+            let inst = prog.ops.get(at).cloned().ok_or_else(too_large)?;
+            let width = widen(inst.width)?;
+            if width == 0 {
+                return Err(too_large());
             }
-            Op::Paste {
+            match inst.op {
+                Op::Copy { at: tok_at, len } => self.emit_copy(prog, tok_at, len)?,
+                Op::Group {
+                    delimiter,
+                    span,
+                    body,
+                } => self.emit_group(prog, at, delimiter, span, body, ctx)?,
+                Op::Index { span } => {
+                    self.extend([TokenTree::Literal(ctx.index_literal(span))]);
+                }
+                Op::Paste {
+                    at: base_at,
+                    len,
+                    span,
+                } => self.emit_pasted(prog.text(base_at, len)?, ctx.index, span)?,
+                Op::List { pieces } => {
+                    let body_at = at.checked_add(1).ok_or_else(too_large)?;
+                    self.emit_list(prog, body_at, pieces, ctx)?;
+                }
+                Op::Ident(_) | Op::Off(_) | Op::Named { .. } | Op::Rows { .. } => {
+                    let mut emitted = false;
+                    self.emit_piece(prog, at, ctx, &mut emitted)?;
+                }
+            }
+            at = at.checked_add(width).ok_or_else(too_large)?;
+        }
+        Ok(())
+    }
+
+    fn emit_group(
+        &mut self,
+        prog: &Program,
+        at: usize,
+        delimiter: Delimiter,
+        span: Span,
+        body: u32,
+        ctx: &EvalCtx<'_>,
+    ) -> Result<()> {
+        let mut inner = TokenStream::new();
+        let body_at = at.checked_add(1).ok_or_else(too_large)?;
+        inner.emit_seq(prog, body_at, body, ctx)?;
+        let mut group = Group::new(delimiter, inner);
+        group.set_span(span);
+        self.extend([TokenTree::Group(group)]);
+        Ok(())
+    }
+
+    fn emit_list(
+        &mut self,
+        prog: &Program,
+        mut at: usize,
+        pieces: u32,
+        ctx: &EvalCtx<'_>,
+    ) -> Result<()> {
+        let mut emitted = false;
+        for _ in 0..pieces {
+            let width = prog
+                .ops
+                .get(at)
+                .map(|inst| inst.width)
+                .ok_or_else(too_large)?;
+            let width = widen(width)?;
+            if width == 0 {
+                return Err(too_large());
+            }
+            self.emit_piece(prog, at, ctx, &mut emitted)?;
+            at = at.checked_add(width).ok_or_else(too_large)?;
+        }
+        Ok(())
+    }
+
+    fn emit_piece(
+        &mut self,
+        prog: &Program,
+        at: usize,
+        ctx: &EvalCtx<'_>,
+        emitted: &mut bool,
+    ) -> Result<()> {
+        let op = prog.ops.get(at).cloned().ok_or_else(too_large)?.op;
+        match op {
+            Op::Ident(ident) | Op::Off(ident) => {
+                self.emit_ident(emitted, ident);
+                Ok(())
+            }
+            Op::Named {
                 at: base_at,
                 len,
                 span,
-            } => {
-                emit_pasted(prog.text(base_at, len)?, ctx.index, span, out)?;
-            }
-            Op::List { pieces } => {
-                let body_at = at.checked_add(1).ok_or_else(too_large)?;
-                emit_list(prog, body_at, pieces, ctx, out)?;
-            }
-            Op::Ident(_) | Op::Off(_) | Op::Named { .. } | Op::Rows { .. } => {
-                let mut emitted = false;
-                emit_piece(prog, at, ctx, &mut emitted, out)?;
-            }
-        }
-        at = at.checked_add(width).ok_or_else(too_large)?;
-    }
-    Ok(())
-}
-
-fn emit_group(
-    prog: &Program,
-    at: usize,
-    delimiter: Delimiter,
-    span: Span,
-    body: u32,
-    ctx: &EvalCtx<'_>,
-    out: &mut TokenStream,
-) -> Result<()> {
-    let mut inner = TokenStream::new();
-    let body_at = at.checked_add(1).ok_or_else(too_large)?;
-    emit_seq(prog, body_at, body, ctx, &mut inner)?;
-    let mut group = Group::new(delimiter, inner);
-    group.set_span(span);
-    out.extend([TokenTree::Group(group)]);
-    Ok(())
-}
-
-fn emit_list(
-    prog: &Program,
-    mut at: usize,
-    pieces: u32,
-    ctx: &EvalCtx<'_>,
-    out: &mut TokenStream,
-) -> Result<()> {
-    let mut emitted = false;
-    for _ in 0..pieces {
-        let width = prog
-            .ops
-            .get(at)
-            .map(|inst| inst.width)
-            .ok_or_else(too_large)?;
-        let width = widen(width)?;
-        if width == 0 {
-            return Err(too_large());
-        }
-        emit_piece(prog, at, ctx, &mut emitted, out)?;
-        at = at.checked_add(width).ok_or_else(too_large)?;
-    }
-    Ok(())
-}
-
-struct ListEmit<'a> {
-    prog: &'a Program,
-    ctx: &'a EvalCtx<'a>,
-    emitted: &'a mut bool,
-    out: &'a mut TokenStream,
-}
-
-impl<'a> ListEmit<'a> {
-    fn new(
-        prog: &'a Program,
-        ctx: &'a EvalCtx<'a>,
-        emitted: &'a mut bool,
-        out: &'a mut TokenStream,
-    ) -> Self {
-        Self {
-            prog,
-            ctx,
-            emitted,
-            out,
-        }
-    }
-
-    fn ident(&mut self, ident: Ident) {
-        push_comma(self.emitted, self.out);
-        self.out.extend([TokenTree::Ident(ident)]);
-    }
-
-    fn named(&mut self, base_at: u32, len: u32, span: Span, pattern: Pattern) -> Result<()> {
-        let range = pattern.to_range();
-        let ListEmit {
-            prog,
-            ctx,
-            emitted,
-            out,
-        } = self;
-        visit_range(&range, ctx, |index| {
-            push_comma(emitted, out);
-            emit_pasted(prog.text(base_at, len)?, index, span, out)
-        })
-    }
-
-    fn rows(&mut self, at: usize, span: Span, pattern: Pattern, body: u32) -> Result<()> {
-        let range = pattern.to_range();
-        let domain = self.ctx.domain;
-        let body_at = at.checked_add(1).ok_or_else(too_large)?;
-        let ListEmit {
-            prog,
-            ctx,
-            emitted,
-            out,
-        } = self;
-        visit_range(&range, ctx, |index| {
-            let mut inner = TokenStream::new();
-            emit_seq(
-                prog,
-                body_at,
+                pattern,
+            } => self.emit_named(ctx, emitted, prog.text(base_at, len)?, span, pattern),
+            Op::Rows {
+                span,
+                pattern,
                 body,
-                &EvalCtx::new(index, domain),
-                &mut inner,
-            )?;
-            push_comma(emitted, out);
+            } => {
+                let body_at = at.checked_add(1).ok_or_else(too_large)?;
+                self.emit_rows(
+                    prog,
+                    ctx,
+                    emitted,
+                    body_at,
+                    RowHead {
+                        span,
+                        pattern,
+                        body,
+                    },
+                )
+            }
+            Op::Copy { .. }
+            | Op::Group { .. }
+            | Op::Index { .. }
+            | Op::Paste { .. }
+            | Op::List { .. } => Err(too_large()),
+        }
+    }
+
+    fn emit_copy(&mut self, prog: &Program, at: u32, len: u32) -> Result<()> {
+        let start = widen(at)?;
+        let end = start.checked_add(widen(len)?).ok_or_else(too_large)?;
+        let Some(tokens) = prog.tokens.get(start..end) else {
+            return Err(too_large());
+        };
+        self.extend(tokens.iter().cloned());
+        Ok(())
+    }
+
+    fn push_comma(&mut self, emitted: &mut bool) {
+        if *emitted {
+            self.extend([TokenTree::Punct(Punct::new(',', Spacing::Alone))]);
+        }
+        *emitted = true;
+    }
+
+    fn emit_pasted(&mut self, base: &str, index: i128, span: Span) -> Result<()> {
+        let Ok(value) = u128::try_from(index) else {
+            return Err(Error::new(span, ErrorKind::NegativePaste));
+        };
+        let mut stack = [0u8; Paste::CAP];
+        if let Some(text) = Paste::write(&mut stack, base, value) {
+            self.extend([TokenTree::Ident(Ident::new(text, span))]);
+            return Ok(());
+        }
+        let mut heap = String::with_capacity(base.len().saturating_add(Decimal::len(value)));
+        heap.push_str(base);
+        Decimal::push(&mut heap, value);
+        self.extend([TokenTree::Ident(Ident::new(&heap, span))]);
+        Ok(())
+    }
+
+    fn emit_ident(&mut self, emitted: &mut bool, ident: Ident) {
+        self.push_comma(emitted);
+        self.extend([TokenTree::Ident(ident)]);
+    }
+
+    fn emit_named(
+        &mut self,
+        ctx: &EvalCtx<'_>,
+        emitted: &mut bool,
+        base: &str,
+        span: Span,
+        pattern: Pattern,
+    ) -> Result<()> {
+        let range = pattern.to_range();
+        range.visit(ctx, |index| {
+            self.push_comma(emitted);
+            self.emit_pasted(base, index, span)
+        })
+    }
+
+    fn emit_rows(
+        &mut self,
+        prog: &Program,
+        ctx: &EvalCtx<'_>,
+        emitted: &mut bool,
+        body_at: usize,
+        row: RowHead,
+    ) -> Result<()> {
+        let range = row.pattern.to_range();
+        let domain = ctx.domain;
+        range.visit(ctx, |index| {
+            let mut inner = TokenStream::new();
+            inner.emit_seq(prog, body_at, row.body, &EvalCtx::new(index, domain))?;
+            self.push_comma(emitted);
             let mut group = Group::new(Delimiter::Parenthesis, inner);
-            group.set_span(span);
-            out.extend([TokenTree::Group(group)]);
+            group.set_span(row.span);
+            self.extend([TokenTree::Group(group)]);
             Ok(())
         })
     }
-}
-
-fn emit_piece(
-    prog: &Program,
-    at: usize,
-    ctx: &EvalCtx<'_>,
-    emitted: &mut bool,
-    out: &mut TokenStream,
-) -> Result<()> {
-    let op = prog.ops.get(at).cloned().ok_or_else(too_large)?.op;
-    let mut emit = ListEmit::new(prog, ctx, emitted, out);
-    match op {
-        Op::Ident(ident) | Op::Off(ident) => {
-            emit.ident(ident);
-            Ok(())
-        }
-        Op::Named {
-            at: base_at,
-            len,
-            span,
-            pattern,
-        } => emit.named(base_at, len, span, pattern),
-        Op::Rows {
-            span,
-            pattern,
-            body,
-        } => emit.rows(at, span, pattern, body),
-        Op::Copy { .. }
-        | Op::Group { .. }
-        | Op::Index { .. }
-        | Op::Paste { .. }
-        | Op::List { .. } => Err(too_large()),
-    }
-}
-
-fn emit_copy(prog: &Program, at: u32, len: u32, out: &mut TokenStream) -> Result<()> {
-    let start = widen(at)?;
-    let end = start.checked_add(widen(len)?).ok_or_else(too_large)?;
-    let Some(tokens) = prog.tokens.get(start..end) else {
-        return Err(too_large());
-    };
-    out.extend(tokens.iter().cloned());
-    Ok(())
-}
-
-fn push_comma(emitted: &mut bool, out: &mut TokenStream) {
-    if *emitted {
-        out.extend([TokenTree::Punct(Punct::new(',', Spacing::Alone))]);
-    }
-    *emitted = true;
 }
 
 /// Stack buffer that holds one pasted identifier.
@@ -1089,6 +1129,17 @@ struct Paste;
 
 impl Paste {
     const CAP: usize = 128;
+
+    fn write<'a>(buf: &'a mut [u8], base: &str, value: u128) -> Option<&'a str> {
+        let digits = Decimal::len(value);
+        let len = base.len().checked_add(digits)?;
+        if len > buf.len() {
+            return None;
+        }
+        buf[..base.len()].copy_from_slice(base.as_bytes());
+        Decimal::write(&mut buf[base.len()..len], value);
+        std::str::from_utf8(&buf[..len]).ok()
+    }
 }
 
 /// Decimal text of a `u128` index.
@@ -1100,143 +1151,112 @@ impl Decimal {
     const MAX_DIGITS: usize = (u128::MAX.ilog10() + 1) as usize;
     const ZERO: u8 = b'0';
     const DIGITS: &[u8] = b"0123456789";
-}
 
-fn emit_pasted(base: &str, index: i128, span: Span, out: &mut TokenStream) -> Result<()> {
-    let Ok(value) = u128::try_from(index) else {
-        return Err(Error::new(span, ErrorKind::NegativePaste));
-    };
-    let mut stack = [0u8; Paste::CAP];
-    if let Some(text) = write_paste(&mut stack, base, value) {
-        out.extend([TokenTree::Ident(Ident::new(text, span))]);
-        return Ok(());
+    fn len(value: u128) -> usize {
+        if value == 0 {
+            return 1;
+        }
+        match usize::try_from(value.ilog10()) {
+            Ok(width) => width + 1,
+            Err(_) => Self::MAX_DIGITS,
+        }
     }
-    let mut heap = String::with_capacity(base.len().saturating_add(decimal_len(value)));
-    heap.push_str(base);
-    push_decimal(&mut heap, value);
-    out.extend([TokenTree::Ident(Ident::new(&heap, span))]);
-    Ok(())
-}
 
-fn write_paste<'a>(buf: &'a mut [u8], base: &str, value: u128) -> Option<&'a str> {
-    let digits = decimal_len(value);
-    let len = base.len().checked_add(digits)?;
-    if len > buf.len() {
-        return None;
+    fn write(slot: &mut [u8], mut value: u128) {
+        if slot.is_empty() {
+            return;
+        }
+        if value == 0 {
+            slot[0] = Self::ZERO;
+            return;
+        }
+        for byte in slot.iter_mut().rev() {
+            *byte = Self::digit(value);
+            value /= Self::RADIX;
+        }
     }
-    buf[..base.len()].copy_from_slice(base.as_bytes());
-    write_decimal(&mut buf[base.len()..len], value);
-    std::str::from_utf8(&buf[..len]).ok()
-}
 
-fn decimal_len(value: u128) -> usize {
-    if value == 0 {
-        return 1;
+    fn push(out: &mut String, mut value: u128) {
+        if value == 0 {
+            out.push(char::from(Self::ZERO));
+            return;
+        }
+        let mut digits = [0u8; Self::MAX_DIGITS];
+        let mut count = 0;
+        while value > 0 {
+            digits[count] = Self::digit(value);
+            value /= Self::RADIX;
+            count += 1;
+        }
+        for index in (0..count).rev() {
+            out.push(char::from(digits[index]));
+        }
     }
-    match usize::try_from(value.ilog10()) {
-        Ok(width) => width + 1,
-        Err(_) => Decimal::MAX_DIGITS,
-    }
-}
 
-fn write_decimal(slot: &mut [u8], mut value: u128) {
-    if slot.is_empty() {
-        return;
-    }
-    if value == 0 {
-        slot[0] = Decimal::ZERO;
-        return;
-    }
-    for byte in slot.iter_mut().rev() {
-        *byte = digit_byte(value);
-        value /= Decimal::RADIX;
+    fn digit(value: u128) -> u8 {
+        Self::DIGITS[(value % Self::RADIX) as usize]
     }
 }
 
-fn push_decimal(out: &mut String, mut value: u128) {
-    if value == 0 {
-        out.push(char::from(Decimal::ZERO));
-        return;
+trait SourceTokens {
+    fn is_exactly_hash(&self) -> bool;
+    fn is_bare_hash(&self, index: usize) -> bool;
+    fn is_hash(&self, index: usize) -> bool;
+    fn hash_is_attribute(&self, hash_index: usize) -> bool;
+    fn hash_span(&self, index: usize) -> Span;
+    fn is_plus_at(&self, index: usize) -> bool;
+}
+
+impl SourceTokens for [TokenTree] {
+    fn is_exactly_hash(&self) -> bool {
+        match self {
+            [TokenTree::Punct(punct)] => punct.as_char() == '#',
+            _ => false,
+        }
     }
-    let mut digits = [0u8; Decimal::MAX_DIGITS];
-    let mut count = 0;
-    while value > 0 {
-        digits[count] = digit_byte(value);
-        value /= Decimal::RADIX;
-        count += 1;
+
+    fn is_bare_hash(&self, index: usize) -> bool {
+        self.is_hash(index) && !self.hash_is_attribute(index)
     }
-    for index in (0..count).rev() {
-        out.push(char::from(digits[index]));
+
+    fn is_hash(&self, index: usize) -> bool {
+        matches!(self.get(index), Some(TokenTree::Punct(punct)) if punct.as_char() == '#')
     }
-}
 
-fn digit_byte(value: u128) -> u8 {
-    Decimal::DIGITS[(value % Decimal::RADIX) as usize]
-}
-
-fn is_exactly_hash(tokens: &[TokenTree]) -> bool {
-    match tokens {
-        [TokenTree::Punct(punct)] => punct.as_char() == '#',
-        _ => false,
+    fn hash_is_attribute(&self, hash_index: usize) -> bool {
+        match self.get(hash_index + 1) {
+            Some(TokenTree::Group(group)) if group.delimiter() == Delimiter::Bracket => true,
+            Some(TokenTree::Punct(punct)) if punct.as_char() == '!' => true,
+            _ => false,
+        }
     }
-}
 
-fn reject_spaced_ident_hash(
-    prog: &Program,
-    source_at: usize,
-    source_len: usize,
-    index: usize,
-) -> Result<()> {
-    let tokens = source_slice(prog, source_at, source_len)?;
-    if !matches!(tokens.get(index), Some(TokenTree::Ident(_))) || !is_bare_hash(tokens, index + 1) {
-        return Ok(());
+    fn hash_span(&self, index: usize) -> Span {
+        self.get(index)
+            .map_or_else(Span::call_site, TokenTree::span)
     }
-    Err(Error::new(
-        hash_span(tokens, index + 1),
-        ErrorKind::SpacedPaste,
-    ))
-}
 
-fn is_bare_hash(tokens: &[TokenTree], index: usize) -> bool {
-    is_hash(tokens, index) && !hash_is_attribute(tokens, index)
-}
-
-fn is_hash(tokens: &[TokenTree], index: usize) -> bool {
-    matches!(tokens.get(index), Some(TokenTree::Punct(punct)) if punct.as_char() == '#')
-}
-
-fn hash_is_attribute(tokens: &[TokenTree], hash_index: usize) -> bool {
-    match tokens.get(hash_index + 1) {
-        Some(TokenTree::Group(group)) if group.delimiter() == Delimiter::Bracket => true,
-        Some(TokenTree::Punct(punct)) if punct.as_char() == '!' => true,
-        _ => false,
+    fn is_plus_at(&self, index: usize) -> bool {
+        matches!(self.get(index), Some(TokenTree::Punct(punct)) if punct.as_char() == '+')
     }
 }
 
-fn hash_span(tokens: &[TokenTree], index: usize) -> Span {
-    tokens
-        .get(index)
-        .map_or_else(Span::call_site, TokenTree::span)
+trait PasteBase {
+    fn paste_base(&self) -> String;
 }
 
-fn index_literal(index: i128, span: Span) -> Literal {
-    let mut literal = Literal::i128_unsuffixed(index);
-    literal.set_span(span);
-    literal
+impl PasteBase for str {
+    fn paste_base(&self) -> String {
+        match self.strip_prefix("r#") {
+            Some(base) => base.to_string(),
+            None => self.to_string(),
+        }
+    }
 }
 
-fn is_plus_at(tokens: &[TokenTree], index: usize) -> bool {
-    matches!(tokens.get(index), Some(TokenTree::Punct(punct)) if punct.as_char() == '+')
-}
-
-fn ident_base(name: &Ident) -> String {
-    ident_base_owned(name.to_string())
-}
-
-fn ident_base_owned(raw: String) -> String {
-    match raw.strip_prefix("r#") {
-        Some(base) => base.to_string(),
-        None => raw,
+impl PasteBase for Ident {
+    fn paste_base(&self) -> String {
+        self.to_string().paste_base()
     }
 }
 
