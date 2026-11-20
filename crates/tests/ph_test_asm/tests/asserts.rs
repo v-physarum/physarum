@@ -4,6 +4,7 @@ mod common;
 
 use common::{SHAPES, host_triple, write_probe};
 use ph_test_asm::{AsmTester, Rules};
+use ph_test_errors::ErrorTester;
 
 fn shapes() -> std::path::PathBuf {
     write_probe("shapes.rs", SHAPES)
@@ -262,8 +263,6 @@ fn gather_intrinsic_is_visible() {
 }
 
 #[test]
-#[should_panic(expected = "rustc failed")]
-fn broken_probe_reports_rustc() {
-    let path = write_probe("broken.rs", "pub fn {\n");
-    AsmTester::new(&path).function("add").on_function(|_| {});
+fn unclosed_delimiter_has_no_code() {
+    ErrorTester::source("pub fn {\n").assert_description("unclosed delimiter");
 }
