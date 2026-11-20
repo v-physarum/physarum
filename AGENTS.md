@@ -55,6 +55,18 @@ Tests and benchmarks use only the public API of crates.
 
 Benchmarks measure: build time in debug and in release; incremental builds only in debug; runtime performance only in release.
 
+## Script and benchmark tool rules
+
+Numbering continues after rule 5. This section states rules 6 and 7. Later rules use the next integer and do not renumber these rules.
+
+### 6. Rust scripts
+
+Scripts are written in Rust, not shell.
+
+### 7. Hyperfine
+
+Benchmarks use hyperfine.
+
 ## Build, lint, and test
 
 From the repository root, with the pinned toolchain:
