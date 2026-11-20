@@ -5,7 +5,7 @@
 
 use std::ops::{Range, RangeInclusive};
 
-use proc_macro::{Literal, Punct, Spacing, Span, TokenTree};
+use proc_macro2::{Literal, Punct, Spacing, Span, TokenTree};
 
 use crate::error::{Error, ErrorKind, Result};
 

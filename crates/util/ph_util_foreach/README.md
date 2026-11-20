@@ -2,7 +2,7 @@
 
 `impl_foreach` copies a token-tree body once for each index of a finite range. The copy can build structs, impls, and the invocations of other macros. This crate does not define those other macros.
 
-The macro is implemented on the stable `proc_macro` API and has no crate dependencies.
+The public entry is the stable `proc_macro` API. Expansion tokens are `proc_macro2`, and `quote` builds `compile_error!`. `thiserror` writes the error text. Those crates are compiled with this macro, so a later build of a user crate does not compile them again.
 
 ## Invocation
 

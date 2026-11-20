@@ -8,7 +8,7 @@
 //! mentions `#` (including `Name[#]` and `Off[#]`). Each fan copy still uses one
 //! outer index, but the domain is the prefix `0..=index`.
 
-use proc_macro::{Delimiter, Group, Ident, Punct, Spacing, Span, TokenStream, TokenTree};
+use proc_macro2::{Delimiter, Group, Ident, Punct, Spacing, Span, TokenStream, TokenTree};
 
 use crate::error::{Error, ErrorKind, Result};
 use crate::range::{BoundStyle, Domain, EvalCtx, Pattern, RangeExpr};

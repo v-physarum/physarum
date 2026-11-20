@@ -1,9 +1,10 @@
 //! Compile failure carried as a span and a reason.
 //!
-//! The stable `proc_macro` crate has no error type. `thiserror` writes the
-//! message when the value becomes `compile_error!`.
+//! `thiserror` writes the message. `quote` turns that message into
+//! `compile_error!`.
 
-use proc_macro::{Delimiter, Group, Ident, Literal, Punct, Spacing, Span, TokenStream, TokenTree};
+use proc_macro2::{Span, TokenStream};
+use quote::quote_spanned;
 use thiserror::Error;
 
 pub(crate) type Result<T> = std::result::Result<T, Error>;
@@ -93,20 +94,6 @@ impl Error {
     pub(crate) fn to_compile_error(&self) -> TokenStream {
         let span = self.span;
         let message = self.to_string();
-        let ident = Ident::new("compile_error", span);
-        let mut bang = Punct::new('!', Spacing::Alone);
-        bang.set_span(span);
-        let mut literal = Literal::string(&message);
-        literal.set_span(span);
-        let mut group = Group::new(
-            Delimiter::Parenthesis,
-            TokenStream::from(TokenTree::Literal(literal)),
-        );
-        group.set_span(span);
-        TokenStream::from_iter([
-            TokenTree::Ident(ident),
-            TokenTree::Punct(bang),
-            TokenTree::Group(group),
-        ])
+        quote_spanned!(span=> compile_error!(#message))
     }
 }

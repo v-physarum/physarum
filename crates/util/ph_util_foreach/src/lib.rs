@@ -34,8 +34,10 @@ mod range;
 /// See the crate README for the full range table.
 #[proc_macro]
 pub fn impl_foreach(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    match body::expand(input) {
+    let input = proc_macro2::TokenStream::from(input);
+    let output = match body::expand(input) {
         Ok(tokens) => tokens,
         Err(error) => error.to_compile_error(),
-    }
+    };
+    proc_macro::TokenStream::from(output)
 }
