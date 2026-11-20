@@ -5,6 +5,12 @@
 
 set -euo pipefail
 
+# The CI toolchain action disables rustc incremental and debuginfo and forces
+# colored Cargo output. This measurement is a normal dev build with plain logs.
+unset CARGO_INCREMENTAL
+unset CARGO_PROFILE_DEV_DEBUG
+export CARGO_TERM_COLOR=never
+
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 
@@ -21,10 +27,13 @@ time_cmd() {
     shift 2
     local start end status
     start="$(date +%s.%N)"
+    set +e
     "$@" >"$logfile" 2>&1
     status=$?
+    set -e
     end="$(date +%s.%N)"
     if [[ "$status" -ne 0 ]]; then
+        echo "command failed ($status): $*" >&2
         cat "$logfile" >&2
         exit "$status"
     fi
@@ -36,7 +45,8 @@ cargo_seconds() {
     local label=$1
     local logfile=$2
     local line seconds
-    line="$(grep -E 'Finished `dev` profile' "$logfile" | tail -n 1)"
+    line="$(grep -E 'Finished' "$logfile" | tail -n 1 || true)"
+    line="$(printf '%s\n' "$line" | sed -E 's/\x1b\[[0-9;]*m//g')"
     seconds="$(sed -n 's/.* in \([0-9.][0-9.]*\)s.*/\1/p' <<<"$line")"
     if [[ -z "$seconds" ]]; then
         echo "missing Finished line in $logfile" >&2
