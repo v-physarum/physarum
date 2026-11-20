@@ -3,8 +3,9 @@
 //! Outer ranges and `Name[<pat>]` patterns share one parser. The outer range
 //! must already be finite. A pattern may use open ends, `#`, and the literal `-1`.
 
-use proc_macro2::{Span, TokenTree};
-use syn::Result;
+use proc_macro::{Literal, Punct, Spacing, Span, TokenTree};
+
+use crate::error::{Error, Result};
 
 /// How a bound is read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -118,7 +119,7 @@ impl Domain {
     /// Domain of a fan iteration: the prefix `0..=outer`.
     pub(crate) fn fan(outer: i128, span: Span) -> Result<Self> {
         if outer < 0 {
-            return Err(syn::Error::new(
+            return Err(Error::new(
                 span,
                 "fan mode domain `0..=index` is empty because the index is negative",
             ));
@@ -135,7 +136,7 @@ impl Domain {
     /// Domain of a flat iteration: the outer index set.
     pub(crate) fn from_indices(indices: &[i128], gap: i128) -> Result<Self> {
         let (Some(&lo), Some(&hi)) = (indices.first(), indices.last()) else {
-            return Err(syn::Error::new(
+            return Err(Error::new(
                 Span::call_site(),
                 "internal error: empty domain",
             ));
@@ -198,15 +199,12 @@ pub(crate) struct OuterRange {
 /// Parses `tokens` as one range. `style` decides what `-1` and `#` mean.
 pub(crate) fn parse_range(tokens: &[TokenTree], style: BoundStyle) -> Result<RangeExpr> {
     if tokens.is_empty() {
-        return Err(syn::Error::new(Span::call_site(), "expected a range"));
+        return Err(Error::new(Span::call_site(), "expected a range"));
     }
     let mut cursor = Cursor::new(tokens);
     let start = cursor.try_bound(style)?;
     if start.is_some() && !cursor.starts_with_range_op() {
-        return Err(syn::Error::new(
-            cursor.error_span(),
-            "expected `..` or `..=`",
-        ));
+        return Err(Error::new(cursor.error_span(), "expected `..` or `..=`"));
     }
     let end_inclusive = cursor.parse_range_op()?;
     let end = if cursor.starts_with_pathsep() {
@@ -219,7 +217,7 @@ pub(crate) fn parse_range(tokens: &[TokenTree], style: BoundStyle) -> Result<Ran
         match cursor.try_bound(BoundStyle::Step)? {
             Some(bound) => Some(bound),
             None => {
-                return Err(syn::Error::new(
+                return Err(Error::new(
                     cursor.error_span(),
                     "expected a step after `::`",
                 ));
@@ -234,7 +232,7 @@ pub(crate) fn parse_range(tokens: &[TokenTree], style: BoundStyle) -> Result<Ran
         } else {
             "unexpected token in range"
         };
-        return Err(syn::Error::new(cursor.error_span(), message));
+        return Err(Error::new(cursor.error_span(), message));
     }
     Ok(RangeExpr {
         start,
@@ -266,7 +264,7 @@ pub(crate) fn starts_like_range(tokens: &[TokenTree]) -> Result<bool> {
 /// Indices selected by a finite outer range.
 pub(crate) fn compile_outer(range: &RangeExpr) -> Result<OuterRange> {
     let (Some(start_bound), Some(end_bound)) = (range.start, range.end) else {
-        return Err(syn::Error::new(
+        return Err(Error::new(
             range.span,
             "open outer range is unbounded; write `A..B` or `A..=B`, optionally with a `::S` step",
         ));
@@ -326,13 +324,13 @@ fn reject_inverted(start: i128, end: i128, end_inclusive: bool, span: Span) -> R
         } else {
             format!("{start}..{end}")
         };
-        return Err(syn::Error::new(span, format!("invalid range {rendered}")));
+        return Err(Error::new(span, format!("invalid range {rendered}")));
     }
     Ok(())
 }
 
-fn outside(span: Span, value: i128, domain: &Domain) -> syn::Error {
-    syn::Error::new(
+fn outside(span: Span, value: i128, domain: &Domain) -> Error {
+    Error::new(
         span,
         format!(
             "bound {value} is outside the domain {}..={}",
@@ -345,7 +343,7 @@ fn expect_outer_int(bound: SpannedBound) -> Result<i128> {
     match bound.bound {
         Bound::Int(value) => Ok(value),
         Bound::Here { .. } | Bound::LastIndex => {
-            Err(syn::Error::new(bound.span, "outer range cannot use `#`"))
+            Err(Error::new(bound.span, "outer range cannot use `#`"))
         }
     }
 }
@@ -353,12 +351,9 @@ fn expect_outer_int(bound: SpannedBound) -> Result<i128> {
 fn expect_positive_int_step(bound: SpannedBound) -> Result<i128> {
     match bound.bound {
         Bound::Int(value) if value > 0 => Ok(value),
-        Bound::Int(_) => Err(syn::Error::new(
-            bound.span,
-            "step must be a positive integer",
-        )),
+        Bound::Int(_) => Err(Error::new(bound.span, "step must be a positive integer")),
         Bound::Here { .. } | Bound::LastIndex => {
-            Err(syn::Error::new(bound.span, "outer range cannot use `#`"))
+            Err(Error::new(bound.span, "outer range cannot use `#`"))
         }
     }
 }
@@ -371,17 +366,14 @@ fn eval_step(step: Option<SpannedBound>, ctx: &EvalCtx<'_>) -> Result<i128> {
         Bound::Int(value) => value,
         Bound::Here { offset } => add_offset(ctx.index, offset, step.span)?,
         Bound::LastIndex => {
-            return Err(syn::Error::new(
+            return Err(Error::new(
                 step.span,
                 "step must be a positive integer literal or `#±N`",
             ));
         }
     };
     if value <= 0 {
-        return Err(syn::Error::new(
-            step.span,
-            "step must be a positive integer",
-        ));
+        return Err(Error::new(step.span, "step must be a positive integer"));
     }
     Ok(value)
 }
@@ -397,7 +389,7 @@ fn eval_pattern_bound(bound: SpannedBound, ctx: &EvalCtx<'_>) -> Result<i128> {
 fn add_offset(index: i128, offset: i128, span: Span) -> Result<i128> {
     index
         .checked_add(offset)
-        .ok_or_else(|| syn::Error::new(span, "index overflow computing a `#` bound"))
+        .ok_or_else(|| Error::new(span, "index overflow computing a `#` bound"))
 }
 
 fn generate(
@@ -450,7 +442,7 @@ impl<'a> Cursor<'a> {
             .map_or_else(Span::call_site, TokenTree::span)
     }
 
-    fn punct(&self, offset: usize) -> Option<&'a proc_macro2::Punct> {
+    fn punct(&self, offset: usize) -> Option<&'a Punct> {
         match self.tokens.get(self.index + offset) {
             Some(TokenTree::Punct(punct)) => Some(punct),
             _ => None,
@@ -462,7 +454,7 @@ impl<'a> Cursor<'a> {
             (Some(left), Some(right)) => {
                 left.as_char() == first
                     && right.as_char() == second
-                    && left.spacing() == proc_macro2::Spacing::Joint
+                    && left.spacing() == Spacing::Joint
             }
             _ => false,
         }
@@ -484,18 +476,18 @@ impl<'a> Cursor<'a> {
 
     fn parse_range_op(&mut self) -> Result<bool> {
         let Some(first) = self.punct(0) else {
-            return Err(syn::Error::new(self.error_span(), "expected `..` or `..=`"));
+            return Err(Error::new(self.error_span(), "expected `..` or `..=`"));
         };
-        if first.as_char() != '.' || first.spacing() != proc_macro2::Spacing::Joint {
-            return Err(syn::Error::new(first.span(), "expected `..` or `..=`"));
+        if first.as_char() != '.' || first.spacing() != Spacing::Joint {
+            return Err(Error::new(first.span(), "expected `..` or `..=`"));
         }
         let start_span = first.span();
         self.bump();
         let Some(second) = self.punct(0) else {
-            return Err(syn::Error::new(start_span, "expected `..` or `..=`"));
+            return Err(Error::new(start_span, "expected `..` or `..=`"));
         };
         if second.as_char() != '.' {
-            return Err(syn::Error::new(second.span(), "expected `..` or `..=`"));
+            return Err(Error::new(second.span(), "expected `..` or `..=`"));
         }
         self.bump();
         // `..#` and `..::S` keep the second `.` joint because `#` and `:` are
@@ -505,14 +497,14 @@ impl<'a> Cursor<'a> {
             return Ok(true);
         }
         if self.punct(0).is_some_and(|punct| punct.as_char() == '.') {
-            return Err(syn::Error::new(start_span, "expected `..` or `..=`"));
+            return Err(Error::new(start_span, "expected `..` or `..=`"));
         }
         Ok(false)
     }
 
     fn parse_pathsep(&mut self) -> Result<()> {
         if !self.starts_with_pathsep() {
-            return Err(syn::Error::new(self.error_span(), "expected `::`"));
+            return Err(Error::new(self.error_span(), "expected `::`"));
         }
         self.bump();
         self.bump();
@@ -546,7 +538,7 @@ impl<'a> Cursor<'a> {
             } else {
                 let signed = magnitude
                     .checked_neg()
-                    .ok_or_else(|| syn::Error::new(span, "integer literal overflows `i128`"))?;
+                    .ok_or_else(|| Error::new(span, "integer literal overflows `i128`"))?;
                 Bound::Int(signed)
             };
             return Ok(Some(SpannedBound { bound, span }));
@@ -565,13 +557,13 @@ impl<'a> Cursor<'a> {
     }
 
     fn parse_hash_offset(&mut self) -> Result<i128> {
-        let sign = match self.punct(0).map(proc_macro2::Punct::as_char) {
+        let sign = match self.punct(0).map(Punct::as_char) {
             Some('+') => 1,
             Some('-') => -1,
             _ => return Ok(0),
         };
         let Some(sign_punct) = self.punct(0) else {
-            return Err(syn::Error::new(
+            return Err(Error::new(
                 Span::call_site(),
                 "expected an integer literal after `#` `+` or `#` `-`",
             ));
@@ -579,7 +571,7 @@ impl<'a> Cursor<'a> {
         let sign_span = sign_punct.span();
         self.bump();
         let Some(TokenTree::Literal(literal)) = self.tokens.get(self.index) else {
-            return Err(syn::Error::new(
+            return Err(Error::new(
                 sign_span,
                 "expected an integer literal after `#` `+` or `#` `-`",
             ));
@@ -591,22 +583,32 @@ impl<'a> Cursor<'a> {
             1 => magnitude,
             _ => magnitude
                 .checked_neg()
-                .ok_or_else(|| syn::Error::new(sign_span, "integer literal overflows `i128`"))?,
+                .ok_or_else(|| Error::new(sign_span, "integer literal overflows `i128`"))?,
         };
         Ok(offset)
     }
 }
 
-fn parse_unsuffixed_int(literal: &proc_macro2::Literal) -> Result<i128> {
-    let parsed: syn::LitInt = syn::parse2(TokenTree::Literal(literal.clone()).into())
-        .map_err(|_| syn::Error::new(literal.span(), "expected an unsuffixed integer literal"))?;
-    if !parsed.suffix().is_empty() {
-        return Err(syn::Error::new(
-            literal.span(),
-            "integer literal must be unsuffixed",
-        ));
+fn strip_radix_prefix<'a>(text: &'a str, prefixes: &[&str]) -> Option<&'a str> {
+    prefixes.iter().find_map(|prefix| text.strip_prefix(prefix))
+}
+
+fn parse_unsuffixed_int(literal: &Literal) -> Result<i128> {
+    let text = literal.to_string();
+    let span = literal.span();
+    let stripped: String = text.chars().filter(|character| *character != '_').collect();
+    let (radix, digits) = if let Some(rest) = strip_radix_prefix(&stripped, &["0x", "0X"]) {
+        (16, rest)
+    } else if let Some(rest) = strip_radix_prefix(&stripped, &["0o", "0O"]) {
+        (8, rest)
+    } else if let Some(rest) = strip_radix_prefix(&stripped, &["0b", "0B"]) {
+        (2, rest)
+    } else {
+        (10, stripped.as_str())
+    };
+    if digits.is_empty() || !digits.chars().all(|character| character.is_digit(radix)) {
+        return Err(Error::new(span, "expected an unsuffixed integer literal"));
     }
-    parsed
-        .base10_parse::<i128>()
-        .map_err(|error| syn::Error::new(literal.span(), error))
+    i128::from_str_radix(digits, radix)
+        .map_err(|_| Error::new(span, "integer literal overflows `i128`"))
 }

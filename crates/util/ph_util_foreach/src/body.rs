@@ -5,9 +5,9 @@
 //! (including `Name[#]` and `Off[#]`). Each fan copy still uses one outer
 //! index, but the domain is the prefix `0..=index`.
 
-use proc_macro2::{Delimiter, Group, Ident, Literal, Span, TokenStream, TokenTree};
-use quote::quote;
-use syn::Result;
+use proc_macro::{Delimiter, Group, Ident, Literal, Punct, Spacing, Span, TokenStream, TokenTree};
+
+use crate::error::{Error, Result};
 
 use crate::range::{
     BoundStyle, Domain, EvalCtx, Pattern, compile_outer, parse_range, resolve_range,
@@ -59,28 +59,25 @@ fn split_input(input: TokenStream) -> Result<(Vec<TokenTree>, Vec<TokenTree>)> {
     );
     let Some(body_at) = body_at else {
         let span = tokens.first().map_or_else(Span::call_site, TokenTree::span);
-        return Err(syn::Error::new(
+        return Err(Error::new(
             span,
             "expected a `{ ... }` body after the range",
         ));
     };
     if body_at + 1 != tokens.len() {
-        return Err(syn::Error::new(
+        return Err(Error::new(
             tokens[body_at + 1].span(),
             "unexpected token after the body",
         ));
     }
     let TokenTree::Group(group) = &tokens[body_at] else {
-        return Err(syn::Error::new(
+        return Err(Error::new(
             tokens[body_at].span(),
             "expected a `{ ... }` body after the range",
         ));
     };
     if body_at == 0 {
-        return Err(syn::Error::new(
-            group.span(),
-            "expected a range before the body",
-        ));
+        return Err(Error::new(group.span(), "expected a range before the body"));
     }
     let body = group.stream().into_iter().collect();
     Ok((tokens[..body_at].to_vec(), body))
@@ -267,7 +264,7 @@ fn try_one(tokens: &[TokenTree], index: usize, ctx: &EvalCtx<'_>) -> Result<Opti
 }
 
 fn expand_named(name: &Ident, pattern: Pattern, ctx: &EvalCtx<'_>) -> Result<Vec<TokenStream>> {
-    if matches!(pattern, Pattern::Shorthand { .. }) && name == "Off" {
+    if matches!(pattern, Pattern::Shorthand { .. }) && name.to_string() == "Off" {
         return Ok(vec![TokenStream::from(TokenTree::Ident(Ident::new(
             "Off",
             name.span(),
@@ -304,7 +301,10 @@ fn join_elements(elements: &[TokenStream]) -> TokenStream {
     let mut output = TokenStream::new();
     for (index, element) in elements.iter().enumerate() {
         if index > 0 {
-            output.extend(quote!(,));
+            output.extend(TokenStream::from(TokenTree::Punct(Punct::new(
+                ',',
+                Spacing::Alone,
+            ))));
         }
         output.extend(element.clone());
     }
@@ -325,7 +325,7 @@ fn reject_spaced_paste(tokens: &[TokenTree], index: usize) -> Result<()> {
     if !matches!(tokens.get(index), Some(TokenTree::Ident(_))) || !is_bare_hash(tokens, index + 1) {
         return Ok(());
     }
-    Err(syn::Error::new(
+    Err(Error::new(
         hash_span(tokens, index + 1),
         "write `Name + #` to paste an index; `Name #` is not a paste",
     ))
@@ -333,7 +333,7 @@ fn reject_spaced_paste(tokens: &[TokenTree], index: usize) -> Result<()> {
 
 fn paste_ident(name: &Ident, index: i128) -> Result<Ident> {
     if index < 0 {
-        return Err(syn::Error::new(
+        return Err(Error::new(
             name.span(),
             "cannot paste a negative index into an identifier",
         ));
@@ -341,10 +341,9 @@ fn paste_ident(name: &Ident, index: i128) -> Result<Ident> {
     let raw = name.to_string();
     let base = raw.strip_prefix("r#").unwrap_or(&raw);
     let pasted = format!("{base}{index}");
-    let mut ident = syn::parse_str::<Ident>(&pasted)
-        .map_err(|_| syn::Error::new(name.span(), "cannot paste the index into an identifier"))?;
-    ident.set_span(name.span());
-    Ok(ident)
+    // The base is already an identifier, and a decimal suffix cannot make it a
+    // keyword or an invalid identifier.
+    Ok(Ident::new(&pasted, name.span()))
 }
 
 fn is_bare_hash(tokens: &[TokenTree], index: usize) -> bool {

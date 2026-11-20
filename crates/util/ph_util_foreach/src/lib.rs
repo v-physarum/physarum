@@ -4,12 +4,8 @@
 //! and flat versus fan expansion.
 
 mod body;
+mod error;
 mod range;
-
-#[cfg(test)]
-mod tests;
-
-use proc_macro2::TokenStream;
 
 /// Repeats `body` once for each index of a finite `range`.
 ///
@@ -35,8 +31,8 @@ use proc_macro2::TokenStream;
 /// See the crate README for the full range table.
 #[proc_macro]
 pub fn impl_foreach(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    match body::expand(TokenStream::from(input)) {
-        Ok(tokens) => tokens.into(),
-        Err(error) => error.to_compile_error().into(),
+    match body::expand(input) {
+        Ok(tokens) => tokens,
+        Err(error) => error.to_compile_error(),
     }
 }

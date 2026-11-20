@@ -2,6 +2,8 @@
 
 `impl_foreach` copies a token-tree body once for each index of a finite range. The copy can build structs, impls, and the invocations of other macros. This crate does not define those other macros.
 
+The macro is implemented on the stable `proc_macro` API and has no crate dependencies.
+
 ## Invocation
 
 ```rust
@@ -147,6 +149,10 @@ The macro emits `compile_error!` when:
 - the placeholder syntax cannot be parsed (`A[0..#, Off]`, a second range in the same brackets, `::` with no step, or an identifier immediately followed by `#`).
 
 An empty hole-edge slice expands to no tokens.
+
+## Build time
+
+`scripts/measure-ph-util-foreach-build.sh` times a clean `cargo build -p ph_util_foreach --offline --locked --timings` in a fresh target directory, then a second build with no source changes. CI runs that script, writes the report to the job summary, and uploads it as the `ph-util-foreach-build-time` artifact.
 
 ## License
 
