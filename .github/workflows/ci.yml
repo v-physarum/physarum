@@ -53,7 +53,7 @@ jobs:
           build-warnings: ""
 
       - name: Measure impl_foreach in a user crate
-        run: ./scripts/measure-ph-util-foreach-expand.sh
+        run: ./benches/crates/ph_util_foreach/measure.sh
 
       - name: Upload expand-time report
         uses: actions/upload-artifact@v7.0.2

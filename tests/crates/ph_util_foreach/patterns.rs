@@ -4,7 +4,7 @@
 mod generated {
     use ph_util_foreach::impl_foreach;
 
-    impl_foreach!(0..=10, {
+    impl_foreach!(range = 0..=10, body = {
         pub fn excl + #() -> &'static str {
             stringify!(Name[0..10])
         }

@@ -15,6 +15,42 @@ missing_docs = "warn"
 all = { level = "warn", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
 
+[dev-dependencies]
+ph_util_foreach = { path = "crates/util/ph_util_foreach" }
+
+[[test]]
+name = "ph_util_foreach_errors"
+path = "tests/crates/ph_util_foreach/errors.rs"
+
+[[test]]
+name = "ph_util_foreach_flat_structs"
+path = "tests/crates/ph_util_foreach/flat_structs.rs"
+
+[[test]]
+name = "ph_util_foreach_impl_take"
+path = "tests/crates/ph_util_foreach/impl_take.rs"
+
+[[test]]
+name = "ph_util_foreach_patterns"
+path = "tests/crates/ph_util_foreach/patterns.rs"
+
+[[test]]
+name = "ph_util_foreach_placeholders"
+path = "tests/crates/ph_util_foreach/placeholders.rs"
+
+[[test]]
+name = "ph_util_foreach_step_structs"
+path = "tests/crates/ph_util_foreach/step_structs.rs"
+
+[[test]]
+name = "ph_util_foreach_tokens"
+path = "tests/crates/ph_util_foreach/tokens.rs"
+
+[[bench]]
+name = "ph_util_foreach_runtime"
+harness = false
+path = "benches/crates/ph_util_foreach/runtime.rs"
+
 [workspace]
 resolver = "3"
 members = ["crates/util/ph_util_foreach"]

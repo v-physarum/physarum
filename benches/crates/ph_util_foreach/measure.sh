@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Time impl_foreach! as a dependency of another crate.
+# Time impl_foreach! in a downstream crate.
 # The proc-macro is compiled once and is not part of the case times.
-# Each case then cargo-cleans that user crate and times a dev build, three
-# times. The reported figure is the median cargo Finished time.
+# Debug and release builds are full compiles. Incremental time is debug only.
+# Runtime time is the release bench.
 
 set -euo pipefail
 
@@ -13,7 +13,7 @@ unset CARGO_PROFILE_DEV_DEBUG
 export CARGO_INCREMENTAL=0
 export CARGO_TERM_COLOR=never
 
-root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 cd "$root"
 
 out="${1:-"$root/target/ph-util-foreach-expand"}"
@@ -52,7 +52,7 @@ lines = ["use ph_util_foreach::impl_foreach;", ""]
 
 if kind == "flat_structs":
     lines += [
-        f"impl_foreach!(0..{n}, {{",
+        f"impl_foreach!(range = 0..{n}, body = {{",
         "    pub struct Ix + #;",
         "});",
     ]
@@ -61,14 +61,14 @@ elif kind == "hand_structs":
     lines += [f"pub struct Ix{i};" for i in range(n)]
 elif kind == "one_call":
     lines += [
-        f"impl_foreach!(0..{n}, {{",
+        f"impl_foreach!(range = 0..{n}, body = {{",
         "    pub struct Ix + #;",
         "});",
     ]
 elif kind == "many_calls":
     for i in range(n):
         lines += [
-            f"impl_foreach!({i}..{i + 1}, {{",
+            f"impl_foreach!(range = {i}..{i + 1}, body = {{",
             "    pub struct Ix + #;",
             "});",
         ]
@@ -90,7 +90,7 @@ elif kind == "fan_take":
         "    };",
         "}",
         "",
-        f"impl_foreach!(0..{n}, {{",
+        f"impl_foreach!(range = 0..{n}, body = {{",
         "    impl_take!(",
         "        args: (T[..=#]),",
         "        ix: Ix + #,",
@@ -101,7 +101,7 @@ elif kind == "fan_take":
     ]
 elif kind == "fan_rows":
     lines += [
-        f"impl_foreach!(0..{n}, {{",
+        f"impl_foreach!(range = 0..{n}, body = {{",
         "    pub const Row + #: &str = stringify!((T + #, U + #)[0..=#]);",
         "});",
     ]
@@ -166,10 +166,9 @@ report="$out/report.txt"
 {
     echo "toolchain $(rustc --version)"
     echo "package ph_util_foreach_user"
-    echo "profile dev"
-    echo "incremental off"
     echo "proc_macro compiled once before these cases"
     echo "repeats $repeats"
+    echo "section=debug_full incremental_off"
     echo "columns case median_cargo_seconds median_wall_seconds"
 } >"$report"
 
@@ -204,8 +203,123 @@ for case in "${cases[@]}"; do
     cargo_median="$(median <"$cargos")"
     wall_median="$(median <"$walls")"
     printf '%s %s %s\n' "$case" "$cargo_median" "$wall_median" >>"$report"
-    printf '%s cargo %ss wall %ss\n' "$case" "$cargo_median" "$wall_median"
+    printf 'debug_full %s cargo %ss wall %ss\n' "$case" "$cargo_median" "$wall_median"
 done
+
+# Incremental builds are debug only. The second build does not change source.
+export CARGO_INCREMENTAL=1
+write_source flat_structs_1024 "$user/src/lib.rs"
+(
+    cd "$user"
+    cargo build --offline
+) >"$out/logs/debug_incremental_warmup.log" 2>&1
+incremental_walls="$out/logs/debug_incremental.wall"
+incremental_cargos="$out/logs/debug_incremental.cargo"
+: >"$incremental_walls"
+: >"$incremental_cargos"
+for run in $(seq 1 "$repeats"); do
+    start="$(date +%s.%N)"
+    set +e
+    (
+        cd "$user"
+        cargo build --offline
+    ) >"$out/logs/debug_incremental.run$run.log" 2>&1
+    status=$?
+    set -e
+    end="$(date +%s.%N)"
+    if [[ "$status" -ne 0 ]]; then
+        echo "debug incremental run $run failed ($status)" >&2
+        cat "$out/logs/debug_incremental.run$run.log" >&2
+        exit "$status"
+    fi
+    awk -v start="$start" -v end="$end" 'BEGIN { printf "%.3f\n", (end - start) }' >>"$incremental_walls"
+    cargo_seconds "$out/logs/debug_incremental.run$run.log" >>"$incremental_cargos"
+done
+incremental_cargo="$(median <"$incremental_cargos")"
+incremental_wall="$(median <"$incremental_walls")"
+printf 'debug_incremental_flat_structs_1024 %s %s\n' "$incremental_cargo" "$incremental_wall" >>"$report"
+printf 'debug_incremental flat_structs_1024 cargo %ss wall %ss\n' "$incremental_cargo" "$incremental_wall"
+
+# Release build time. Incremental release builds are not measured.
+export CARGO_INCREMENTAL=0
+release_cases=(
+    flat_structs_1024
+    hand_structs_1024
+    flat_structs_8192
+    fan_take_64
+    fan_rows_256
+)
+for case in "${release_cases[@]}"; do
+    write_source "$case" "$user/src/lib.rs"
+    walls="$out/logs/release_$case.wall"
+    cargos="$out/logs/release_$case.cargo"
+    : >"$walls"
+    : >"$cargos"
+    for run in $(seq 1 "$repeats"); do
+        (
+            cd "$user"
+            cargo clean -p ph_util_foreach_user --release
+        ) >"$out/logs/release_$case.clean$run.log" 2>&1
+        start="$(date +%s.%N)"
+        set +e
+        (
+            cd "$user"
+            cargo build --release --offline
+        ) >"$out/logs/release_$case.run$run.log" 2>&1
+        status=$?
+        set -e
+        end="$(date +%s.%N)"
+        if [[ "$status" -ne 0 ]]; then
+            echo "release $case run $run failed ($status)" >&2
+            cat "$out/logs/release_$case.run$run.log" >&2
+            exit "$status"
+        fi
+        awk -v start="$start" -v end="$end" 'BEGIN { printf "%.3f\n", (end - start) }' >>"$walls"
+        cargo_seconds "$out/logs/release_$case.run$run.log" >>"$cargos"
+    done
+    cargo_median="$(median <"$cargos")"
+    wall_median="$(median <"$walls")"
+    printf 'release_full_%s %s %s\n' "$case" "$cargo_median" "$wall_median" >>"$report"
+    printf 'release_full %s cargo %ss wall %ss\n' "$case" "$cargo_median" "$wall_median"
+done
+
+# Runtime performance is release only.
+runtime_target="$out/runtime-target"
+runtime_log="$out/logs/runtime_build.log"
+set +e
+CARGO_TARGET_DIR="$runtime_target" cargo build --release --bench ph_util_foreach_runtime --offline --message-format=json >"$runtime_log" 2>"$out/logs/runtime_build.err"
+status=$?
+set -e
+if [[ "$status" -ne 0 ]]; then
+    echo "release runtime bench failed to build ($status)" >&2
+    cat "$out/logs/runtime_build.err" >&2
+    exit "$status"
+fi
+runtime_bin="$(python3 - "$runtime_log" <<'PY'
+import json
+import sys
+from pathlib import Path
+executable = None
+for line in Path(sys.argv[1]).read_text().splitlines():
+    if not line.startswith("{"):
+        continue
+    message = json.loads(line)
+    if message.get("reason") == "compiler-artifact" and message.get("target", {}).get("name") == "ph_util_foreach_runtime":
+        executable = message.get("executable")
+if not executable:
+    raise SystemExit("runtime bench executable missing")
+print(executable)
+PY
+)"
+runtime_samples="$out/logs/runtime.samples"
+: >"$runtime_samples"
+for run in $(seq 1 "$repeats"); do
+    "$runtime_bin" >"$out/logs/runtime.run$run.log"
+    sed -n 's/^runtime_seconds //p' "$out/logs/runtime.run$run.log" >>"$runtime_samples"
+done
+runtime_median="$(awk '{ values[NR] = $1 } END { mid = int((NR + 1) / 2); if (NR % 2 == 1) printf "%.6f\n", values[mid]; else printf "%.6f\n", (values[mid] + values[mid + 1]) / 2 }' < <(sort -n "$runtime_samples"))"
+printf 'runtime_release %s\n' "$runtime_median" >>"$report"
+printf 'runtime_release %ss\n' "$runtime_median"
 
 cat "$report"
 
@@ -213,7 +327,7 @@ if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
     {
         echo "## ph_util_foreach user compile time"
         echo
-        echo "Proc-macro already built. Median of $repeats dev builds, incremental off."
+        echo "Proc-macro already built. Median of $repeats runs: full debug, incremental debug, full release, and release runtime."
         echo
         echo "| case | cargo Finished (s) | wall (s) |"
         echo "| --- | ---: | ---: |"

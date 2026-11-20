@@ -12,15 +12,15 @@ mod range;
 /// ```
 /// use ph_util_foreach::impl_foreach;
 ///
-/// impl_foreach!(0..3, {
+/// impl_foreach!(range = 0..3, body = {
 ///     pub struct Ix + #;
 /// });
 ///
 /// let _ = (Ix0, Ix1, Ix2);
 /// ```
 ///
-/// The call is `impl_foreach!(range, { body })`. The range and the `{ ... }`
-/// body are both inside the parentheses, separated by a comma.
+/// The call is `impl_foreach!(range = 0..3, body = { .. })`. Both arguments are
+/// named. The macro has two arguments, so neither is positional.
 /// `#` is the current index. `Name + #` appends that index's decimal digits
 /// (`Ix + #` expands to `Ix0`). An identifier immediately followed by `#`
 /// is a compile error.

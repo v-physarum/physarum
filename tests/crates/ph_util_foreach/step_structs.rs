@@ -2,7 +2,7 @@
 
 use ph_util_foreach::impl_foreach;
 
-impl_foreach!(0..10::2, {
+impl_foreach!(range = 0..10::2, body = {
     pub struct Ix + #;
 });
 

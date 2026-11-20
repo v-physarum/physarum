@@ -28,27 +28,27 @@ fn assert_rows(rows: &[&str], expected: &str) {
     assert_eq!(words(&actual), words(expected), "actual: {actual}");
 }
 
-impl_foreach!(0..=3, {
+impl_foreach!(range = 0..=3, body = {
     pub struct Incl + #;
 });
 
-impl_foreach!(1..10::2, {
+impl_foreach!(range = 1..10::2, body = {
     pub struct Odd + #;
 });
 
-impl_foreach!(2..=5, {
+impl_foreach!(range = 2..=5, body = {
     pub struct Win + #;
 });
 
-impl_foreach!(3..=3, {
+impl_foreach!(range = 3..=3, body = {
     pub struct One + #;
 });
 
-impl_foreach!(10..=12::2, {
+impl_foreach!(range = 10..=12::2, body = {
     pub struct Ten + #;
 });
 
-impl_foreach!(0..1::2, {
+impl_foreach!(range = 0..1::2, body = {
     pub struct Half + #;
 });
 
@@ -59,27 +59,30 @@ macro_rules! fail_if_emitted {
     };
 }
 
-impl_foreach!(5..5, {
-    fail_if_emitted!();
-});
+impl_foreach!(
+    range = 5..5,
+    body = {
+        fail_if_emitted!();
+    }
+);
 
-impl_foreach!(-1..0, {
+impl_foreach!(range = -1..0, body = {
     pub const NEG: i128 = #;
 });
 
-impl_foreach!(0..1, {
+impl_foreach!(range = 0..1, body = {
     pub const ZERO: i128 = #;
     pub fn add(left: i32, right: i32) -> i32 {
         left + right
     }
 });
 
-impl_foreach!(0..2, {
+impl_foreach!(range = 0..2, body = {
     #[allow(dead_code)]
     pub struct Attr + #;
 });
 
-impl_foreach!(0..10, {
+impl_foreach!(range = 0..10, body = {
     pub mod excl + # {
         pub const TEXT: &str = stringify!(Name[0..10]);
     }
@@ -100,7 +103,7 @@ impl_foreach!(0..10, {
     }
 });
 
-impl_foreach!(0..=10, {
+impl_foreach!(range = 0..=10, body = {
     pub mod incl + # {
         pub const TEXT: &str = stringify!(Name[0..=10]);
     }
@@ -127,13 +130,13 @@ impl_foreach!(0..=10, {
     }
 });
 
-impl_foreach!(0..=9, {
+impl_foreach!(range = 0..=9, body = {
     pub mod step_incl + # {
         pub const TEXT: &str = stringify!(Name[0..=9::2]);
     }
 });
 
-impl_foreach!(0..=4, {
+impl_foreach!(range = 0..=4, body = {
     pub mod last_only + # {
         pub const TEXT: &str = stringify!(Name[-1..=-1]);
     }
@@ -142,7 +145,7 @@ impl_foreach!(0..=4, {
     }
 });
 
-impl_foreach!(0..3, {
+impl_foreach!(range = 0..3, body = {
     pub mod flat_full + # {
         pub const TEXT: &str = stringify!(X + Name[..];);
     }
@@ -151,7 +154,7 @@ impl_foreach!(0..3, {
     }
 });
 
-impl_foreach!(0..3, {
+impl_foreach!(range = 0..3, body = {
     pub mod fan_prefix + # {
         pub const TEXT: &str = stringify!(X + Name[..]; Y + Name[..=#];);
     }
@@ -163,19 +166,19 @@ impl_foreach!(0..3, {
     }
 });
 
-impl_foreach!(0..6::2, {
+impl_foreach!(range = 0..6::2, body = {
     pub mod fan_step + # {
         pub const TEXT: &str = stringify!(K + Name[..=#];);
     }
 });
 
-impl_foreach!(0..6::2, {
+impl_foreach!(range = 0..6::2, body = {
     pub mod flat_step + # {
         pub const TEXT: &str = stringify!(K + Name[..];);
     }
 });
 
-impl_foreach!(0..10::2, {
+impl_foreach!(range = 0..10::2, body = {
     pub mod gap_all + # {
         pub const TEXT: &str = stringify!(K + Name[0..10];);
     }
@@ -184,7 +187,7 @@ impl_foreach!(0..10::2, {
     }
 });
 
-impl_foreach!(0..2, {
+impl_foreach!(range = 0..2, body = {
     pub mod off_seq + # {
         pub const TEXT: &str = stringify!(K + Off[0..2];);
     }
@@ -202,7 +205,7 @@ impl_foreach!(0..2, {
     }
 });
 
-impl_foreach!(0..2, {
+impl_foreach!(range = 0..2, body = {
     pub mod off_bare + # {
         pub const TEXT: &str = stringify!(K + Off[#];);
     }
@@ -211,13 +214,13 @@ impl_foreach!(0..2, {
     }
 });
 
-impl_foreach!(0..3, {
+impl_foreach!(range = 0..3, body = {
     pub mod rows + # {
         pub const TEXT: &str = stringify!(K + (T + #, U + #)[0..3];);
     }
 });
 
-impl_foreach!(1..3, {
+impl_foreach!(range = 1..3, body = {
     pub mod offset + # {
         pub const TEXT: &str = stringify!(K + Name[#-1..=#];);
     }
@@ -226,13 +229,13 @@ impl_foreach!(1..3, {
     }
 });
 
-impl_foreach!(0..4, {
+impl_foreach!(range = 0..4, body = {
     pub mod hole_edge + # {
         pub const TEXT: &str = stringify!(K + Name[4..=3];);
     }
 });
 
-impl_foreach!(0..1, {
+impl_foreach!(range = 0..1, body = {
     pub mod ordinary + # {
         pub const TEXT: &str = stringify!(let x = values[i]; let y = Name[];);
     }

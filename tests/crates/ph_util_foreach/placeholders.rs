@@ -2,7 +2,7 @@
 
 use ph_util_foreach::impl_foreach;
 
-impl_foreach!(0..3, {
+impl_foreach!(range = 0..3, body = {
     #[allow(unused_parens)]
     pub fn at + #() -> i32 {
         let values = [10, 20, 30];
@@ -10,23 +10,26 @@ impl_foreach!(0..3, {
     }
 });
 
-impl_foreach!(-1..0, {
+impl_foreach!(range = -1..0, body = {
     pub fn neg() -> i128 {
         #
     }
 });
 
-impl_foreach!(0..1, {
-    pub fn add(left: i32, right: i32) -> i32 {
-        left + right
+impl_foreach!(
+    range = 0..1,
+    body = {
+        pub fn add(left: i32, right: i32) -> i32 {
+            left + right
+        }
     }
-});
+);
 
-impl_foreach!(0..2, {
+impl_foreach!(range = 0..2, body = {
     pub struct T + #;
 });
 
-impl_foreach!(0..2, {
+impl_foreach!(range = 0..2, body = {
     pub fn take + #(_: ((T + #, T + #)[0..2])) {}
 });
 

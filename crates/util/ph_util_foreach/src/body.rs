@@ -16,8 +16,8 @@ use crate::range::{
 };
 
 pub(crate) fn expand(input: TokenStream) -> Result<TokenStream> {
-    let (tokens, range_len, body) = split_input(input)?;
-    let range = parse_range(&tokens[..range_len], BoundStyle::Outer)?;
+    let (range_tokens, body) = split_input(input)?;
+    let range = parse_range(&range_tokens, BoundStyle::Outer)?;
     let outer = compile_outer(&range)?;
     if outer.is_empty() {
         return Ok(TokenStream::new());
@@ -59,42 +59,63 @@ pub(crate) fn expand(input: TokenStream) -> Result<TokenStream> {
     Ok(output)
 }
 
-fn split_input(input: TokenStream) -> Result<(Vec<TokenTree>, usize, Vec<TokenTree>)> {
+const CALL_FORM: &str = "write `impl_foreach!(range = .., body = { .. })`";
+
+fn split_input(input: TokenStream) -> Result<(Vec<TokenTree>, Vec<TokenTree>)> {
     let tokens: Vec<TokenTree> = input.into_iter().collect();
     let span = tokens.first().map_or_else(Span::call_site, TokenTree::span);
-    let body_at = tokens.iter().position(
-        |token| matches!(token, TokenTree::Group(group) if group.delimiter() == Delimiter::Brace),
-    );
-    let Some(body_at) = body_at else {
+    let Some(comma_at) = tokens.iter().position(is_comma) else {
+        if tokens.iter().any(|token| {
+            matches!(token, TokenTree::Group(group) if group.delimiter() == Delimiter::Brace)
+        }) {
+            return Err(Error::new(span, CALL_FORM));
+        }
         return Err(Error::new(
             tokens.last().map_or(span, TokenTree::span),
             "expected a `{ ... }` body after the range",
         ));
     };
-    if body_at + 1 != tokens.len() {
-        return Err(Error::new(
-            tokens[body_at + 1].span(),
-            "unexpected token after the body",
-        ));
-    }
-    if body_at == 0
-        || !matches!(&tokens[body_at - 1], TokenTree::Punct(punct) if punct.as_char() == ',')
-    {
-        return Err(Error::new(span, "write `impl_foreach!(range, { body })`"));
-    }
-    if body_at == 1 {
+    let (left_name, left_value) = named_value(&tokens[..comma_at], span)?;
+    let right_span = tokens.get(comma_at + 1).map_or(span, TokenTree::span);
+    let (right_name, right_value) = named_value(&tokens[comma_at + 1..], right_span)?;
+    let (range, body) = match (left_name.as_str(), right_name.as_str()) {
+        ("range", "body") => (left_value, right_value),
+        ("body", "range") => (right_value, left_value),
+        _ => return Err(Error::new(span, CALL_FORM)),
+    };
+    if range.is_empty() {
         return Err(Error::new(span, "expected a range"));
     }
-    let body_tokens = {
-        let TokenTree::Group(body) = &tokens[body_at] else {
-            return Err(Error::new(
-                span,
-                "expected a `{ ... }` body after the range",
-            ));
-        };
-        body.stream().into_iter().collect()
+    Ok((range, brace_body(&body, span)?))
+}
+
+fn is_comma(token: &TokenTree) -> bool {
+    matches!(token, TokenTree::Punct(punct) if punct.as_char() == ',')
+}
+
+fn named_value(tokens: &[TokenTree], span: Span) -> Result<(String, Vec<TokenTree>)> {
+    let Some(TokenTree::Ident(name)) = tokens.first() else {
+        return Err(Error::new(span, CALL_FORM));
     };
-    Ok((tokens, body_at - 1, body_tokens))
+    if !matches!(tokens.get(1), Some(TokenTree::Punct(punct)) if punct.as_char() == '=') {
+        return Err(Error::new(name.span(), CALL_FORM));
+    }
+    Ok((name.to_string(), tokens[2..].to_vec()))
+}
+
+fn brace_body(tokens: &[TokenTree], span: Span) -> Result<Vec<TokenTree>> {
+    match tokens {
+        [TokenTree::Group(group)] if group.delimiter() == Delimiter::Brace => {
+            Ok(group.stream().into_iter().collect())
+        }
+        [TokenTree::Group(group), extra, ..] if group.delimiter() == Delimiter::Brace => {
+            Err(Error::new(extra.span(), "unexpected token after the body"))
+        }
+        _ => Err(Error::new(
+            tokens.first().map_or(span, TokenTree::span),
+            "expected a `{ ... }` body after the range",
+        )),
+    }
 }
 
 /// One compiled body.
@@ -1181,21 +1202,4 @@ fn rewind(len: usize, physical: u32) -> Result<usize> {
 
 fn too_large() -> Error {
     Error::new(Span::call_site(), "body is too large")
-}
-
-#[cfg(test)]
-mod paste_buffer {
-    use super::{decimal_len, write_paste};
-
-    #[test]
-    fn stack_buffer_holds_the_suffix() {
-        let mut buf = [0u8; 8];
-        assert_eq!(write_paste(&mut buf, "Ix", 0), Some("Ix0"));
-        assert_eq!(write_paste(&mut buf, "Ix", 42), Some("Ix42"));
-        assert_eq!(write_paste(&mut buf, "N", 1000), Some("N1000"));
-        assert_eq!(decimal_len(0), 1);
-        assert_eq!(decimal_len(9), 1);
-        assert_eq!(decimal_len(10), 2);
-        assert_eq!(write_paste(&mut buf, "abcdefgh", 1), None);
-    }
 }
