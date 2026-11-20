@@ -3,47 +3,13 @@
 use std::fs;
 use std::path::Path;
 
-use crate::error::{Error, Result};
-
-/// The kind and count parsed from a case name such as `flat_structs_1024`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct CaseName<'a> {
-    kind: &'a str,
-    count: u32,
-}
-
-impl<'a> CaseName<'a> {
-    /// Splits `case` at the last `_` into a kind and a count.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when `case` has no `_` or the suffix is not an integer.
-    pub fn parse(case: &'a str) -> Result<Self> {
-        let (kind, count) = case
-            .rsplit_once('_')
-            .ok_or_else(|| Error::unknown_case(case))?;
-        let count = count.parse().map_err(|_| Error::unknown_case(case))?;
-        Ok(Self { kind, count })
-    }
-
-    /// The text before the last `_`.
-    #[must_use]
-    pub fn kind(self) -> &'a str {
-        self.kind
-    }
-
-    /// The integer after the last `_`.
-    #[must_use]
-    pub fn count(self) -> u32 {
-        self.count
-    }
-}
+use crate::error::Result;
 
 /// Header file, item file, and how many times to paste the item.
 ///
 /// `INDEX` in the item is the paste index. `next`, when set, is the key replaced
 /// with the following index. Each copy is written into the one output string.
-pub struct Repeat<'a> {
+pub(crate) struct Repeat<'a> {
     header: &'a Path,
     item: &'a Path,
     count: u32,
@@ -53,7 +19,7 @@ pub struct Repeat<'a> {
 impl<'a> Repeat<'a> {
     /// One repeated item under `header`.
     #[must_use]
-    pub fn new(header: &'a Path, item: &'a Path, count: u32, next: Option<&'a str>) -> Self {
+    pub(crate) fn new(header: &'a Path, item: &'a Path, count: u32, next: Option<&'a str>) -> Self {
         Self {
             header,
             item,
@@ -67,7 +33,7 @@ impl<'a> Repeat<'a> {
     /// # Errors
     ///
     /// Returns an error when a file cannot be read.
-    pub fn load(&self) -> Result<String> {
+    pub(crate) fn load(&self) -> Result<String> {
         let mut source = fs::read_to_string(self.header)?;
         if !source.ends_with('\n') {
             source.push('\n');
@@ -178,7 +144,7 @@ impl Digits {
 }
 
 /// Replaces keys in a template file.
-pub trait Fill {
+pub(crate) trait Fill {
     /// Replaces each key in `pairs` inside this file.
     ///
     /// # Errors
@@ -203,23 +169,7 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use super::{CaseName, Repeat};
-
-    #[test]
-    fn case_name_splits_on_the_last_underscore() {
-        let name = CaseName::parse("flat_structs_1024").unwrap();
-        assert_eq!(name.kind(), "flat_structs");
-        assert_eq!(name.count(), 1024);
-    }
-
-    #[test]
-    fn unknown_case_name_is_an_error() {
-        let Err(error) = CaseName::parse("flat") else {
-            panic!("parsed");
-        };
-        let error = error.to_string();
-        assert!(error.contains("unknown case"), "{error}");
-    }
+    use super::Repeat;
 
     #[test]
     fn repeat_writes_every_index_into_one_string() {
