@@ -150,13 +150,9 @@ The macro emits `compile_error!` when:
 
 An empty hole-edge slice expands to no tokens.
 
-## Build time
-
-`scripts/measure-ph-util-foreach-build.sh` times a clean `cargo build -p ph_util_foreach --offline --locked --timings` in a fresh target directory, then a second build with no source changes. CI runs that script, writes the report to the job summary, and uploads it as the `ph-util-foreach-build-time` artifact.
-
 ## User compile time
 
-`scripts/measure-ph-util-foreach-expand.sh` times the macro from a downstream crate. It compiles `ph_util_foreach` once, then for each case cleans only the user crate and runs `cargo build`. Incremental compilation is off, so each run expands the macro again. The report is the median of three dev builds. CI job `expand time` repeats this and uploads the `ph-util-foreach-expand-time` artifact.
+Downstream compile time is a tracked metric. `scripts/measure-ph-util-foreach-expand.sh` times a crate that calls `impl_foreach!`. It compiles the macro once, then for each case cleans only the user crate and runs `cargo build`. Incremental compilation is off, so each run expands the macro again. The report is the median of three dev builds. CI job `user compile time` repeats this and uploads the `ph-util-foreach-expand-time` artifact.
 
 | Case | User source |
 | --- | --- |

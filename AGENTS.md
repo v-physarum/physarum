@@ -38,17 +38,17 @@ Cargo only forwards `-D` to Clippy when it comes after `--`.
 
 `cargo build` compiles the crate. There is no binary to run yet.
 
-A separate CI job measures the `ph_util_foreach` dev build and publishes the report:
+A separate CI job measures how long a downstream crate takes to compile when it calls `impl_foreach!`. That time is a tracked metric:
 
 ```bash
-./scripts/measure-ph-util-foreach-build.sh
+./scripts/measure-ph-util-foreach-expand.sh
 ```
 
 ## How agents should work
 
 - Open small pull requests against `main`. Do not merge unless the owner asks.
 - Behavior changes need tests. `cargo test` must pass.
-- Keep CI green. The format, clippy, and test commands above are what the check job runs. The build-time job runs the measure script.
+- Keep CI green. The format, clippy, and test commands above are what the check job runs. The user-compile-time job runs the expand script.
 - Do not expand scope past the requested change.
 - If a task needs a project purpose, stop and leave a TODO instead of guessing.
 

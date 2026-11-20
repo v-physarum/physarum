@@ -211,7 +211,7 @@ cat "$report"
 
 if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
     {
-        echo "## ph_util_foreach user-crate compile time"
+        echo "## ph_util_foreach user compile time"
         echo
         echo "Proc-macro already built. Median of $repeats dev builds, incremental off."
         echo
