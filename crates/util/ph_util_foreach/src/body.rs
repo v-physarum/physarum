@@ -1013,8 +1013,8 @@ impl<'a> Emitting<'a> {
             return Err(Error::new(span, ErrorKind::NegativePaste));
         };
         let value = Decimal::new(raw);
-        let mut stack = [0u8; Paste::CAP];
-        if let Some(text) = Paste::write(&mut stack, base, &value) {
+        let mut stack = [0u8; Decimal::CAP];
+        if let Some(text) = value.write(&mut stack, base) {
             self.out.extend([TokenTree::Ident(Ident::new(text, span))]);
             return Ok(());
         }
@@ -1068,24 +1068,6 @@ impl WithProgram for TokenStream {
     }
 }
 
-/// Stack buffer that holds one pasted identifier.
-struct Paste;
-
-impl Paste {
-    const CAP: usize = 128;
-
-    fn write<'a>(buf: &'a mut [u8], base: &str, value: &Decimal) -> Option<&'a str> {
-        let digits = value.len();
-        let len = base.len().checked_add(digits)?;
-        if len > buf.len() {
-            return None;
-        }
-        buf[..base.len()].copy_from_slice(base.as_bytes());
-        value.write(&mut buf[base.len()..len]);
-        std::str::from_utf8(&buf[..len]).ok()
-    }
-}
-
 /// Decimal digits of one non-negative index.
 struct Decimal {
     value: u128,
@@ -1095,6 +1077,8 @@ impl Decimal {
     const RADIX: u128 = 10;
     /// `u128::MAX` is 39 digits.
     const MAX_DIGITS: usize = (u128::MAX.ilog10() + 1) as usize;
+    /// Stack buffer that holds one pasted identifier.
+    const CAP: usize = 128;
     const ZERO: u8 = b'0';
     const DIGITS: &[u8] = b"0123456789";
 
@@ -1112,7 +1096,18 @@ impl Decimal {
         }
     }
 
-    fn write(&self, slot: &mut [u8]) {
+    fn write<'a>(&self, buf: &'a mut [u8], base: &str) -> Option<&'a str> {
+        let digits = self.len();
+        let len = base.len().checked_add(digits)?;
+        if len > buf.len() {
+            return None;
+        }
+        buf[..base.len()].copy_from_slice(base.as_bytes());
+        self.write_digits(&mut buf[base.len()..len]);
+        std::str::from_utf8(&buf[..len]).ok()
+    }
+
+    fn write_digits(&self, slot: &mut [u8]) {
         let mut value = self.value;
         if slot.is_empty() {
             return;
