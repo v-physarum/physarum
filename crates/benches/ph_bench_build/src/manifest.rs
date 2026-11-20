@@ -17,11 +17,7 @@ pub(crate) struct UserManifest<'a> {
 impl<'a> UserManifest<'a> {
     /// `package` is the downstream crate. `dependency` is the path dependency's name.
     pub(crate) fn new(package: &'a str, dependency: &'a str, path: &'a Path) -> Self {
-        Self {
-            package,
-            dependency,
-            path,
-        }
+        Self { package, dependency, path }
     }
 
     /// Serializes this manifest as TOML.
@@ -47,11 +43,7 @@ impl<'a> Document<'a> {
     fn new(package: &'a str, dependency: &'a str, path: &'a str) -> Self {
         let mut dependencies = BTreeMap::new();
         dependencies.insert(dependency, PathDep::new(path));
-        Self {
-            workspace: BTreeMap::new(),
-            package: Package::new(package),
-            dependencies,
-        }
+        Self { workspace: BTreeMap::new(), package: Package::new(package), dependencies }
     }
 }
 
@@ -65,12 +57,7 @@ struct Package<'a> {
 
 impl<'a> Package<'a> {
     fn new(name: &'a str) -> Self {
-        Self {
-            name,
-            version: "0.1.0",
-            edition: "2024",
-            publish: false,
-        }
+        Self { name, version: "0.1.0", edition: "2024", publish: false }
     }
 }
 

@@ -41,10 +41,7 @@ pub(crate) struct Probe {
 impl Extern {
     /// An extern crate named `name` whose library file is `path`.
     pub(crate) fn new(name: impl Into<String>, path: impl Into<PathBuf>) -> Self {
-        Self {
-            name: name.into(),
-            path: path.into(),
-        }
+        Self { name: name.into(), path: path.into() }
     }
 
     fn arg(&self) -> OsString {
@@ -61,9 +58,7 @@ impl Extern {
 impl Probe {
     /// A probe read from `source`.
     pub(crate) fn new(source: impl Into<PathBuf>) -> Self {
-        Self {
-            source: source.into(),
-        }
+        Self { source: source.into() }
     }
 
     /// Builds the probe and returns the compiler diagnostics.
@@ -99,10 +94,7 @@ impl Probe {
         let stderr = String::from_utf8(output.stderr).map_err(|source| Error::Utf8 { source })?;
         let parsed = Diagnostics::parse(&stderr)?;
         if !output.status.success() && parsed.messages.is_empty() {
-            return Err(Error::ProbeFailed {
-                path: self.source.display().to_string(),
-                stderr,
-            });
+            return Err(Error::ProbeFailed { path: self.source.display().to_string(), stderr });
         }
         Ok(parsed)
     }

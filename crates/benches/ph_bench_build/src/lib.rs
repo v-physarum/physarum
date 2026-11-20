@@ -28,10 +28,7 @@ impl Dependency {
     /// A path dependency named `name`.
     #[must_use]
     pub(crate) fn path(name: impl Into<String>, path: impl Into<PathBuf>) -> Self {
-        Self {
-            name: name.into(),
-            path: path.into(),
-        }
+        Self { name: name.into(), path: path.into() }
     }
 
     /// Dependency key in the downstream manifest.

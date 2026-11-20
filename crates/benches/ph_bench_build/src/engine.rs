@@ -53,12 +53,7 @@ struct TimedCargo<'a> {
 
 impl<'a> TimedCargo<'a> {
     fn new(label: &'a str, prepare: Option<&'a str>, command: &'a str, incremental: bool) -> Self {
-        Self {
-            label,
-            prepare,
-            command,
-            incremental,
-        }
+        Self { label, prepare, command, incremental }
     }
 
     fn time(self, layout: &Layout<'_>) -> Result<Timing> {
@@ -120,11 +115,7 @@ struct Sample {
 
 impl Sample {
     fn new(case: &str, median: f64, stddev: f64) -> Self {
-        Self {
-            case: case.to_owned(),
-            median_seconds: median,
-            stddev_seconds: stddev,
-        }
+        Self { case: case.to_owned(), median_seconds: median, stddev_seconds: stddev }
     }
 }
 
@@ -195,14 +186,7 @@ impl<'a> Layout<'a> {
         .to_toml()?;
         fs::write(user.join(CARGO_TOML), manifest)?;
         let target = out.join(TARGET_DIR);
-        Ok(Self {
-            root,
-            out,
-            user,
-            logs,
-            target,
-            plan,
-        })
+        Ok(Self { root, out, user, logs, target, plan })
     }
 
     fn write_case(&self, case: &Case) -> Result<()> {
@@ -356,10 +340,8 @@ impl Report {
             }
             .into());
         }
-        let log = String::from_utf8(output.stdout).map_err(|source| ErrorKind::Utf8 {
-            what: "runtime build log",
-            source,
-        })?;
+        let log = String::from_utf8(output.stdout)
+            .map_err(|source| ErrorKind::Utf8 { what: "runtime build log", source })?;
         let executable = CargoMessage::executable(&log, bench)?;
         let mut samples = Vec::new();
         for run in 1..=layout.plan.repeats {
@@ -370,10 +352,8 @@ impl Report {
                         label: "runtime bench".to_owned(),
                         source,
                     })?;
-            let stdout = String::from_utf8(output.stdout).map_err(|source| ErrorKind::Utf8 {
-                what: "runtime output",
-                source,
-            })?;
+            let stdout = String::from_utf8(output.stdout)
+                .map_err(|source| ErrorKind::Utf8 { what: "runtime output", source })?;
             fs::write(
                 layout
                     .logs
@@ -415,10 +395,9 @@ impl MeasuredCommand for Command {
     }
 
     fn run_combined(&mut self, log: &Path, label: &str) -> Result<()> {
-        let output = self.output().map_err(|source| ErrorKind::CommandStart {
-            label: label.to_owned(),
-            source,
-        })?;
+        let output = self
+            .output()
+            .map_err(|source| ErrorKind::CommandStart { label: label.to_owned(), source })?;
         let mut text = output.stdout;
         text.extend_from_slice(&output.stderr);
         fs::write(log, &text)?;

@@ -135,9 +135,7 @@ mod tests {
 
     #[test]
     fn runtime_build_failure_includes_stderr() {
-        let error = Error::from(ErrorKind::RuntimeBuild {
-            stderr: "missing crate".to_owned(),
-        });
+        let error = Error::from(ErrorKind::RuntimeBuild { stderr: "missing crate".to_owned() });
         assert_eq!(
             error.to_string(),
             "release runtime bench failed to build\nmissing crate"
