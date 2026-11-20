@@ -5,49 +5,49 @@ mod generated {
     use ph_util_foreach::impl_foreach;
 
     impl_foreach!(0..=10 {
-        pub fn excl #() -> &'static str {
+        pub fn excl + #() -> &'static str {
             stringify!(Name[0..10])
         }
-        pub fn incl #() -> &'static str {
+        pub fn incl + #() -> &'static str {
             stringify!(Name[0..=10])
         }
-        pub fn from #() -> &'static str {
+        pub fn from + #() -> &'static str {
             stringify!(Name[0..])
         }
-        pub fn to #() -> &'static str {
+        pub fn to + #() -> &'static str {
             stringify!(Name[..10])
         }
-        pub fn to_incl #() -> &'static str {
+        pub fn to_incl + #() -> &'static str {
             stringify!(Name[..=10])
         }
-        pub fn full #() -> &'static str {
+        pub fn full + #() -> &'static str {
             stringify!(Name[..])
         }
-        pub fn step_excl #() -> &'static str {
+        pub fn step_excl + #() -> &'static str {
             stringify!(Name[0..10::2])
         }
-        pub fn step_incl #() -> &'static str {
+        pub fn step_incl + #() -> &'static str {
             stringify!(Name[0..=9::2])
         }
-        pub fn step_full #() -> &'static str {
+        pub fn step_full + #() -> &'static str {
             stringify!(Name[..::2])
         }
-        pub fn step_from #() -> &'static str {
+        pub fn step_from + #() -> &'static str {
             stringify!(Name[0..::2])
         }
-        pub fn step_to #() -> &'static str {
+        pub fn step_to + #() -> &'static str {
             stringify!(Name[..10::2])
         }
-        pub fn step_to_incl #() -> &'static str {
+        pub fn step_to_incl + #() -> &'static str {
             stringify!(Name[..=9::2])
         }
-        pub fn window #() -> &'static str {
+        pub fn window + #() -> &'static str {
             stringify!(Name[2..=5])
         }
-        pub fn from_one_step #() -> &'static str {
+        pub fn from_one_step + #() -> &'static str {
             stringify!(Name[1..::2])
         }
-        pub fn last #() -> &'static str {
+        pub fn last + #() -> &'static str {
             stringify!(Name[-1..=-1])
         }
     });

@@ -185,9 +185,10 @@ fn expand_tokens(tokens: &[TokenTree], ctx: &EvalCtx<'_>) -> Result<TokenStream>
         }
         if let Some(ident) = try_paste(tokens, index, ctx)? {
             output.extend([TokenTree::Ident(ident)]);
-            index += 2;
+            index += 3;
             continue;
         }
+        reject_spaced_paste(tokens, index)?;
         if is_bare_hash(tokens, index) {
             output.extend([TokenTree::Literal(index_literal(
                 ctx.index,
@@ -314,10 +315,20 @@ fn try_paste(tokens: &[TokenTree], index: usize, ctx: &EvalCtx<'_>) -> Result<Op
     let Some(TokenTree::Ident(name)) = tokens.get(index) else {
         return Ok(None);
     };
-    if !is_hash(tokens, index + 1) || hash_is_attribute(tokens, index + 1) {
+    if !is_plus(tokens, index + 1) || !is_bare_hash(tokens, index + 2) {
         return Ok(None);
     }
     Ok(Some(paste_ident(name, ctx.index)?))
+}
+
+fn reject_spaced_paste(tokens: &[TokenTree], index: usize) -> Result<()> {
+    if !matches!(tokens.get(index), Some(TokenTree::Ident(_))) || !is_bare_hash(tokens, index + 1) {
+        return Ok(());
+    }
+    Err(syn::Error::new(
+        hash_span(tokens, index + 1),
+        "write `Name + #` to paste an index; `Name #` is not a paste",
+    ))
 }
 
 fn paste_ident(name: &Ident, index: i128) -> Result<Ident> {

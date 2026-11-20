@@ -4,7 +4,7 @@ use ph_util_foreach::impl_foreach;
 
 impl_foreach!(0..3 {
     #[allow(unused_parens)]
-    pub fn at #() -> i32 {
+    pub fn at + #() -> i32 {
         let values = [10, 20, 30];
         values[(#)]
     }
@@ -23,11 +23,11 @@ impl_foreach!(0..1 {
 });
 
 impl_foreach!(0..2 {
-    pub struct T #;
+    pub struct T + #;
 });
 
 impl_foreach!(0..2 {
-    pub fn take #(_: ((T #, T #)[0..2])) {}
+    pub fn take + #(_: ((T + #, T + #)[0..2])) {}
 });
 
 #[test]

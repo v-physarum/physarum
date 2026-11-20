@@ -17,15 +17,16 @@ use proc_macro2::TokenStream;
 /// use ph_util_foreach::impl_foreach;
 ///
 /// impl_foreach!(0..3 {
-///     pub struct Ix #;
+///     pub struct Ix + #;
 /// });
 ///
 /// let _ = (Ix0, Ix1, Ix2);
 /// ```
 ///
 /// The range and the `{ ... }` body both sit inside the macro delimiter.
-/// `#` is the current index. `Name #` appends that index's decimal digits
-/// (`Ix #` in source, because edition 2021 reserves the `ident#` prefix).
+/// `#` is the current index. `Name + #` appends that index's decimal digits
+/// (`Ix + #` expands to `Ix0`). An identifier immediately followed by `#`
+/// is a compile error.
 /// `Name[0..4]` expands to the comma-separated identifiers `Name0, Name1, Name2, Name3`.
 ///
 /// An outer range must be finite (`A..B` or `A..=B`, with an optional `::S` step).

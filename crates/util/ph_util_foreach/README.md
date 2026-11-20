@@ -8,7 +8,7 @@
 use ph_util_foreach::impl_foreach;
 
 impl_foreach!(0..4 {
-    pub struct Ix #;
+    pub struct Ix + #;
 });
 ```
 
@@ -85,16 +85,18 @@ Exactly one pattern is allowed in one pair of brackets. `A[0..#, Off]` is a comp
 | Form | Expansion |
 | --- | --- |
 | `#` | the current index as an integer literal |
-| `Name #` | the identifier `Name` with the decimal digits of `#` appended |
+| `Name + #` | the identifier `Name` with the decimal digits of `#` appended |
 | `Name[#]` | `Name[0..=#]` |
 | `Name[<pat>]` | `Name` plus those digits for each index in `<pat>`, separated by commas |
 | `Off[#]` | the identifier `Off`, with no digits |
 | `X + Y` | the two expansions concatenated; an empty piece adds no comma |
 | `(A, B, …)[<pat>]` | one parenthesized row per index, separated by commas |
 
-`Name #` accepts a non-negative index. Pasting a negative index is a compile error. The placeholder is the identifier token followed by the `#` token. Edition 2021 and later reserve `ident#` as a prefix, so write whitespace between them: `Ix #`, `T #`.
+`Name + #` is the only identifier paste. `Ix + #` expands to `Ix0`, `Ix1`, and so on. The index must be non-negative; pasting a negative index is a compile error. An identifier immediately followed by `#` (`Ix #`) is a compile error.
 
-Inside a tuple row, `#` is the row index. `(T #, U #)[0..3]` expands to `(T0, U0), (T1, U1), (T2, U2)`.
+`X + Y` concatenates sequence expansions such as `Name[<pat>]` and `(…)[<pat>]`. `Ix + #` is paste: the left side is a bare identifier, the right side is `#`, and the expansion is one identifier.
+
+Inside a tuple row, `#` is the row index. `(T + #, U + #)[0..3]` expands to `(T0, U0), (T1, U1), (T2, U2)`.
 
 `#[...]` and `#![...]` stay attributes. Brackets that do not open with a range stay as written, and `#` inside them is still the current index, so `arr[(#)]` becomes `arr[(0)]`. An identifier followed by a real range is the placeholder, so `Name[0..2]` is `Name0, Name1`.
 
@@ -102,11 +104,11 @@ Inside a tuple row, `#` is the row index. `(T #, U #)[0..3]` expands to `(T0, U0
 
 ## Flat and fan
 
-Flat mode emits one copy per outer index. `#` is that index. The domain is the full outer set. `pub struct Ix #;` is flat.
+Flat mode emits one copy per outer index. `#` is that index. The domain is the full outer set. `pub struct Ix + #;` is flat.
 
 ```rust
 impl_foreach!(0..10::2 {
-    pub struct Ix #;
+    pub struct Ix + #;
 });
 ```
 
@@ -118,8 +120,8 @@ Fan mode is used when the body contains a prefix or hole form: `Name[#]`, `Off[#
 impl_foreach!(0..4 {
     impl_take!(
         args: (T[..=#]),
-        ix: Ix #,
-        out: T #,
+        ix: Ix + #,
+        out: T + #,
         rest: T[..#] + Off[#] + T[#+1..=#],
     );
 });
@@ -142,7 +144,7 @@ The macro emits `compile_error!` when:
 - the step is less than or equal to zero;
 - `A..B` or `A..=B` has a start after the end, other than an empty hole-edge slice;
 - a bound lies outside the domain;
-- the placeholder syntax cannot be parsed (`A[0..#, Off]`, a second range in the same brackets, `::` with no step).
+- the placeholder syntax cannot be parsed (`A[0..#, Off]`, a second range in the same brackets, `::` with no step, or an identifier immediately followed by `#`).
 
 An empty hole-edge slice expands to no tokens.
 

@@ -60,32 +60,32 @@ fn range_i128(start: i128, end: i128) -> Vec<i128> {
 #[test]
 fn flat_structs_and_stepped_outer_ranges() {
     assert_expands(
-        "0..4 { pub struct Ix#; }",
+        "0..4 { pub struct Ix + #; }",
         "pub struct Ix0; pub struct Ix1; pub struct Ix2; pub struct Ix3;",
     );
     assert_expands(
-        "0..=3 { pub struct Ix#; }",
+        "0..=3 { pub struct Ix + #; }",
         "pub struct Ix0; pub struct Ix1; pub struct Ix2; pub struct Ix3;",
     );
     assert_expands(
-        "0..10::2 { pub struct Ix#; }",
+        "0..10::2 { pub struct Ix + #; }",
         "pub struct Ix0; pub struct Ix2; pub struct Ix4; pub struct Ix6; pub struct Ix8;",
     );
     assert_expands(
-        "0..=9::2 { pub struct Ix#; }",
+        "0..=9::2 { pub struct Ix + #; }",
         "pub struct Ix0; pub struct Ix2; pub struct Ix4; pub struct Ix6; pub struct Ix8;",
     );
     assert_expands(
-        "1..10::2 { pub struct Ix#; }",
+        "1..10::2 { pub struct Ix + #; }",
         "pub struct Ix1; pub struct Ix3; pub struct Ix5; pub struct Ix7; pub struct Ix9;",
     );
     assert_expands(
-        "2..=5 { pub struct Ix#; }",
+        "2..=5 { pub struct Ix + #; }",
         "pub struct Ix2; pub struct Ix3; pub struct Ix4; pub struct Ix5;",
     );
-    assert_expands("3..=3 { struct Ix#; }", "struct Ix3;");
-    assert_expands("10..=12::2 { struct Ix#; }", "struct Ix10; struct Ix12;");
-    assert_expands("0..1::2 { struct Ix#; }", "struct Ix0;");
+    assert_expands("3..=3 { struct Ix + #; }", "struct Ix3;");
+    assert_expands("10..=12::2 { struct Ix + #; }", "struct Ix10; struct Ix12;");
+    assert_expands("0..1::2 { struct Ix + #; }", "struct Ix0;");
     assert_expands("5..5 { K; }", "");
 }
 
@@ -117,7 +117,7 @@ fn flat_domain_is_the_full_outer_set() {
         "X Name0, Name1, Name2; X Name0, Name1, Name2; X Name0, Name1, Name2;",
     );
     assert_expands(
-        "0..3 { Ix# Name[..]; }",
+        "0..3 { Ix + # Name[..]; }",
         "Ix0 Name0, Name1, Name2; Ix1 Name0, Name1, Name2; Ix2 Name0, Name1, Name2;",
     );
 }
@@ -165,11 +165,11 @@ fn placeholders_concat_tuples_off_and_hash_offsets() {
         "K Name0, Name1 + 1; K Name0, Name1 + 1;",
     );
     assert_expands(
-        "0..3 { K (T#, U#)[0..3]; }",
+        "0..3 { K (T + #, U + #)[0..3]; }",
         &["K (T0, U0), (T1, U1), (T2, U2);"; 3].join(" "),
     );
     assert_expands(
-        "0..3 { K (T#)[..=#]; }",
+        "0..3 { K (T + #)[..=#]; }",
         "K (T0); K (T0), (T1); K (T0), (T1), (T2);",
     );
     assert_expands(
@@ -184,7 +184,7 @@ fn placeholders_concat_tuples_off_and_hash_offsets() {
 #[test]
 fn ordinary_tokens_stay_in_place() {
     assert_expands(
-        "0..2 { #[allow(dead_code)] struct Ix#; }",
+        "0..2 { #[allow(dead_code)] struct Ix + #; }",
         "#[allow(dead_code)] struct Ix0; #[allow(dead_code)] struct Ix1;",
     );
     assert_expands(
@@ -202,7 +202,7 @@ fn ordinary_tokens_stay_in_place() {
 #[test]
 fn impl_take_fan_example() {
     assert_expands(
-        "0..4 { impl_take!(args: (T[..=#]), ix: Ix#, out: T#, rest: T[..#] + Off[#] + T[#+1..=#],); }",
+        "0..4 { impl_take!(args: (T[..=#]), ix: Ix + #, out: T + #, rest: T[..#] + Off[#] + T[#+1..=#],); }",
         "impl_take!(args: (T0), ix: Ix0, out: T0, rest: Off,);
          impl_take!(args: (T0, T1), ix: Ix1, out: T1, rest: T0, Off,);
          impl_take!(args: (T0, T1, T2), ix: Ix2, out: T2, rest: T0, T1, Off,);
@@ -218,11 +218,23 @@ fn negative_index_literal_and_paste() {
         "expected a negative literal in `{actual}`"
     );
     assert!(actual.contains('0'), "expected zero in `{actual}`");
-    assert_err("-1..0 { struct Ix#; }", "cannot paste a negative index");
+    assert_err("-1..0 { struct Ix + #; }", "cannot paste a negative index");
     assert_err(
         "-1..0 { K Name[#]; }",
         "fan mode domain `0..=index` is empty",
     );
+}
+
+#[test]
+fn plus_hash_is_the_only_identifier_paste() {
+    assert_expands(
+        "0..2 { let x = Ix + # + 1; }",
+        "let x = Ix0 + 1; let x = Ix1 + 1;",
+    );
+    assert_err("0..1 { struct Ix #; }", "Name + #");
+    assert_err("0..1 { struct Ix#; }", "Name + #");
+    assert_err("0..2 { K (T #)[0..1]; }", "Name + #");
+    assert_err("0..1 { fn at #() {} }", "Name + #");
 }
 
 #[test]

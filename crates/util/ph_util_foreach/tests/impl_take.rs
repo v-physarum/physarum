@@ -21,8 +21,8 @@ macro_rules! impl_take {
 impl_foreach!(0..4 {
     impl_take!(
         args: (T[..=#]),
-        ix: Ix #,
-        out: T #,
+        ix: Ix + #,
+        out: T + #,
         rest: T[..#] + Off[#] + T[#+1..=#],
     );
 });

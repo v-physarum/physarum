@@ -3,7 +3,7 @@
 use ph_util_foreach::impl_foreach;
 
 impl_foreach!(0..10::2 {
-    pub struct Ix #;
+    pub struct Ix + #;
 });
 
 #[test]
