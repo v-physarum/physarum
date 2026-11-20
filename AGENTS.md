@@ -6,7 +6,8 @@ TODO: the owner has not defined the project purpose (library, CLI, or service). 
 
 ## Repository layout
 
-- `Cargo.toml`, `src/` — the `physarum` package. One crate today; it can become a Cargo workspace later.
+- `Cargo.toml`, `src/` — the `physarum` package and the workspace root.
+- `crates/util/ph_util_foreach/` — procedural macro `impl_foreach`.
 - `docs/adr/` — architecture decision records. See `docs/adr/README.md`.
 - `.github/` — CI workflow and issue and pull request templates.
 - `rust-toolchain.toml`, `rustfmt.toml` — pinned stable toolchain and formatting.

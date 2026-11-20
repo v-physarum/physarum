@@ -1,0 +1,30 @@
+[package]
+name = "ph_util_foreach"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.100"
+license = "MIT"
+repository = "https://github.com/v-physarum/physarum"
+description = "Procedural macro that repeats a token tree for each index of a finite range."
+readme = "README.md"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", default-features = false, features = [
+    "clone-impls",
+    "parsing",
+    "printing",
+    "proc-macro",
+] }
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
