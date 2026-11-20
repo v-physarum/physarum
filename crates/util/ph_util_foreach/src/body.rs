@@ -206,8 +206,13 @@ struct SeqStat {
 }
 
 impl SeqStat {
-    fn new(logical: u32, physical: u32, expands: bool, fan: bool) -> Self {
-        Self { logical, physical, expands, fan }
+    fn new(counts: &Counts) -> Self {
+        Self {
+            logical: counts.logical,
+            physical: counts.physical,
+            expands: counts.expands,
+            fan: counts.fan,
+        }
     }
 }
 
@@ -345,12 +350,7 @@ impl Program {
     fn compile_into(&mut self, source: Source) -> Result<SeqStat> {
         let mut counts = Counts::new();
         self.compile_range(&mut counts, source)?;
-        Ok(SeqStat::new(
-            counts.logical,
-            counts.physical,
-            counts.expands,
-            counts.fan,
-        ))
+        Ok(SeqStat::new(&counts))
     }
     fn compile_bracket_sequence(
         &mut self,
