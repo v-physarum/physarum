@@ -5,24 +5,20 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::diagnostics::{Diagnostic, Diagnostics, Level};
+use crate::diagnostics::Diagnostics;
 use crate::probe::Probe;
 
-/// Compile-fail checks for one debug probe.
+/// Checks that a debug probe emits an error code and a description.
 ///
 /// ```no_run
 /// use ph_test_errors::ErrorTester;
 ///
-/// ErrorTester::file("fail.rs")
-///     .assert_code("E0308")
-///     .assert_description("mismatched types");
-/// ErrorTester::source("fn main() { missing; }")
-///     .assert_code("E0425")
-///     .assert_description("cannot find");
-/// ErrorTester::file("ok.rs").assert_pass();
+/// ErrorTester::file("fail.rs").assert_code_description("E0308", "mismatched types");
+/// ErrorTester::source("fn main() { missing; }").assert_code_description("E0425", "cannot find");
 /// ```
 ///
-/// The chain compiles the probe once. Later asserts reuse that result.
+/// The check compiles the probe once. A match does not allocate. A mismatch
+/// panics with the codes and messages the probe emitted.
 #[derive(Debug)]
 pub struct ErrorTester {
     input: Input,
@@ -53,129 +49,20 @@ impl ErrorTester {
         }
     }
 
-    /// The probe emits error `code`.
-    ///
-    /// # Panics
-    ///
-    /// Panics when the code is absent, or when the probe cannot be built.
-    pub fn assert_code(mut self, code: &str) -> Self {
-        let ok = self.view().error_codes().any(|found| found == code);
-        if !ok {
-            self.mismatch(&format!("error {code}"));
-        }
-        self
-    }
-
-    /// An error message contains `text`.
-    ///
-    /// # Panics
-    ///
-    /// Panics when no error message contains `text`, or when the probe cannot be built.
-    pub fn assert_description(mut self, text: &str) -> Self {
-        let ok = self
-            .view()
-            .error_messages()
-            .any(|message| message.contains(text));
-        if !ok {
-            self.mismatch(&format!("description {text}"));
-        }
-        self
-    }
-
-    /// One error has `code` and its message contains `text`.
+    /// One error has `code` and its message contains `description`.
     ///
     /// # Panics
     ///
     /// Panics when no error matches both, or when the probe cannot be built.
-    pub fn assert_code_description(mut self, code: &str, text: &str) -> Self {
-        let ok = errors(self.view())
-            .any(|item| item.code() == Some(code) && item.message().contains(text));
+    /// The panic names `code`, `description`, and the codes and messages that
+    /// arrived.
+    pub fn assert_code_description(mut self, code: &str, description: &str) -> Self {
+        let ok =
+            self.view().messages.iter().any(|item| {
+                item.code.as_deref() == Some(code) && item.message.contains(description)
+            });
         if !ok {
-            self.mismatch(&format!("error {code} description {text}"));
-        }
-        self
-    }
-
-    /// The probe builds and emits no errors. Warnings are allowed.
-    ///
-    /// # Panics
-    ///
-    /// Panics when the probe fails to build or emits an error.
-    pub fn assert_pass(mut self) -> Self {
-        let ok = self.view().succeeded();
-        if !ok {
-            self.mismatch("probe compiles");
-        }
-        self
-    }
-
-    /// The probe emits an error or fails to build.
-    ///
-    /// # Panics
-    ///
-    /// Panics when the probe builds without errors.
-    pub fn assert_fail(mut self) -> Self {
-        let ok = !self.view().succeeded();
-        if !ok {
-            self.mismatch("probe fails");
-        }
-        self
-    }
-
-    /// A note contains `text`.
-    ///
-    /// # Panics
-    ///
-    /// Panics when no note contains `text`, or when the probe cannot be built.
-    pub fn assert_note(mut self, text: &str) -> Self {
-        let ok = any(self.view(), |item| {
-            item.level() == Level::Note && item.message().contains(text)
-        });
-        if !ok {
-            self.mismatch(&format!("note {text}"));
-        }
-        self
-    }
-
-    /// A help message contains `text`.
-    ///
-    /// # Panics
-    ///
-    /// Panics when no help message contains `text`, or when the probe cannot be built.
-    pub fn assert_help(mut self, text: &str) -> Self {
-        let ok = any(self.view(), |item| {
-            item.level() == Level::Help && item.message().contains(text)
-        });
-        if !ok {
-            self.mismatch(&format!("help {text}"));
-        }
-        self
-    }
-
-    /// The probe emits no warnings.
-    ///
-    /// # Panics
-    ///
-    /// Panics when a warning is present, or when the probe cannot be built.
-    pub fn assert_no_warning(mut self) -> Self {
-        let ok = !any(self.view(), |item| item.level() == Level::Warning);
-        if !ok {
-            self.mismatch("no warnings");
-        }
-        self
-    }
-
-    /// A warning has `code`.
-    ///
-    /// # Panics
-    ///
-    /// Panics when the warning code is absent, or when the probe cannot be built.
-    pub fn assert_warning_code(mut self, code: &str) -> Self {
-        let ok = any(self.view(), |item| {
-            item.level() == Level::Warning && item.code() == Some(code)
-        });
-        if !ok {
-            self.mismatch(&format!("warning {code}"));
+            self.mismatch(code, description);
         }
         self
     }
@@ -191,9 +78,20 @@ impl ErrorTester {
         self.cached.as_ref().expect("debug probe was not built")
     }
 
-    fn mismatch(mut self, expectation: &str) -> ! {
-        let detail = render(self.view());
-        panic!("assertion failed: {expectation}\n{detail}");
+    fn mismatch(mut self, code: &str, description: &str) -> ! {
+        let mut arrived = String::new();
+        for item in &self.view().messages {
+            if !arrived.is_empty() {
+                arrived.push('\n');
+            }
+            arrived.push_str(item.code.as_deref().unwrap_or("(none)"));
+            arrived.push_str(": ");
+            arrived.push_str(&item.message);
+        }
+        if arrived.is_empty() {
+            arrived.push_str("(none)");
+        }
+        panic!("assertion failed: error {code} description {description}\n{arrived}");
     }
 }
 
@@ -226,47 +124,5 @@ struct TempDir(PathBuf);
 impl Drop for TempDir {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.0);
-    }
-}
-
-fn errors(diagnostics: &Diagnostics) -> impl Iterator<Item = &Diagnostic> {
-    diagnostics
-        .messages()
-        .iter()
-        .filter(|item| item.level() == Level::Error)
-}
-
-fn any(diagnostics: &Diagnostics, mut pred: impl FnMut(&Diagnostic) -> bool) -> bool {
-    fn walk(items: &[Diagnostic], pred: &mut impl FnMut(&Diagnostic) -> bool) -> bool {
-        for item in items {
-            if pred(item) || walk(item.children(), pred) {
-                return true;
-            }
-        }
-        false
-    }
-    walk(diagnostics.messages(), &mut pred)
-}
-
-fn render(diagnostics: &Diagnostics) -> String {
-    let mut out = String::new();
-    for item in diagnostics.messages() {
-        let text = if item.rendered().is_empty() {
-            item.message()
-        } else {
-            item.rendered()
-        };
-        if text.is_empty() {
-            continue;
-        }
-        if !out.is_empty() {
-            out.push('\n');
-        }
-        out.push_str(text);
-    }
-    if out.is_empty() {
-        "(no diagnostics)".to_owned()
-    } else {
-        out
     }
 }

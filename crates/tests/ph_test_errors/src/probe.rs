@@ -56,8 +56,8 @@ impl Probe {
             .output()
             .map_err(|source| Error::RustcStart { source })?;
         let stderr = String::from_utf8(output.stderr).map_err(|source| Error::Utf8 { source })?;
-        let parsed = diagnostics::parse(output.status.success(), &stderr)?;
-        if !output.status.success() && parsed.is_empty() {
+        let parsed = diagnostics::parse(&stderr)?;
+        if !output.status.success() && parsed.messages.is_empty() {
             return Err(Error::ProbeFailed {
                 path: self.source.display().to_string(),
                 stderr,
