@@ -61,7 +61,7 @@ jobs:
       # The bench and the measured builds run offline. Fetch first so a cold
       # registry cache still has the bench crates.
       - name: Fetch dependencies
-        run: cargo fetch --locked
+        run: cargo fetch
 
       - name: Measure impl_foreach in a user crate
         run: cargo bench --bench ph_util_foreach_measure --offline
