@@ -123,13 +123,7 @@ impl Layout {
         let macro_dir = root.join("crates/util/ph_util_foreach");
         fs::write(user.join("Cargo.toml"), user_manifest(&macro_dir))?;
         let target = out.join("target");
-        Ok(Self {
-            root,
-            out,
-            user,
-            logs,
-            target,
-        })
+        Ok(Self { root, out, user, logs, target })
     }
 
     fn write_case(&self, case: &str) -> Result<()> {
@@ -150,10 +144,7 @@ impl Report {
         writeln!(file, "timer {timer}")?;
         writeln!(file, "section=debug_full incremental_off")?;
         writeln!(file, "columns case median_seconds stddev_seconds")?;
-        Ok(Self {
-            file,
-            rows: Vec::new(),
-        })
+        Ok(Self { file, rows: Vec::new() })
     }
 
     fn sample(&mut self, name: &str, median: f64, stddev: f64) -> Result<()> {

@@ -198,12 +198,7 @@ struct SeqStat {
 
 impl SeqStat {
     fn new(logical: u32, physical: u32, expands: bool, fan: bool) -> Self {
-        Self {
-            logical,
-            physical,
-            expands,
-            fan,
-        }
+        Self { logical, physical, expands, fan }
     }
 }
 
@@ -234,11 +229,7 @@ struct Pushed {
 
 impl Pushed {
     fn new(physical: u32, next: usize, fan: bool) -> Self {
-        Self {
-            physical,
-            next,
-            fan,
-        }
+        Self { physical, next, fan }
     }
 }
 
@@ -262,12 +253,7 @@ enum Class {
 
 impl Program {
     fn from_body(body: Vec<TokenTree>) -> Self {
-        Self {
-            ops: Vec::new(),
-            tokens: Vec::new(),
-            bytes: Vec::new(),
-            source: body,
-        }
+        Self { ops: Vec::new(), tokens: Vec::new(), bytes: Vec::new(), source: body }
     }
 
     fn pack_str(&mut self, text: &str) -> Result<(u32, u32)> {
@@ -410,11 +396,7 @@ impl Program {
         };
         let (physical, fan) = match head {
             PieceHead::Ident { span, raw, pattern } => self.push_named(span, &raw, pattern)?,
-            PieceHead::Rows {
-                span,
-                pattern,
-                stream,
-            } => self.push_rows(span, pattern, stream)?,
+            PieceHead::Rows { span, pattern, stream } => self.push_rows(span, pattern, stream)?,
         };
         Ok(Some(Pushed::new(
             physical,
@@ -429,12 +411,7 @@ impl Program {
         } else {
             let base = raw.paste_base();
             let (at, len) = self.pack_str(&base)?;
-            Op::Named {
-                at,
-                len,
-                span,
-                pattern,
-            }
+            Op::Named { at, len, span, pattern }
         };
         self.ops.push(Inst::new(op, 1));
         Ok((1, fan))
@@ -450,14 +427,7 @@ impl Program {
         let width = checked_add(nested.physical, 1)?;
         self.ops.insert(
             saved,
-            Inst::new(
-                Op::Rows {
-                    span,
-                    pattern,
-                    body: nested.logical,
-                },
-                width,
-            ),
+            Inst::new(Op::Rows { span, pattern, body: nested.logical }, width),
         );
         Ok((width, pattern.uses_index() || nested.fan))
     }
@@ -537,11 +507,7 @@ impl Program {
         self.insert_before_body(
             counts,
             at,
-            Op::Group {
-                delimiter,
-                span,
-                body: nested.logical,
-            },
+            Op::Group { delimiter, span, body: nested.logical },
             width,
             nested.fan,
         )
@@ -629,13 +595,8 @@ impl Program {
         let Some(pending) = counts.pending.take() else {
             return Ok(());
         };
-        self.ops.push(Inst::new(
-            Op::Copy {
-                at: pending.at,
-                len: pending.len,
-            },
-            1,
-        ));
+        self.ops
+            .push(Inst::new(Op::Copy { at: pending.at, len: pending.len }, 1));
         counts.logical = checked_add(counts.logical, 1)?;
         counts.physical = checked_add(counts.physical, 1)?;
         Ok(())
@@ -652,13 +613,7 @@ impl Program {
         if let Some(pending) = counts.pending.take() {
             self.ops.insert(
                 at,
-                Inst::new(
-                    Op::Copy {
-                        at: pending.at,
-                        len: pending.len,
-                    },
-                    1,
-                ),
+                Inst::new(Op::Copy { at: pending.at, len: pending.len }, 1),
             );
             counts.logical = checked_add(counts.logical, 1)?;
             counts.physical = checked_add(counts.physical, 1)?;
@@ -809,23 +764,13 @@ impl Program {
     }
 
     fn mark(&self) -> BufferMark {
-        BufferMark {
-            ops: self.ops.len(),
-            tokens: self.tokens.len(),
-            bytes: self.bytes.len(),
-        }
+        BufferMark { ops: self.ops.len(), tokens: self.tokens.len(), bytes: self.bytes.len() }
     }
 }
 
 impl Counts {
     fn new() -> Self {
-        Self {
-            logical: 0,
-            physical: 0,
-            expands: false,
-            fan: false,
-            pending: None,
-        }
+        Self { logical: 0, physical: 0, expands: false, fan: false, pending: None }
     }
 }
 
@@ -935,19 +880,15 @@ impl Emit for TokenStream {
             }
             match inst.op {
                 Op::Copy { at: tok_at, len } => self.emit_copy(prog, tok_at, len)?,
-                Op::Group {
-                    delimiter,
-                    span,
-                    body,
-                } => self.emit_group(prog, at, delimiter, span, body, ctx)?,
+                Op::Group { delimiter, span, body } => {
+                    self.emit_group(prog, at, delimiter, span, body, ctx)?;
+                }
                 Op::Index { span } => {
                     self.extend([TokenTree::Literal(ctx.index_literal(span))]);
                 }
-                Op::Paste {
-                    at: base_at,
-                    len,
-                    span,
-                } => self.emit_pasted(prog.text(base_at, len)?, ctx.index, span)?,
+                Op::Paste { at: base_at, len, span } => {
+                    self.emit_pasted(prog.text(base_at, len)?, ctx.index, span)?;
+                }
                 Op::List { pieces } => {
                     let body_at = at.checked_add(1).ok_or_else(too_large)?;
                     self.emit_list(prog, body_at, pieces, ctx)?;
@@ -1017,29 +958,12 @@ impl Emit for TokenStream {
                 self.emit_ident(emitted, ident);
                 Ok(())
             }
-            Op::Named {
-                at: base_at,
-                len,
-                span,
-                pattern,
-            } => self.emit_named(ctx, emitted, prog.text(base_at, len)?, span, pattern),
-            Op::Rows {
-                span,
-                pattern,
-                body,
-            } => {
+            Op::Named { at: base_at, len, span, pattern } => {
+                self.emit_named(ctx, emitted, prog.text(base_at, len)?, span, pattern)
+            }
+            Op::Rows { span, pattern, body } => {
                 let body_at = at.checked_add(1).ok_or_else(too_large)?;
-                self.emit_rows(
-                    prog,
-                    ctx,
-                    emitted,
-                    body_at,
-                    RowHead {
-                        span,
-                        pattern,
-                        body,
-                    },
-                )
+                self.emit_rows(prog, ctx, emitted, body_at, RowHead { span, pattern, body })
             }
             Op::Copy { .. }
             | Op::Group { .. }

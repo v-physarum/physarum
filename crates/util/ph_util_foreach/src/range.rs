@@ -40,24 +40,15 @@ pub(crate) struct SpannedBound {
 
 impl SpannedBound {
     fn int(value: i128, span: Span) -> Self {
-        Self {
-            bound: Bound::Int(value),
-            span,
-        }
+        Self { bound: Bound::Int(value), span }
     }
 
     fn here(offset: i128, span: Span) -> Self {
-        Self {
-            bound: Bound::Here { offset },
-            span,
-        }
+        Self { bound: Bound::Here { offset }, span }
     }
 
     fn last_index(span: Span) -> Self {
-        Self {
-            bound: Bound::LastIndex,
-            span,
-        }
+        Self { bound: Bound::LastIndex, span }
     }
 
     fn mentions_index(self) -> bool {
@@ -102,13 +93,7 @@ impl RangeExpr {
         step: Option<SpannedBound>,
         span: Span,
     ) -> Self {
-        Self {
-            start,
-            end,
-            end_inclusive,
-            step,
-            span,
-        }
+        Self { start, end, end_inclusive, step, span }
     }
 
     fn builder(span: Span) -> RangeExprBuilder {
@@ -231,13 +216,7 @@ struct RangeExprBuilder {
 
 impl RangeExprBuilder {
     fn new(span: Span) -> Self {
-        Self {
-            start: None,
-            end: None,
-            end_inclusive: false,
-            step: None,
-            span,
-        }
+        Self { start: None, end: None, end_inclusive: false, step: None, span }
     }
 
     fn start(mut self, start: Option<SpannedBound>) -> Self {
@@ -354,11 +333,7 @@ impl Domain {
     fn outside(&self, span: Span, value: i128) -> Error {
         Error::new(
             span,
-            ErrorKind::OutsideDomain {
-                value,
-                lo: self.lo,
-                hi: self.hi,
-            },
+            ErrorKind::OutsideDomain { value, lo: self.lo, hi: self.hi },
         )
     }
 }
@@ -605,11 +580,7 @@ impl Window {
     ) -> Result<()> {
         match self.clip(step, domain) {
             Clip::Empty => Ok(()),
-            Clip::Ready {
-                mut current,
-                stride,
-                last,
-            } => {
+            Clip::Ready { mut current, stride, last } => {
                 loop {
                     if current > last {
                         break;
@@ -688,11 +659,7 @@ impl Window {
         if first > last {
             Clip::Empty
         } else {
-            Clip::Ready {
-                current: first,
-                stride,
-                last,
-            }
+            Clip::Ready { current: first, stride, last }
         }
     }
 
