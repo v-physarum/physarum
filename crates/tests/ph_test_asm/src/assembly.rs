@@ -10,13 +10,21 @@ pub(crate) struct Assembly {
 }
 
 impl Assembly {
-    pub(crate) fn parse(asm: &str) -> Self {
+    pub(crate) fn parse(ir: &str, asm: &str) -> Self {
+        let signatures = signatures(ir);
         let functions = asm_functions(asm)
             .into_iter()
-            .map(|(name, body)| Function {
-                hot: scan::hot_region(&body),
-                name,
-                asm: body,
+            .map(|(name, body)| {
+                let signature = signatures
+                    .iter()
+                    .find(|(symbol, _)| symbol == &name)
+                    .map_or_default(|(_, text)| text.clone());
+                Function {
+                    hot: scan::hot_region(&body),
+                    name,
+                    asm: body,
+                    signature,
+                }
             })
             .collect();
         Self { functions }
@@ -51,6 +59,7 @@ impl Assembly {
 pub(crate) struct Function {
     name: String,
     asm: String,
+    signature: String,
     hot: Option<String>,
 }
 
@@ -65,6 +74,12 @@ impl Function {
     #[must_use]
     pub(crate) fn asm(&self) -> &str {
         &self.asm
+    }
+
+    /// Parameter list from the LLVM IR `define`, inside the parentheses.
+    #[must_use]
+    pub(crate) fn signature(&self) -> &str {
+        &self.signature
     }
 
     /// Backedge region with the most instructions.
@@ -107,6 +122,82 @@ fn asm_functions(asm: &str) -> Vec<(String, String)> {
         functions.push((name.clone(), text));
     }
     functions
+}
+
+fn signatures(ir: &str) -> Vec<(String, String)> {
+    let lines: Vec<&str> = ir.lines().collect();
+    let mut found = Vec::new();
+    let mut index = 0;
+    while index < lines.len() {
+        if lines[index].trim_start().starts_with(';') || !lines[index].starts_with("define ") {
+            index += 1;
+            continue;
+        }
+        let (header, next) = take_header(&lines, index);
+        if let Some(name) = symbol_name(&header) {
+            found.push((name, signature_text(&header)));
+        }
+        index = next;
+    }
+    found
+}
+
+fn take_header(lines: &[&str], start: usize) -> (String, usize) {
+    let mut header = String::new();
+    let mut index = start;
+    while index < lines.len() {
+        if !header.is_empty() {
+            header.push('\n');
+        }
+        header.push_str(lines[index]);
+        let opens = lines[index].contains('{');
+        index += 1;
+        if opens {
+            break;
+        }
+    }
+    (header, index)
+}
+
+fn symbol_name(header: &str) -> Option<String> {
+    let at = header.find('@')?;
+    let rest = &header[at + 1..];
+    if let Some(quoted) = rest.strip_prefix('"') {
+        let end = quoted.find('"')?;
+        return Some(quoted[..end].to_owned());
+    }
+    let end = rest
+        .find(|ch: char| !is_name_char(ch))
+        .unwrap_or(rest.len());
+    Some(rest[..end].to_owned())
+}
+
+fn signature_text(header: &str) -> String {
+    let Some(at) = header.find('@') else {
+        return String::new();
+    };
+    let Some(relative) = header[at..].find('(') else {
+        return String::new();
+    };
+    let start = at + relative;
+    let mut depth = 0i32;
+    for (offset, ch) in header[start..].char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return header[start + 1..start + offset].to_owned();
+                }
+            }
+            _ => {}
+        }
+    }
+    String::new()
+}
+
+fn is_name_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || ch == '_' || ch == '.' || ch == '$'
 }
 
 fn function_type_symbol(line: &str) -> Option<String> {

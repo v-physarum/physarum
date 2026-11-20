@@ -151,6 +151,15 @@ pub(crate) fn asm_instructions(asm: &str) -> usize {
     asm.lines().filter(|line| is_instruction(line)).count()
 }
 
+/// Every pointer parameter in an LLVM IR signature is `noalias`.
+///
+/// A signature with no pointer parameter passes.
+pub(crate) fn params_are_noalias(signature: &str) -> bool {
+    parameters(signature)
+        .iter()
+        .all(|param| !has_type_word(param, "ptr") || has_type_word(param, "noalias"))
+}
+
 fn has_backedge(asm: &str) -> bool {
     hot_region(asm).is_some()
 }
@@ -237,6 +246,54 @@ fn branch_target(line: &str) -> Option<String> {
     } else {
         None
     }
+}
+
+fn parameters(signature: &str) -> Vec<&str> {
+    let mut depth = 0i32;
+    let mut start = 0usize;
+    let mut params = Vec::new();
+    for (index, ch) in signature.char_indices() {
+        match ch {
+            '(' | '[' | '<' | '{' => depth += 1,
+            ')' | ']' | '>' | '}' => depth -= 1,
+            ',' if depth == 0 => {
+                params.push(signature[start..index].trim());
+                start = index + 1;
+            }
+            _ => {}
+        }
+    }
+    let last = signature[start..].trim();
+    if !last.is_empty() {
+        params.push(last);
+    }
+    params
+}
+
+fn has_type_word(text: &str, word: &str) -> bool {
+    let bytes = text.as_bytes();
+    let needle = word.as_bytes();
+    if needle.is_empty() {
+        return false;
+    }
+    let mut index = 0;
+    while index + needle.len() <= bytes.len() {
+        if &bytes[index..index + needle.len()] == needle {
+            let before_ok = index == 0 || !is_symbol_byte(bytes[index - 1]);
+            let after = index + needle.len();
+            let after_ok = after == bytes.len() || !is_symbol_byte(bytes[after]);
+            let not_sigil = index == 0 || (bytes[index - 1] != b'%' && bytes[index - 1] != b'@');
+            if before_ok && after_ok && not_sigil {
+                return true;
+            }
+        }
+        index += 1;
+    }
+    false
+}
+
+fn is_symbol_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'$' | b'@' | b'%')
 }
 
 fn strip_comment(line: &str) -> &str {

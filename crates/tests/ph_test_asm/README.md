@@ -1,6 +1,6 @@
 # ph_test_asm
 
-Assembly assertions for tests. Probes compile as release in this crate. There is no debug profile and no profile switch.
+Assembly assertions for tests. Probes compile as release in this crate. `assert_noalias` reads the LLVM IR signature and checks that every pointer parameter is `noalias`. There is no debug profile and no profile switch.
 
 `AsmTester` checks one function or its hot loop. `AsmCompare` checks that two probes match after symbols are sorted and local labels are stripped. A failed compare panics with a unified diff.
 

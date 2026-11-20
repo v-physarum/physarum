@@ -30,6 +30,7 @@ fn hot_loop_accepts_release_vector_body() {
         hot.assert_no_fma();
         hot.assert_counted_loop();
         hot.assert_no_alloca_in_loop();
+        hot.assert_noalias();
         hot.assert_max_loads(8);
         hot.assert_max_stores(0);
         hot.on_target(&triple).assert_max_instructions(64);
@@ -39,6 +40,7 @@ fn hot_loop_accepts_release_vector_body() {
             .no_branch()
             .no_virtual_calls()
             .counted_loop()
+            .noalias()
             .apply(hot);
     });
 }
@@ -202,6 +204,23 @@ fn black_box_buffer_allocates_in_the_loop() {
     AsmTester::new(&path)
         .function("with_alloca")
         .hot_loop(ph_test_asm::Asserts::assert_no_alloca_in_loop);
+}
+
+#[test]
+fn slice_pointer_is_noalias() {
+    let path = shapes();
+    AsmTester::new(&path)
+        .function("length")
+        .on_function(ph_test_asm::Asserts::assert_noalias);
+}
+
+#[test]
+#[should_panic(expected = "assertion failed: noalias")]
+fn raw_pointer_is_not_noalias() {
+    let path = shapes();
+    AsmTester::new(&path)
+        .function("raw")
+        .on_function(ph_test_asm::Asserts::assert_noalias);
 }
 
 #[test]

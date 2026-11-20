@@ -77,6 +77,7 @@ impl FunctionScope {
 pub struct Asserts {
     label: String,
     asm: String,
+    signature: String,
     branch_allowance: u32,
     source: PathBuf,
     function: String,
@@ -221,6 +222,17 @@ impl Asserts {
         self.enforce(Rule::NoAllocaInLoop);
     }
 
+    /// Every pointer parameter is `noalias` in the LLVM IR signature.
+    ///
+    /// A signature with no pointer parameter passes.
+    ///
+    /// # Panics
+    ///
+    /// Panics when a pointer parameter lacks `noalias`.
+    pub fn assert_noalias(&self) {
+        self.enforce(Rule::NoAlias);
+    }
+
     /// The scope has no gather instruction or gather callee.
     ///
     /// # Panics
@@ -320,6 +332,11 @@ impl Asserts {
                 scan::has_stack_address(&self.asm),
                 "alloca in loop",
                 "stack pointer inside the scope",
+            ),
+            Rule::NoAlias => self.require(
+                scan::params_are_noalias(&self.signature),
+                "noalias",
+                "pointer parameter is not noalias",
             ),
             Rule::NoGather => self.forbid(scan::has_gather(&self.asm), "gather", "gather callee"),
             Rule::NoLibm => self.forbid(scan::has_libm(&self.asm), "libm", "math call"),
@@ -475,6 +492,11 @@ impl Rules {
         self.with(Rule::NoAllocaInLoop)
     }
 
+    /// Requires `noalias` on every pointer parameter.
+    pub fn noalias(self) -> Self {
+        self.with(Rule::NoAlias)
+    }
+
     /// Rejects gather callees.
     pub fn no_gather(self) -> Self {
         self.with(Rule::NoGather)
@@ -526,6 +548,7 @@ enum Rule {
     MaxStores(u32),
     CountedLoop,
     NoAllocaInLoop,
+    NoAlias,
     NoGather,
     NoLibm,
     NoFma,
@@ -547,6 +570,7 @@ fn load(source: &Path, name: &str, kind: ScopeKind, target: Option<&str>) -> Ass
         .function(name)
         .unwrap_or_else(|error| panic!("{error}"));
     let label_name = function.name().to_owned();
+    let signature = function.signature().to_owned();
     let asm = match kind {
         ScopeKind::Function => function.asm().to_owned(),
         ScopeKind::HotLoop => function
@@ -565,6 +589,7 @@ fn load(source: &Path, name: &str, kind: ScopeKind, target: Option<&str>) -> Ass
     Asserts {
         label,
         asm,
+        signature,
         branch_allowance,
         source: source.to_owned(),
         function: name.to_owned(),

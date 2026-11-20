@@ -85,6 +85,16 @@ pub fn fused(left: f64, mid: f64, right: f64) -> f64 {
 }
 
 #[unsafe(no_mangle)]
+pub fn raw(ptr: *const i32) -> *const i32 {
+    ptr
+}
+
+#[unsafe(no_mangle)]
+pub fn length(values: &[i32]) -> usize {
+    values.len()
+}
+
+#[unsafe(no_mangle)]
 pub fn bump(cell: &std::sync::atomic::AtomicU32) -> u32 {
     cell.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }

@@ -1,4 +1,7 @@
-//! Release `rustc` invocation that emits assembly.
+//! Release `rustc` invocation that emits assembly and LLVM IR.
+//!
+//! Assembly feeds the asserts. LLVM IR is read only for `noalias` on
+//! function parameters.
 //!
 //! These asserts compile the probe in this crate.
 
@@ -27,7 +30,7 @@ pub(crate) fn compile(source: &Path, target: Option<&str>) -> Result<Assembly> {
     command.arg("-C").arg("debug-assertions=off");
     command.arg("-C").arg("overflow-checks=off");
     command.arg("-C").arg("codegen-units=1");
-    command.arg("--emit=asm");
+    command.arg("--emit=llvm-ir,asm");
     command.arg("--out-dir").arg(&dir);
     if let Some(triple) = target {
         command.arg("--target").arg(triple);
@@ -47,8 +50,9 @@ pub(crate) fn compile(source: &Path, target: Option<&str>) -> Result<Assembly> {
         }
         .into());
     }
+    let ir = read_emit(&dir, "ll", "LLVM IR")?;
     let asm = read_emit(&dir, "s", "assembly")?;
-    Ok(Assembly::parse(&asm))
+    Ok(Assembly::parse(&ir, &asm))
 }
 
 fn rustc_program() -> String {
