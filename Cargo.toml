@@ -58,6 +58,8 @@ path = "benches/crates/ph_util_foreach/measure.rs"
 resolver = "3"
 members = [
     "crates/benches/ph_bench_build",
+    "crates/ph_beans",
+    "crates/ph_beans_derive",
     "crates/tests/ph_proc_macro_dylib",
     "crates/tests/ph_test_asm",
     "crates/tests/ph_test_errors",
