@@ -58,6 +58,11 @@ jobs:
           tar -xzf /tmp/hyperfine.tar.gz -C /tmp
           sudo install -m 755 /tmp/hyperfine-v2.0.0-x86_64-unknown-linux-gnu/hyperfine /usr/local/bin/hyperfine
 
+      # The bench and the measured builds run offline. Fetch first so a cold
+      # registry cache still has the bench crates.
+      - name: Fetch dependencies
+        run: cargo fetch --locked
+
       - name: Measure impl_foreach in a user crate
         run: cargo bench --bench ph_util_foreach_measure --offline
 
