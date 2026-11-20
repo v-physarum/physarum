@@ -245,17 +245,42 @@ impl EvalCtx<'_> {
         let value = match step.bound {
             Bound::Int(value) => value,
             Bound::Here { offset } => add_offset(self.index, offset, step.span)?,
-            Bound::LastIndex => {
-                return Err(Error::new(
-                    step.span,
-                    "step must be a positive integer literal or `#±N`",
-                ));
-            }
+            Bound::LastIndex => return Err(StepError::LastIndex(step.span).into()),
         };
         if value <= 0 {
-            return Err(Error::new(step.span, "step must be a positive integer"));
+            return Err(StepError::NotPositive(step.span).into());
         }
         Ok(value)
+    }
+}
+
+/// A step that cannot be used. The message is written when this becomes [`Error`].
+enum StepError {
+    LastIndex(Span),
+    NotPositive(Span),
+}
+
+impl StepError {
+    fn span(&self) -> Span {
+        match *self {
+            Self::LastIndex(span) | Self::NotPositive(span) => span,
+        }
+    }
+}
+
+impl From<StepError> for Error {
+    fn from(error: StepError) -> Self {
+        let message = error.to_string();
+        Error::new(error.span(), message)
+    }
+}
+
+impl std::fmt::Display for StepError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::LastIndex(_) => "step must be a positive integer literal or `#±N`",
+            Self::NotPositive(_) => "step must be a positive integer",
+        })
     }
 }
 
