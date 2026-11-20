@@ -86,14 +86,14 @@ pub(crate) struct RangeExpr {
 }
 
 impl RangeExpr {
-    fn new(
-        start: Option<SpannedBound>,
-        end: Option<SpannedBound>,
-        end_inclusive: bool,
-        step: Option<SpannedBound>,
-        span: Span,
-    ) -> Self {
-        Self { start, end, end_inclusive, step, span }
+    fn new(built: RangeExprBuilder) -> Self {
+        Self {
+            start: built.start,
+            end: built.end,
+            end_inclusive: built.end_inclusive,
+            step: built.step,
+            span: built.span,
+        }
     }
 
     fn builder(span: Span) -> RangeExprBuilder {
@@ -240,13 +240,7 @@ impl RangeExprBuilder {
     }
 
     fn build(self) -> RangeExpr {
-        RangeExpr::new(
-            self.start,
-            self.end,
-            self.end_inclusive,
-            self.step,
-            self.span,
-        )
+        RangeExpr::new(self)
     }
 }
 

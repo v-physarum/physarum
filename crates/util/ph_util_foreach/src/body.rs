@@ -22,7 +22,7 @@ pub(crate) fn expand(input: TokenStream) -> Result<TokenStream> {
     }
     let mut program = Program::from_body(body);
     let root = program.source.len();
-    let stat = program.compile_seq(0, root)?;
+    let stat = program.compile_seq(Source::new(0, root))?;
     let mut output = TokenStream::new();
     if stat.fan {
         if outer.first() < 0 {
@@ -30,12 +30,14 @@ pub(crate) fn expand(input: TokenStream) -> Result<TokenStream> {
         }
         outer.each(|index| {
             let domain = Domain::prefix(index);
-            output.emit_seq(&program, 0, stat.logical, &EvalCtx::new(index, &domain))
+            let tape = Tape::new(0, stat.logical);
+            output.emit_seq(&program, tape, &EvalCtx::new(index, &domain))
         })?;
     } else {
         let domain = Domain::flat(&outer);
         outer.each(|index| {
-            output.emit_seq(&program, 0, stat.logical, &EvalCtx::new(index, &domain))
+            let tape = Tape::new(0, stat.logical);
+            output.emit_seq(&program, tape, &EvalCtx::new(index, &domain))
         })?;
     }
     Ok(output)
@@ -233,6 +235,62 @@ impl Pushed {
     }
 }
 
+/// One window of the token arena.
+#[derive(Clone, Copy)]
+struct Source {
+    at: usize,
+    len: usize,
+}
+
+impl Source {
+    fn new(at: usize, len: usize) -> Self {
+        Self { at, len }
+    }
+
+    fn pos(self, index: usize) -> Result<usize> {
+        self.at.checked_add(index).ok_or_else(too_large)
+    }
+}
+
+/// An identifier and the `+` that follows it.
+struct Prefix {
+    ident: Ident,
+    plus_at: usize,
+}
+
+impl Prefix {
+    fn new(ident: Ident, plus_at: usize) -> Self {
+        Self { ident, plus_at }
+    }
+}
+
+/// An instruction inserted ahead of the body that was just compiled.
+struct Inserted {
+    at: usize,
+    op: Op,
+    width: u32,
+    fan: bool,
+}
+
+impl Inserted {
+    fn new(at: usize, op: Op, width: u32, fan: bool) -> Self {
+        Self { at, op, width, fan }
+    }
+}
+
+/// A delimited group whose body expanded.
+struct Expanding {
+    delimiter: Delimiter,
+    span: Span,
+    nested: SeqStat,
+}
+
+impl Expanding {
+    fn new(delimiter: Delimiter, span: Span, nested: SeqStat) -> Self {
+        Self { delimiter, span, nested }
+    }
+}
+
 enum PieceHead {
     Ident {
         span: Span,
@@ -269,15 +327,15 @@ impl Program {
         let bytes = self.bytes.get(start..end).ok_or_else(too_large)?;
         std::str::from_utf8(bytes).map_err(|_| too_large())
     }
-    fn compile_seq(&mut self, source_at: usize, source_len: usize) -> Result<SeqStat> {
+    fn compile_seq(&mut self, source: Source) -> Result<SeqStat> {
         let source_limit = self.source.len();
-        let stat = self.compile_into(source_at, source_len)?;
+        let stat = self.compile_into(source)?;
         self.source.truncate(source_limit);
         Ok(stat)
     }
-    fn compile_into(&mut self, source_at: usize, source_len: usize) -> Result<SeqStat> {
+    fn compile_into(&mut self, source: Source) -> Result<SeqStat> {
         let mut counts = Counts::new();
-        self.compile_range(&mut counts, source_at, source_len)?;
+        self.compile_range(&mut counts, source)?;
         Ok(SeqStat::new(
             counts.logical,
             counts.physical,
@@ -288,110 +346,93 @@ impl Program {
     fn compile_bracket_sequence(
         &mut self,
         counts: &mut Counts,
-        source_at: usize,
-        source_len: usize,
+        source: Source,
         index: usize,
     ) -> Result<Option<usize>> {
-        let Some(first) = self.try_push_piece(source_at, source_len, index)? else {
+        let Some(first) = self.try_push_piece(source, index)? else {
             return Ok(None);
         };
         let saved = rewind(self.ops.len(), first.physical)?;
-        let (pieces, physical, next, fan) = self.chain_pieces(
-            source_at,
-            source_len,
-            1,
-            first.physical,
-            first.next,
-            first.fan,
-        )?;
-        let width = checked_add(physical, 1)?;
-        self.insert_before_body(counts, saved, Op::List { pieces }, width, fan)?;
-        Ok(Some(next))
+        let (pieces, first) = self.chain_pieces(source, 1, first)?;
+        let width = checked_add(first.physical, 1)?;
+        let inserted = Inserted::new(saved, Op::List { pieces }, width, first.fan);
+        self.insert_before_body(counts, inserted)?;
+        Ok(Some(first.next))
     }
     fn compile_prefixed_sequence(
         &mut self,
         counts: &mut Counts,
-        source_at: usize,
-        source_len: usize,
+        source: Source,
         index: usize,
     ) -> Result<Option<usize>> {
-        let Some(ident) = self.leading_ident(source_at, source_len, index)? else {
+        let Some(ident) = self.leading_ident(source, index)? else {
             return Ok(None);
         };
         let Some(after_name) = index.checked_add(1) else {
             return Ok(None);
         };
-        if self.is_plus(source_at, source_len, after_name)? {
-            return self
-                .concat_ident_and_sequence(counts, source_at, source_len, ident, after_name);
+        if self.is_plus(source, after_name)? {
+            let prefix = Prefix::new(ident, after_name);
+            return self.concat_ident_and_sequence(counts, source, prefix);
         }
-        self.reject_ident_before_sequence(source_at, source_len, &ident, after_name)
+        self.reject_ident_before_sequence(source, &ident, after_name)
     }
     fn concat_ident_and_sequence(
         &mut self,
         counts: &mut Counts,
-        source_at: usize,
-        source_len: usize,
-        ident: Ident,
-        plus_at: usize,
+        source: Source,
+        prefix: Prefix,
     ) -> Result<Option<usize>> {
-        let Some(piece_at) = plus_at.checked_add(1) else {
+        let Some(piece_at) = prefix.plus_at.checked_add(1) else {
             return Ok(None);
         };
-        let Some(first) = self.try_push_piece(source_at, source_len, piece_at)? else {
+        let Some(first) = self.try_push_piece(source, piece_at)? else {
             return Ok(None);
         };
         let saved = rewind(self.ops.len(), first.physical)?;
-        self.ops.insert(saved, Inst::new(Op::Ident(ident), 1));
+        self.ops
+            .insert(saved, Inst::new(Op::Ident(prefix.ident), 1));
         let physical = checked_add(1, first.physical)?;
-        let (pieces, physical, next, fan) =
-            self.chain_pieces(source_at, source_len, 2, physical, first.next, first.fan)?;
-        let width = checked_add(physical, 1)?;
-        self.insert_before_body(counts, saved, Op::List { pieces }, width, fan)?;
-        Ok(Some(next))
+        let first = Pushed::new(physical, first.next, first.fan);
+        let (pieces, first) = self.chain_pieces(source, 2, first)?;
+        let width = checked_add(first.physical, 1)?;
+        let inserted = Inserted::new(saved, Op::List { pieces }, width, first.fan);
+        self.insert_before_body(counts, inserted)?;
+        Ok(Some(first.next))
     }
     fn reject_ident_before_sequence(
         &mut self,
-        source_at: usize,
-        source_len: usize,
+        source: Source,
         ident: &Ident,
         after_name: usize,
     ) -> Result<Option<usize>> {
-        if self.is_sequence_start(source_at, source_len, after_name)? {
+        if self.is_sequence_start(source, after_name)? {
             return Err(Error::new(ident.span(), ErrorKind::NotConcat));
         }
         Ok(None)
     }
     fn chain_pieces(
         &mut self,
-        source_at: usize,
-        source_len: usize,
+        source: Source,
         mut pieces: u32,
-        mut physical: u32,
-        mut next: usize,
-        mut fan: bool,
-    ) -> Result<(u32, u32, usize, bool)> {
-        while self.is_plus(source_at, source_len, next)? {
-            let Some(followed) = next.checked_add(1) else {
+        mut first: Pushed,
+    ) -> Result<(u32, Pushed)> {
+        while self.is_plus(source, first.next)? {
+            let Some(followed) = first.next.checked_add(1) else {
                 break;
             };
-            let Some(chained) = self.try_push_piece(source_at, source_len, followed)? else {
+            let Some(chained) = self.try_push_piece(source, followed)? else {
                 break;
             };
             pieces = checked_add(pieces, 1)?;
-            physical = checked_add(physical, chained.physical)?;
-            next = chained.next;
-            fan |= chained.fan;
+            let physical = checked_add(first.physical, chained.physical)?;
+            let fan = first.fan || chained.fan;
+            first = Pushed::new(physical, chained.next, fan);
         }
-        Ok((pieces, physical, next, fan))
+        Ok((pieces, first))
     }
-    fn try_push_piece(
-        &mut self,
-        source_at: usize,
-        source_len: usize,
-        index: usize,
-    ) -> Result<Option<Pushed>> {
-        let Some(head) = self.peek_piece(source_at, source_len, index)? else {
+    fn try_push_piece(&mut self, source: Source, index: usize) -> Result<Option<Pushed>> {
+        let Some(head) = self.peek_piece(source, index)? else {
             return Ok(None);
         };
         let (physical, fan) = match head {
@@ -434,12 +475,11 @@ impl Program {
     fn compile_pasted_ident(
         &mut self,
         counts: &mut Counts,
-        source_at: usize,
-        source_len: usize,
+        source: Source,
         index: usize,
     ) -> Result<Option<usize>> {
         let prepared = {
-            let tokens = self.source_slice(source_at, source_len)?;
+            let tokens = self.source_slice(source)?;
             match tokens.get(index) {
                 Some(TokenTree::Ident(name))
                     if tokens.is_plus_at(index + 1) && tokens.is_bare_hash(index + 2) =>
@@ -460,12 +500,11 @@ impl Program {
     fn compile_index_literal(
         &mut self,
         counts: &mut Counts,
-        source_at: usize,
-        source_len: usize,
+        source: Source,
         index: usize,
     ) -> Result<bool> {
         let span = {
-            let tokens = self.source_slice(source_at, source_len)?;
+            let tokens = self.source_slice(source)?;
             if !tokens.is_bare_hash(index) {
                 return Ok(false);
             }
@@ -478,17 +517,18 @@ impl Program {
     fn compile_delimited_group(
         &mut self,
         counts: &mut Counts,
-        source_at: usize,
+        source: Source,
         index: usize,
     ) -> Result<bool> {
-        let pos = source_pos(source_at, index)?;
+        let pos = source.pos(index)?;
         let Some((delimiter, span, stream)) = self.group_parts(pos) else {
             return Ok(false);
         };
         let mark = self.mark();
         let nested = self.compile_stream(stream)?;
         if nested.expands {
-            self.install_expanding_group(counts, mark.ops, delimiter, span, &nested)?;
+            let group = Expanding::new(delimiter, span, nested);
+            self.install_expanding_group(counts, mark.ops, &group)?;
         } else {
             mark.restore(self);
             self.keep_original_group(counts, pos)?;
@@ -499,18 +539,12 @@ impl Program {
         &mut self,
         counts: &mut Counts,
         at: usize,
-        delimiter: Delimiter,
-        span: Span,
-        nested: &SeqStat,
+        group: &Expanding,
     ) -> Result<()> {
-        let width = checked_add(nested.physical, 1)?;
-        self.insert_before_body(
-            counts,
-            at,
-            Op::Group { delimiter, span, body: nested.logical },
-            width,
-            nested.fan,
-        )
+        let width = checked_add(group.nested.physical, 1)?;
+        let op =
+            Op::Group { delimiter: group.delimiter, span: group.span, body: group.nested.logical };
+        self.insert_before_body(counts, Inserted::new(at, op, width, group.nested.fan))
     }
     fn keep_original_group(&mut self, counts: &mut Counts, pos: usize) -> Result<()> {
         self.push_verbatim(counts, self.cloned_token(pos)?)
@@ -523,55 +557,44 @@ impl Program {
             .len()
             .checked_sub(inner_at)
             .ok_or_else(too_large)?;
-        let stat = self.compile_into(inner_at, inner_len)?;
+        let stat = self.compile_into(Source::new(inner_at, inner_len))?;
         self.source.truncate(inner_at);
         Ok(stat)
     }
-    fn compile_range(
-        &mut self,
-        counts: &mut Counts,
-        source_at: usize,
-        source_len: usize,
-    ) -> Result<()> {
+    fn compile_range(&mut self, counts: &mut Counts, source: Source) -> Result<()> {
         let mut index = 0;
-        while index < source_len {
-            index = self.compile_one(counts, source_at, source_len, index)?;
+        while index < source.len {
+            index = self.compile_one(counts, source, index)?;
         }
         self.flush_copy(counts)
     }
-    fn compile_one(
-        &mut self,
-        counts: &mut Counts,
-        source_at: usize,
-        source_len: usize,
-        index: usize,
-    ) -> Result<usize> {
-        if let Some(next) = self.compile_bracket_sequence(counts, source_at, source_len, index)? {
+    fn compile_one(&mut self, counts: &mut Counts, source: Source, index: usize) -> Result<usize> {
+        if let Some(next) = self.compile_bracket_sequence(counts, source, index)? {
             return Ok(next);
         }
-        if let Some(next) = self.compile_pasted_ident(counts, source_at, source_len, index)? {
+        if let Some(next) = self.compile_pasted_ident(counts, source, index)? {
             return Ok(next);
         }
-        self.reject_spaced_ident_hash(source_at, source_len, index)?;
-        if let Some(next) = self.compile_prefixed_sequence(counts, source_at, source_len, index)? {
+        self.reject_spaced_ident_hash(source, index)?;
+        if let Some(next) = self.compile_prefixed_sequence(counts, source, index)? {
             return Ok(next);
         }
-        if self.compile_index_literal(counts, source_at, source_len, index)? {
+        if self.compile_index_literal(counts, source, index)? {
             return next_token(index);
         }
-        if self.compile_delimited_group(counts, source_at, index)? {
+        if self.compile_delimited_group(counts, source, index)? {
             return next_token(index);
         }
-        self.copy_verbatim_token(counts, source_at, index)?;
+        self.copy_verbatim_token(counts, source, index)?;
         next_token(index)
     }
     fn copy_verbatim_token(
         &mut self,
         counts: &mut Counts,
-        source_at: usize,
+        source: Source,
         index: usize,
     ) -> Result<()> {
-        let token = self.cloned_token(source_pos(source_at, index)?)?;
+        let token = self.cloned_token(source.pos(index)?)?;
         self.push_verbatim(counts, token)
     }
     fn push_op(&mut self, counts: &mut Counts, op: Op, fan: bool) -> Result<()> {
@@ -601,15 +624,11 @@ impl Program {
         counts.physical = checked_add(counts.physical, 1)?;
         Ok(())
     }
-    fn insert_before_body(
-        &mut self,
-        counts: &mut Counts,
-        at: usize,
-        op: Op,
-        width: u32,
-        fan: bool,
-    ) -> Result<()> {
-        self.ops.insert(at, Inst::new(op, width));
+    fn insert_before_body(&mut self, counts: &mut Counts, inserted: Inserted) -> Result<()> {
+        let at = inserted.at;
+        let width = inserted.width;
+        let fan = inserted.fan;
+        self.ops.insert(at, Inst::new(inserted.op, width));
         if let Some(pending) = counts.pending.take() {
             self.ops.insert(
                 at,
@@ -624,16 +643,11 @@ impl Program {
         counts.fan |= fan;
         Ok(())
     }
-    fn peek_piece(
-        &mut self,
-        source_at: usize,
-        source_len: usize,
-        index: usize,
-    ) -> Result<Option<PieceHead>> {
-        let Some(pattern) = self.piece_pattern(source_at, source_len, index)? else {
+    fn peek_piece(&mut self, source: Source, index: usize) -> Result<Option<PieceHead>> {
+        let Some(pattern) = self.piece_pattern(source, index)? else {
             return Ok(None);
         };
-        let head = source_pos(source_at, index)?;
+        let head = source.pos(index)?;
         match self.source.get(head) {
             Some(TokenTree::Ident(name)) => Ok(Some(PieceHead::Ident {
                 span: name.span(),
@@ -650,28 +664,18 @@ impl Program {
             _ => Ok(None),
         }
     }
-    fn is_sequence_start(
-        &mut self,
-        source_at: usize,
-        source_len: usize,
-        index: usize,
-    ) -> Result<bool> {
-        Ok(self.piece_pattern(source_at, source_len, index)?.is_some())
+    fn is_sequence_start(&mut self, source: Source, index: usize) -> Result<bool> {
+        Ok(self.piece_pattern(source, index)?.is_some())
     }
-    fn piece_pattern(
-        &mut self,
-        source_at: usize,
-        source_len: usize,
-        index: usize,
-    ) -> Result<Option<Pattern>> {
+    fn piece_pattern(&mut self, source: Source, index: usize) -> Result<Option<Pattern>> {
         let Some(next) = index.checked_add(1) else {
             return Ok(None);
         };
-        if next >= source_len {
+        if next >= source.len {
             return Ok(None);
         }
-        let head = source_pos(source_at, index)?;
-        let bracket = source_pos(source_at, next)?;
+        let head = source.pos(index)?;
+        let bracket = source.pos(next)?;
         let Some((span, stream)) = self.bracket_of_piece(head, bracket) else {
             return Ok(None);
         };
@@ -714,13 +718,8 @@ impl Program {
             None => Ok(Class::Pass),
         }
     }
-    fn leading_ident(
-        &self,
-        source_at: usize,
-        source_len: usize,
-        index: usize,
-    ) -> Result<Option<Ident>> {
-        let tokens = self.source_slice(source_at, source_len)?;
+    fn leading_ident(&self, source: Source, index: usize) -> Result<Option<Ident>> {
+        let tokens = self.source_slice(source)?;
         Ok(match tokens.get(index) {
             Some(TokenTree::Ident(name)) => Some(name.clone()),
             _ => None,
@@ -737,21 +736,16 @@ impl Program {
     fn cloned_token(&self, pos: usize) -> Result<TokenTree> {
         self.source.get(pos).cloned().ok_or_else(too_large)
     }
-    fn is_plus(&self, source_at: usize, source_len: usize, index: usize) -> Result<bool> {
-        let tokens = self.source_slice(source_at, source_len)?;
+    fn is_plus(&self, source: Source, index: usize) -> Result<bool> {
+        let tokens = self.source_slice(source)?;
         Ok(tokens.is_plus_at(index))
     }
-    fn source_slice(&self, source_at: usize, source_len: usize) -> Result<&[TokenTree]> {
-        let end = source_at.checked_add(source_len).ok_or_else(too_large)?;
-        self.source.get(source_at..end).ok_or_else(too_large)
+    fn source_slice(&self, source: Source) -> Result<&[TokenTree]> {
+        let end = source.at.checked_add(source.len).ok_or_else(too_large)?;
+        self.source.get(source.at..end).ok_or_else(too_large)
     }
-    fn reject_spaced_ident_hash(
-        &self,
-        source_at: usize,
-        source_len: usize,
-        index: usize,
-    ) -> Result<()> {
-        let tokens = self.source_slice(source_at, source_len)?;
+    fn reject_spaced_ident_hash(&self, source: Source, index: usize) -> Result<()> {
+        let tokens = self.source_slice(source)?;
         if !matches!(tokens.get(index), Some(TokenTree::Ident(_)))
             || !tokens.is_bare_hash(index + 1)
         {
@@ -792,50 +786,80 @@ fn next_token(index: usize) -> Result<usize> {
     index.checked_add(1).ok_or_else(too_large)
 }
 
-fn source_pos(source_at: usize, index: usize) -> Result<usize> {
-    source_at.checked_add(index).ok_or_else(too_large)
+/// A run of instructions on the tape.
+#[derive(Clone, Copy)]
+struct Tape {
+    at: usize,
+    count: u32,
 }
 
+impl Tape {
+    fn new(at: usize, count: u32) -> Self {
+        Self { at, count }
+    }
+}
+
+/// One group instruction and the index where it sits.
+struct GroupEmit {
+    at: usize,
+    delimiter: Delimiter,
+    span: Span,
+    body: u32,
+}
+
+impl GroupEmit {
+    fn new(at: usize, delimiter: Delimiter, span: Span, body: u32) -> Self {
+        Self { at, delimiter, span, body }
+    }
+}
+
+/// Comma state while one list is written.
+struct ListOut<'a> {
+    ctx: &'a EvalCtx<'a>,
+    emitted: &'a mut bool,
+}
+
+impl<'a> ListOut<'a> {
+    fn new(ctx: &'a EvalCtx<'a>, emitted: &'a mut bool) -> Self {
+        Self { ctx, emitted }
+    }
+}
+
+/// A pasted name and the pattern that fills it.
+struct NameEmit<'a> {
+    base: &'a str,
+    span: Span,
+    pattern: Pattern,
+}
+
+impl<'a> NameEmit<'a> {
+    fn new(base: &'a str, span: Span, pattern: Pattern) -> Self {
+        Self { base, span, pattern }
+    }
+}
+
+/// One row template and the index where its body starts.
 struct RowHead {
+    at: usize,
     span: Span,
     pattern: Pattern,
     body: u32,
 }
 
+impl RowHead {
+    fn new(at: usize, span: Span, pattern: Pattern, body: u32) -> Self {
+        Self { at, span, pattern, body }
+    }
+}
+
 trait Emit {
-    fn emit_seq(
-        &mut self,
-        prog: &Program,
-        at: usize,
-        logical: u32,
-        ctx: &EvalCtx<'_>,
-    ) -> Result<()>;
+    fn emit_seq(&mut self, prog: &Program, tape: Tape, ctx: &EvalCtx<'_>) -> Result<()>;
 
-    fn emit_group(
-        &mut self,
-        prog: &Program,
-        at: usize,
-        delimiter: Delimiter,
-        span: Span,
-        body: u32,
-        ctx: &EvalCtx<'_>,
-    ) -> Result<()>;
+    fn emit_group(&mut self, prog: &Program, group: GroupEmit, ctx: &EvalCtx<'_>) -> Result<()>;
 
-    fn emit_list(
-        &mut self,
-        prog: &Program,
-        at: usize,
-        pieces: u32,
-        ctx: &EvalCtx<'_>,
-    ) -> Result<()>;
+    fn emit_list(&mut self, prog: &Program, tape: Tape, ctx: &EvalCtx<'_>) -> Result<()>;
 
-    fn emit_piece(
-        &mut self,
-        prog: &Program,
-        at: usize,
-        ctx: &EvalCtx<'_>,
-        emitted: &mut bool,
-    ) -> Result<()>;
+    fn emit_piece(&mut self, prog: &Program, at: usize, out: &mut ListOut<'_>) -> Result<()>;
 
     fn emit_copy(&mut self, prog: &Program, at: u32, len: u32) -> Result<()>;
 
@@ -845,34 +869,15 @@ trait Emit {
 
     fn emit_ident(&mut self, emitted: &mut bool, ident: Ident);
 
-    fn emit_named(
-        &mut self,
-        ctx: &EvalCtx<'_>,
-        emitted: &mut bool,
-        base: &str,
-        span: Span,
-        pattern: Pattern,
-    ) -> Result<()>;
+    fn emit_named(&mut self, out: &mut ListOut<'_>, name: NameEmit<'_>) -> Result<()>;
 
-    fn emit_rows(
-        &mut self,
-        prog: &Program,
-        ctx: &EvalCtx<'_>,
-        emitted: &mut bool,
-        body_at: usize,
-        row: RowHead,
-    ) -> Result<()>;
+    fn emit_rows(&mut self, prog: &Program, out: &mut ListOut<'_>, row: RowHead) -> Result<()>;
 }
 
 impl Emit for TokenStream {
-    fn emit_seq(
-        &mut self,
-        prog: &Program,
-        mut at: usize,
-        logical: u32,
-        ctx: &EvalCtx<'_>,
-    ) -> Result<()> {
-        for _ in 0..logical {
+    fn emit_seq(&mut self, prog: &Program, tape: Tape, ctx: &EvalCtx<'_>) -> Result<()> {
+        let mut at = tape.at;
+        for _ in 0..tape.count {
             let inst = prog.ops.get(at).cloned().ok_or_else(too_large)?;
             let width = widen(inst.width)?;
             if width == 0 {
@@ -881,7 +886,8 @@ impl Emit for TokenStream {
             match inst.op {
                 Op::Copy { at: tok_at, len } => self.emit_copy(prog, tok_at, len)?,
                 Op::Group { delimiter, span, body } => {
-                    self.emit_group(prog, at, delimiter, span, body, ctx)?;
+                    let group = GroupEmit::new(at, delimiter, span, body);
+                    self.emit_group(prog, group, ctx)?;
                 }
                 Op::Index { span } => {
                     self.extend([TokenTree::Literal(ctx.index_literal(span))]);
@@ -891,11 +897,12 @@ impl Emit for TokenStream {
                 }
                 Op::List { pieces } => {
                     let body_at = at.checked_add(1).ok_or_else(too_large)?;
-                    self.emit_list(prog, body_at, pieces, ctx)?;
+                    self.emit_list(prog, Tape::new(body_at, pieces), ctx)?;
                 }
                 Op::Ident(_) | Op::Off(_) | Op::Named { .. } | Op::Rows { .. } => {
                     let mut emitted = false;
-                    self.emit_piece(prog, at, ctx, &mut emitted)?;
+                    let mut out = ListOut::new(ctx, &mut emitted);
+                    self.emit_piece(prog, at, &mut out)?;
                 }
             }
             at = at.checked_add(width).ok_or_else(too_large)?;
@@ -903,33 +910,21 @@ impl Emit for TokenStream {
         Ok(())
     }
 
-    fn emit_group(
-        &mut self,
-        prog: &Program,
-        at: usize,
-        delimiter: Delimiter,
-        span: Span,
-        body: u32,
-        ctx: &EvalCtx<'_>,
-    ) -> Result<()> {
+    fn emit_group(&mut self, prog: &Program, group: GroupEmit, ctx: &EvalCtx<'_>) -> Result<()> {
         let mut inner = TokenStream::new();
-        let body_at = at.checked_add(1).ok_or_else(too_large)?;
-        inner.emit_seq(prog, body_at, body, ctx)?;
-        let mut group = Group::new(delimiter, inner);
-        group.set_span(span);
-        self.extend([TokenTree::Group(group)]);
+        let body_at = group.at.checked_add(1).ok_or_else(too_large)?;
+        inner.emit_seq(prog, Tape::new(body_at, group.body), ctx)?;
+        let mut built = Group::new(group.delimiter, inner);
+        built.set_span(group.span);
+        self.extend([TokenTree::Group(built)]);
         Ok(())
     }
 
-    fn emit_list(
-        &mut self,
-        prog: &Program,
-        mut at: usize,
-        pieces: u32,
-        ctx: &EvalCtx<'_>,
-    ) -> Result<()> {
+    fn emit_list(&mut self, prog: &Program, tape: Tape, ctx: &EvalCtx<'_>) -> Result<()> {
         let mut emitted = false;
-        for _ in 0..pieces {
+        let mut out = ListOut::new(ctx, &mut emitted);
+        let mut at = tape.at;
+        for _ in 0..tape.count {
             let width = prog
                 .ops
                 .get(at)
@@ -939,31 +934,26 @@ impl Emit for TokenStream {
             if width == 0 {
                 return Err(too_large());
             }
-            self.emit_piece(prog, at, ctx, &mut emitted)?;
+            self.emit_piece(prog, at, &mut out)?;
             at = at.checked_add(width).ok_or_else(too_large)?;
         }
         Ok(())
     }
 
-    fn emit_piece(
-        &mut self,
-        prog: &Program,
-        at: usize,
-        ctx: &EvalCtx<'_>,
-        emitted: &mut bool,
-    ) -> Result<()> {
+    fn emit_piece(&mut self, prog: &Program, at: usize, out: &mut ListOut<'_>) -> Result<()> {
         let op = prog.ops.get(at).cloned().ok_or_else(too_large)?.op;
         match op {
             Op::Ident(ident) | Op::Off(ident) => {
-                self.emit_ident(emitted, ident);
+                self.emit_ident(out.emitted, ident);
                 Ok(())
             }
             Op::Named { at: base_at, len, span, pattern } => {
-                self.emit_named(ctx, emitted, prog.text(base_at, len)?, span, pattern)
+                let name = NameEmit::new(prog.text(base_at, len)?, span, pattern);
+                self.emit_named(out, name)
             }
             Op::Rows { span, pattern, body } => {
                 let body_at = at.checked_add(1).ok_or_else(too_large)?;
-                self.emit_rows(prog, ctx, emitted, body_at, RowHead { span, pattern, body })
+                self.emit_rows(prog, out, RowHead::new(body_at, span, pattern, body))
             }
             Op::Copy { .. }
             | Op::Group { .. }
@@ -1011,35 +1001,24 @@ impl Emit for TokenStream {
         self.extend([TokenTree::Ident(ident)]);
     }
 
-    fn emit_named(
-        &mut self,
-        ctx: &EvalCtx<'_>,
-        emitted: &mut bool,
-        base: &str,
-        span: Span,
-        pattern: Pattern,
-    ) -> Result<()> {
-        let range = pattern.to_range();
-        range.visit(ctx, |index| {
-            self.push_comma(emitted);
-            self.emit_pasted(base, index, span)
+    fn emit_named(&mut self, out: &mut ListOut<'_>, name: NameEmit<'_>) -> Result<()> {
+        let ctx = *out.ctx;
+        let range = name.pattern.to_range();
+        range.visit(&ctx, |index| {
+            self.push_comma(out.emitted);
+            self.emit_pasted(name.base, index, name.span)
         })
     }
 
-    fn emit_rows(
-        &mut self,
-        prog: &Program,
-        ctx: &EvalCtx<'_>,
-        emitted: &mut bool,
-        body_at: usize,
-        row: RowHead,
-    ) -> Result<()> {
-        let range = row.pattern.to_range();
+    fn emit_rows(&mut self, prog: &Program, out: &mut ListOut<'_>, row: RowHead) -> Result<()> {
+        let ctx = *out.ctx;
         let domain = ctx.domain;
-        range.visit(ctx, |index| {
+        let range = row.pattern.to_range();
+        range.visit(&ctx, |index| {
             let mut inner = TokenStream::new();
-            inner.emit_seq(prog, body_at, row.body, &EvalCtx::new(index, domain))?;
-            self.push_comma(emitted);
+            let tape = Tape::new(row.at, row.body);
+            inner.emit_seq(prog, tape, &EvalCtx::new(index, domain))?;
+            self.push_comma(out.emitted);
             let mut group = Group::new(Delimiter::Parenthesis, inner);
             group.set_span(row.span);
             self.extend([TokenTree::Group(group)]);

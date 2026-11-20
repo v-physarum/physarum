@@ -52,6 +52,21 @@ struct Timing {
     stddev: f64,
 }
 
+/// One cargo invocation timed by hyperfine.
+#[derive(Clone, Copy)]
+struct TimedCargo<'a> {
+    label: &'a str,
+    prepare: Option<&'a str>,
+    command: &'a str,
+    incremental: bool,
+}
+
+impl<'a> TimedCargo<'a> {
+    fn new(label: &'a str, prepare: Option<&'a str>, command: &'a str, incremental: bool) -> Self {
+        Self { label, prepare, command, incremental }
+    }
+}
+
 impl Timing {
     fn new(median: f64, stddev: f64) -> Self {
         Self { median, stddev }
@@ -194,12 +209,15 @@ fn compile_proc_macro(layout: &Layout) -> Result<()> {
 fn measure_debug(layout: &Layout, report: &mut Report) -> Result<()> {
     for case in DEBUG_CASES {
         layout.write_case(case)?;
+        let label = format!("debug_full_{case}");
         let timing = time_build(
             layout,
-            &format!("debug_full_{case}"),
-            Some("cargo clean -p ph_util_foreach_user"),
-            "cargo build --offline",
-            false,
+            TimedCargo::new(
+                &label,
+                Some("cargo clean -p ph_util_foreach_user"),
+                "cargo build --offline",
+                false,
+            ),
         )?;
         println!(
             "debug_full {case} median {:.3}s stddev {:.3}s",
@@ -214,10 +232,12 @@ fn measure_incremental(layout: &Layout, report: &mut Report) -> Result<()> {
     layout.write_case("flat_structs_1024")?;
     let timing = time_build(
         layout,
-        "debug_incremental_flat_structs_1024",
-        None,
-        "cargo build --offline",
-        true,
+        TimedCargo::new(
+            "debug_incremental_flat_structs_1024",
+            None,
+            "cargo build --offline",
+            true,
+        ),
     )?;
     println!(
         "debug_incremental flat_structs_1024 median {:.3}s stddev {:.3}s",
@@ -236,10 +256,12 @@ fn measure_release(layout: &Layout, report: &mut Report) -> Result<()> {
         let label = format!("release_full_{case}");
         let timing = time_build(
             layout,
-            &label,
-            Some("cargo clean -p ph_util_foreach_user --release"),
-            "cargo build --release --offline",
-            false,
+            TimedCargo::new(
+                &label,
+                Some("cargo clean -p ph_util_foreach_user --release"),
+                "cargo build --release --offline",
+                false,
+            ),
         )?;
         println!(
             "release_full {case} median {:.3}s stddev {:.3}s",
@@ -294,19 +316,13 @@ fn measure_runtime(layout: &Layout, report: &mut Report) -> Result<()> {
     report.runtime(median)
 }
 
-fn time_build(
-    layout: &Layout,
-    label: &str,
-    prepare: Option<&str>,
-    cargo_command: &str,
-    incremental: bool,
-) -> Result<Timing> {
-    let json = layout.logs.join(format!("{label}.json"));
-    let log = layout.logs.join(format!("{label}.hyperfine.log"));
-    let cargo_log = layout.logs.join(format!("{label}.cargo.log"));
+fn time_build(layout: &Layout, timed: TimedCargo<'_>) -> Result<Timing> {
+    let json = layout.logs.join(format!("{}.json", timed.label));
+    let log = layout.logs.join(format!("{}.hyperfine.log", timed.label));
+    let cargo_log = layout.logs.join(format!("{}.cargo.log", timed.label));
     let repeats = REPEATS.to_string();
     let mut command = Command::new("hyperfine");
-    apply_measure_env(&mut command, &layout.target, incremental);
+    apply_measure_env(&mut command, &layout.target, timed.incremental);
     command.current_dir(&layout.user);
     command.args([
         "--style",
@@ -321,11 +337,11 @@ fn time_build(
     ]);
     command.arg(&json);
     command.arg("--output").arg(&cargo_log);
-    if let Some(prepare) = prepare {
+    if let Some(prepare) = timed.prepare {
         command.arg("--prepare").arg(prepare);
     }
-    command.arg(cargo_command);
-    run_combined(&mut command, &log, label)?;
+    command.arg(timed.command);
+    run_combined(&mut command, &log, timed.label)?;
     let text = fs::read_to_string(&json)?;
     let clock = json::wall_clock(&text)?;
     Ok(Timing::new(clock.median, clock.stddev))
