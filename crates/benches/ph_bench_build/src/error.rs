@@ -50,7 +50,7 @@ pub(crate) enum ErrorKind {
     /// `case` names a kind with no template file.
     #[error("case {case} has no template {template}")]
     MissingTemplate { case: String, template: String },
-    /// Two marker files name the same case.
+    /// Two count directories name the same case.
     #[error("duplicate case {case}")]
     DuplicateCase { case: String },
     /// The case directory has no warmup case.

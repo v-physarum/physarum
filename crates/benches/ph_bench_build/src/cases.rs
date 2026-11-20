@@ -1,7 +1,7 @@
 //! Case groups read from a directory layout.
 //!
-//! Group folders name the runs. Marker file names name the cases. `.rs` files
-//! next to those folders are the source.
+//! Group, kind, and count are folders. `.rs` files next to the group folders
+//! are the source. Count folders are empty.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -54,43 +54,16 @@ struct GroupPaths {
     release: Option<PathBuf>,
 }
 
-struct Marker {
-    name: String,
-    /// `name` is `{kind}_{count}`. `kind` is the borrowed prefix.
-    kind_len: usize,
-    count: u32,
-}
-
-impl Marker {
-    fn kind(&self) -> &str {
-        &self.name[..self.kind_len]
-    }
-
-    fn parse(path: &Path) -> Result<Self> {
-        let stem = file_stem(path).ok_or_else(|| unexpected(path))?;
-        let Some((kind, count_text)) = stem.rsplit_once('_') else {
-            return Err(Error::unknown_case(stem));
-        };
-        if kind.is_empty() {
-            return Err(Error::unknown_case(stem));
-        }
-        let Ok(count) = count_text.parse::<u32>() else {
-            return Err(Error::unknown_case(stem));
-        };
-        let kind_len = kind.len();
-        Ok(Self {
-            name: case_name(kind, count),
-            kind_len,
-            count,
-        })
-    }
+struct KindDir {
+    path: PathBuf,
+    counts: Vec<u32>,
 }
 
 /// Reads `directory` into warmup, debug, incremental, and release cases.
 ///
 /// # Errors
 ///
-/// Returns an error when the directory is not a case layout, a marker or
+/// Returns an error when the directory is not a case layout, a count or
 /// template is missing or duplicated, or a template file cannot be read.
 pub(crate) fn load(directory: &Path) -> Result<Groups> {
     if !directory.is_dir() {
@@ -165,28 +138,65 @@ fn push_group(out: &mut Vec<Case>, directory: Option<&Path>, templates: &Templat
         return Ok(());
     };
     let paths = list(directory)?;
-    let mut markers = Vec::with_capacity(paths.len());
+    let mut kinds = Vec::with_capacity(paths.len());
     for path in paths {
-        if !path.is_file() {
+        if !path.is_dir() {
             return Err(unexpected(&path));
         }
-        markers.push(Marker::parse(&path)?);
+        kinds.push(read_kind(path)?);
     }
-    markers.sort_by(|left, right| {
-        left.kind()
-            .cmp(right.kind())
-            .then(left.count.cmp(&right.count))
-    });
-    out.reserve(markers.len());
-    for marker in markers {
-        if out.iter().any(|case| case.name == marker.name) {
-            return Err(ErrorKind::DuplicateCase { case: marker.name }.into());
+    let total = kinds.iter().map(|kind| kind.counts.len()).sum();
+    out.reserve(total);
+    for kind in &kinds {
+        let name = file_name(&kind.path)?;
+        reject_duplicates(name, &kind.counts)?;
+        for count in &kind.counts {
+            out.push(Case {
+                name: case_name(name, *count),
+                source: templates.source(name, *count)?,
+            });
         }
-        let source = templates.source(marker.kind(), marker.count)?;
-        out.push(Case {
-            name: marker.name,
-            source,
-        });
+    }
+    Ok(())
+}
+
+fn read_kind(path: PathBuf) -> Result<KindDir> {
+    let children = list(&path)?;
+    if children.is_empty() {
+        return Err(unexpected(&path));
+    }
+    let mut counts = Vec::with_capacity(children.len());
+    for child in children {
+        if !child.is_dir() {
+            return Err(unexpected(&child));
+        }
+        let name = file_name(&child)?;
+        let Ok(count) = name.parse::<u32>() else {
+            return Err(Error::unknown_case(name));
+        };
+        reject_contents(&child)?;
+        counts.push(count);
+    }
+    counts.sort_unstable();
+    Ok(KindDir { path, counts })
+}
+
+fn reject_contents(path: &Path) -> Result<()> {
+    let mut entries = fs::read_dir(path)?;
+    if let Some(entry) = entries.next() {
+        return Err(unexpected(&entry?.path()));
+    }
+    Ok(())
+}
+
+fn reject_duplicates(kind: &str, counts: &[u32]) -> Result<()> {
+    for pair in counts.windows(2) {
+        if pair[0] == pair[1] {
+            return Err(ErrorKind::DuplicateCase {
+                case: case_name(kind, pair[0]),
+            }
+            .into());
+        }
     }
     Ok(())
 }
@@ -274,17 +284,17 @@ mod tests {
         tree.file("many_call.rs", "range = INDEX..NEXT;\n");
         tree.file("fan_rows.rs", "rows = CASE_LEN;\n");
         tree.file("fan_take.rs", "take = CASE_LEN;\n");
-        tree.file("warmup/hand_structs_1", "IGNORE");
-        tree.file("warmup/flat_structs_1", "IGNORE");
-        tree.file("debug/flat_structs_1024", "IGNORE");
-        tree.file("debug/hand_structs_2", "IGNORE");
-        tree.file("debug/flat_structs_64", "IGNORE");
-        tree.file("debug/many_calls_2", "IGNORE");
-        tree.file("debug/fan_take_16", "IGNORE");
-        tree.file("debug/fan_rows_4", "IGNORE");
-        tree.file("incremental/flat_structs_1024", "");
-        tree.file("release/hand_structs_2", "");
-        tree.file("release/fan_rows_4", "");
+        tree.dir("warmup/hand_structs/1");
+        tree.dir("warmup/flat_structs/1");
+        tree.dir("debug/flat_structs/1024");
+        tree.dir("debug/hand_structs/2");
+        tree.dir("debug/flat_structs/64");
+        tree.dir("debug/many_calls/2");
+        tree.dir("debug/fan_take/16");
+        tree.dir("debug/fan_rows/4");
+        tree.dir("incremental/flat_structs/1024");
+        tree.dir("release/hand_structs/2");
+        tree.dir("release/fan_rows/4");
 
         let groups = load(&tree.0).unwrap();
         assert_eq!(names(&groups.warmup), ["flat_structs_1", "hand_structs_1"]);
@@ -302,7 +312,6 @@ mod tests {
             ]
         );
         assert_eq!(groups.debug[2].source, "len = 64;\n");
-        assert!(!groups.debug[2].source.contains("IGNORE"));
         assert_eq!(
             groups.debug[4].source,
             "use crate;\n\nstruct Ix0;\nstruct Ix1;\n"
@@ -321,7 +330,7 @@ mod tests {
     fn absent_groups_are_empty_when_warmup_exists() {
         let tree = Tree::new();
         tree.file("flat_structs.rs", "len = CASE_LEN;\n");
-        tree.file("warmup/flat_structs_1", "");
+        tree.dir("warmup/flat_structs/1");
         let groups = load(&tree.0).unwrap();
         assert!(groups.debug.is_empty());
         assert!(groups.incremental.is_empty());
@@ -332,7 +341,7 @@ mod tests {
     fn missing_warmup_is_an_error() {
         let tree = Tree::new();
         tree.file("flat_structs.rs", "len = CASE_LEN;\n");
-        tree.file("debug/flat_structs_1", "");
+        tree.dir("debug/flat_structs/1");
         let error = load(&tree.0).unwrap_err().to_string();
         assert!(error.contains("warmup"), "{error}");
     }
@@ -353,11 +362,11 @@ mod tests {
     }
 
     #[test]
-    fn unknown_marker_is_an_error() {
+    fn unknown_count_is_an_error() {
         let tree = Tree::new();
         tree.file("flat_structs.rs", "len = CASE_LEN;\n");
-        tree.file("warmup/flat_structs_1", "");
-        tree.file("debug/flat", "");
+        tree.dir("warmup/flat_structs/1");
+        tree.dir("debug/flat_structs/flat");
         let error = load(&tree.0).unwrap_err().to_string();
         assert!(error.contains("unknown case"), "{error}");
     }
@@ -366,8 +375,8 @@ mod tests {
     fn missing_template_names_the_kind() {
         let tree = Tree::new();
         tree.file("flat_structs.rs", "len = CASE_LEN;\n");
-        tree.file("warmup/flat_structs_1", "");
-        tree.file("debug/one_call_256", "");
+        tree.dir("warmup/flat_structs/1");
+        tree.dir("debug/one_call/256");
         let error = load(&tree.0).unwrap_err().to_string();
         assert!(error.contains("one_call.rs"), "{error}");
     }
@@ -376,9 +385,9 @@ mod tests {
     fn duplicate_counts_are_an_error() {
         let tree = Tree::new();
         tree.file("flat_structs.rs", "len = CASE_LEN;\n");
-        tree.file("warmup/flat_structs_1", "");
-        tree.file("debug/flat_structs_64", "");
-        tree.file("debug/flat_structs_064", "");
+        tree.dir("warmup/flat_structs/1");
+        tree.dir("debug/flat_structs/64");
+        tree.dir("debug/flat_structs/064");
         let error = load(&tree.0).unwrap_err().to_string();
         assert!(error.contains("duplicate case"), "{error}");
     }
@@ -393,15 +402,35 @@ mod tests {
 
         let nested = Tree::new();
         nested.file("flat_structs.rs", "len = CASE_LEN;\n");
-        nested.file("warmup/flat_structs_1", "");
+        nested.dir("warmup/flat_structs/1");
         nested.dir("extra");
         let error = load(&nested.0).unwrap_err().to_string();
+        assert!(error.contains("unexpected entry"), "{error}");
+
+        let marker_file = Tree::new();
+        marker_file.file("flat_structs.rs", "len = CASE_LEN;\n");
+        marker_file.file("warmup/flat_structs_1", "");
+        let error = load(&marker_file.0).unwrap_err().to_string();
         assert!(error.contains("unexpected entry"), "{error}");
 
         let marker_dir = Tree::new();
         marker_dir.file("flat_structs.rs", "len = CASE_LEN;\n");
         marker_dir.dir("debug/flat_structs_1");
         let error = load(&marker_dir.0).unwrap_err().to_string();
+        assert!(error.contains("unexpected entry"), "{error}");
+
+        let count_file = Tree::new();
+        count_file.file("flat_structs.rs", "len = CASE_LEN;\n");
+        count_file.dir("warmup/flat_structs/1");
+        count_file.file("debug/flat_structs/64", "");
+        let error = load(&count_file.0).unwrap_err().to_string();
+        assert!(error.contains("unexpected entry"), "{error}");
+
+        let filled = Tree::new();
+        filled.file("flat_structs.rs", "len = CASE_LEN;\n");
+        filled.dir("warmup/flat_structs/1");
+        filled.file("debug/flat_structs/64/note.txt", "nope");
+        let error = load(&filled.0).unwrap_err().to_string();
         assert!(error.contains("unexpected entry"), "{error}");
     }
 

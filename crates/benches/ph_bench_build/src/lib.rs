@@ -1,9 +1,8 @@
 //! Runs hyperfine scenarios against a downstream crate.
 //!
-//! A bench points [`Bench`] at a case directory. The directory's folders and
-//! file names select the warmup, debug, incremental, and release cases and
-//! supply each case's source. The dependency compile is paid once, before the
-//! case times.
+//! A bench points [`Bench`] at a case directory. The directory's folder names
+//! select the warmup, debug, incremental, and release cases and supply each
+//! case's source. The dependency compile is paid once, before the case times.
 
 mod cases;
 mod engine;
@@ -91,12 +90,13 @@ impl Bench {
         self
     }
 
-    /// Directory whose folders and files select the cases.
+    /// Directory whose folder names select the cases.
     ///
-    /// `warmup`, `debug`, `incremental`, and `release` are the group folders.
-    /// A file in a group folder names one case, `{kind}_{count}`, for example
-    /// `flat_structs_64`. That file's bytes are not read. Kinds run in name
-    /// order. Counts run in numeric order. Every file in a group is launched.
+    /// `warmup`, `debug`, `incremental`, and `release` are the group
+    /// directories. Under a group, each kind is a directory named like its
+    /// template stem, and each count is an empty directory whose name is the
+    /// decimal count. For example, `debug/flat_structs/64`. Kinds run in name
+    /// order. Counts run in numeric order. Every count directory is launched.
     ///
     /// `{kind}.rs` in the case directory is the source. `CASE_LEN` in that
     /// file is replaced with the count. When `kind` ends in `s` and the case
