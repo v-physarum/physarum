@@ -8,6 +8,9 @@ TODO: the owner has not defined the project purpose (library, CLI, or service). 
 
 - `Cargo.toml`, `src/` — the `physarum` package and the workspace root.
 - `crates/benches/ph_bench_build/` — hyperfine runner. A bench selects scenarios and runs them.
+- `crates/util/ph_util_foreach/` — procedural macro `impl_foreach`.
+- `tests/crates/ph_util_foreach/` — tests of that macro. See the test rules below.
+- `benches/crates/ph_util_foreach/` — benchmarks of that macro. See the benchmark rules below.
 - `docs/adr/` — architecture decision records. See `docs/adr/README.md`.
 - `.github/` — CI workflow and issue and pull request templates.
 - `rust-toolchain.toml`, `rustfmt.toml` — pinned stable toolchain and formatting.
@@ -95,11 +98,13 @@ Cargo only forwards `-D` to Clippy when it comes after `--`.
 
 `cargo build` compiles the crate. There is no binary to run yet.
 
+`cargo bench --bench ph_util_foreach_measure` asks `ph_bench_build` to time a downstream build of `ph_util_foreach`.
+
 ## How agents should work
 
 - Open small pull requests against `main`. Do not merge unless the owner asks.
 - Behavior changes need tests. `cargo test` must pass.
-- Keep CI green. The commands above are what CI runs.
+- Keep CI green. The format, clippy, and test commands above are what the check job runs. The user compile time job runs `cargo bench --bench ph_util_foreach_measure --offline`.
 - Do not expand scope past the requested change.
 - If a task needs a project purpose, stop and leave a TODO instead of guessing.
 

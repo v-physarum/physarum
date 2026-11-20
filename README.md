@@ -2,6 +2,11 @@
 
 TODO: the project purpose is not defined. The owner should replace this paragraph with a short description.
 
+## Crates
+
+- `physarum` (repository root) — package skeleton. TODO: the owner fills in the purpose.
+- [`ph_util_foreach`](crates/util/ph_util_foreach/README.md) — `impl_foreach` procedural macro.
+
 ## Build
 
 Install the Rust toolchain pinned in [`rust-toolchain.toml`](rust-toolchain.toml) (stable, with `rustfmt` and `clippy`), then:

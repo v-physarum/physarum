@@ -1,3 +1,7 @@
 edition = "2024"
 max_width = 100
 newline_style = "Unix"
+
+# Struct patterns stay on one line when they fit. 100 equals max_width and makes
+# rustfmt warn while formatting some files, so this stays just under that.
+struct_lit_width = 90
