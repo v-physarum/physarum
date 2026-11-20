@@ -44,13 +44,10 @@ pub(crate) enum ErrorKind {
     /// `path` is not a directory of case groups.
     #[error("{path} is not a case directory")]
     NotACaseDirectory { path: String },
-    /// `path` is not a template or a group folder.
+    /// `path` is not a group folder, a kind folder, or a source file.
     #[error("unexpected entry {path}")]
     UnexpectedEntry { path: String },
-    /// `case` names a kind with no template file.
-    #[error("case {case} has no template {template}")]
-    MissingTemplate { case: String, template: String },
-    /// Two count directories name the same case.
+    /// Two count files name the same case.
     #[error("duplicate case {case}")]
     DuplicateCase { case: String },
     /// The case directory has no warmup case.

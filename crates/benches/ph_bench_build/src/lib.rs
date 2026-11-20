@@ -1,8 +1,9 @@
 //! Runs hyperfine scenarios against a downstream crate.
 //!
-//! A bench points [`Bench`] at a case directory. The directory's folder names
-//! select the warmup, debug, incremental, and release cases and supply each
-//! case's source. The dependency compile is paid once, before the case times.
+//! A bench points [`Bench`] at a case directory. Group folders and the Rust
+//! files under them select the warmup, debug, incremental, and release cases
+//! and supply each case's source. The dependency compile is paid once, before
+//! the case times.
 
 mod cases;
 mod engine;
@@ -90,20 +91,20 @@ impl Bench {
         self
     }
 
-    /// Directory whose folder names select the cases.
+    /// Directory whose folders and Rust files select the cases.
     ///
     /// `warmup`, `debug`, `incremental`, and `release` are the group
-    /// directories. Under a group, each kind is a directory named like its
-    /// template stem, and each count is an empty directory whose name is the
-    /// decimal count. For example, `debug/flat_structs/64`. Kinds run in name
-    /// order. Counts run in numeric order. Every count directory is launched.
+    /// directories. Under a group, each kind is a directory. Each count is a
+    /// non-empty `{count}.rs` file in that kind directory, for example
+    /// `debug/flat_structs/64.rs`. That file's text is the source. Kinds run
+    /// in name order. Counts run in numeric order. Every count file is
+    /// launched.
     ///
-    /// `{kind}.rs` in the case directory is the source. `CASE_LEN` in that
-    /// file is replaced with the count. When `kind` ends in `s` and the case
-    /// directory also contains that name without the final `s` as a `.rs`
-    /// file, the shorter file is the item and `{kind}.rs` is the header. The
-    /// item is pasted once per count. `INDEX` is the paste index. `NEXT` in
-    /// the item is the following index.
+    /// `CASE_LEN` in the count file is replaced with the count. When `kind`
+    /// ends in `s` and the kind directory also contains that name without the
+    /// final `s` as a `.rs` file, the shorter file is the item and the count
+    /// file is the header. The item is pasted once per count. `INDEX` is the
+    /// paste index. `NEXT` in the item is the following index.
     ///
     /// At least one warmup case is required.
     pub fn cases(mut self, directory: impl Into<PathBuf>) -> Self {
