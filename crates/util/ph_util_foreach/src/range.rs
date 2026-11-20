@@ -241,42 +241,12 @@ impl EvalCtx<'_> {
         let value = match step.bound {
             Bound::Int(value) => value,
             Bound::Here { offset } => add_offset(self.index, offset, step.span)?,
-            Bound::LastIndex => return Err(StepError::LastIndex(step.span).into()),
+            Bound::LastIndex => return Err(Error::StepLastIndex(step.span)),
         };
         if value <= 0 {
-            return Err(StepError::NotPositive(step.span).into());
+            return Err(Error::StepNotPositive(step.span));
         }
         Ok(value)
-    }
-}
-
-/// A step that cannot be used. The message is written when this becomes [`Error`].
-enum StepError {
-    LastIndex(Span),
-    NotPositive(Span),
-}
-
-impl StepError {
-    fn span(&self) -> Span {
-        match *self {
-            Self::LastIndex(span) | Self::NotPositive(span) => span,
-        }
-    }
-}
-
-impl From<StepError> for Error {
-    fn from(error: StepError) -> Self {
-        let message = error.to_string();
-        Error::new(error.span(), message)
-    }
-}
-
-impl std::fmt::Display for StepError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(match self {
-            Self::LastIndex(_) => "step must be a positive integer literal or `#±N`",
-            Self::NotPositive(_) => "step must be a positive integer",
-        })
     }
 }
 
@@ -314,7 +284,7 @@ impl OuterRange {
 /// Parses `tokens` as one range. `style` decides what `-1` and `#` mean.
 pub(crate) fn parse_range(tokens: &[TokenTree], style: BoundStyle) -> Result<RangeExpr> {
     if tokens.is_empty() {
-        return Err(Error::new(Span::call_site(), "expected a range"));
+        return Err(Error::ExpectedRange(Span::call_site()));
     }
     RangeParse::open(tokens, style).parse_closed()
 }
@@ -355,10 +325,7 @@ impl<'a> RangeParse<'a> {
     fn parse_closed(mut self) -> Result<RangeExpr> {
         let start = self.cursor.maybe_bound(self.style)?;
         if start.is_some() && !self.cursor.starts_with_range_op() {
-            return Err(Error::new(
-                self.cursor.error_span(),
-                "expected `..` or `..=`",
-            ));
+            return Err(Error::ExpectedDots(self.cursor.error_span()));
         }
         self.with_start(start).finish()
     }
@@ -401,31 +368,26 @@ impl<'a> RangeParse<'a> {
             return Ok(None);
         }
         self.cursor.parse_pathsep()?;
-        self.cursor
-            .require_bound(BoundStyle::Step, "expected a step after `::`")
-            .map(Some)
+        self.cursor.require_step().map(Some)
     }
 
     fn reject_trailing(&self) -> Result<()> {
         if self.cursor.is_empty() {
             return Ok(());
         }
-        let message = if self.style == BoundStyle::Pattern {
-            "expected exactly one range pattern inside `[]`"
+        let span = self.cursor.error_span();
+        Err(if self.style == BoundStyle::Pattern {
+            Error::OnePattern(span)
         } else {
-            "unexpected token in range"
-        };
-        Err(Error::new(self.cursor.error_span(), message))
+            Error::UnexpectedInRange(span)
+        })
     }
 }
 
 /// Indices selected by a finite outer range.
 pub(crate) fn compile_outer(range: &RangeExpr) -> Result<OuterRange> {
     let (Some(start_bound), Some(end_bound)) = (range.start, range.end) else {
-        return Err(Error::new(
-            range.span,
-            "open outer range is unbounded; write `A..B` or `A..=B`, optionally with a `::S` step",
-        ));
+        return Err(Error::OpenOuter(range.span));
     };
     let start = expect_outer_int(start_bound)?;
     let end = expect_outer_int(end_bound)?;
@@ -440,7 +402,7 @@ pub(crate) fn compile_outer(range: &RangeExpr) -> Result<OuterRange> {
     };
     window.reject_inverted(range.span)?;
     let Some(count) = window.step_count(gap) else {
-        return Err(Error::new(range.span, "range is too large"));
+        return Err(Error::RangeTooLarge(range.span));
     };
     if count == 0 {
         return Ok(OuterRange {
@@ -451,13 +413,13 @@ pub(crate) fn compile_outer(range: &RangeExpr) -> Result<OuterRange> {
         });
     }
     let Ok(steps) = i128::try_from(count - 1) else {
-        return Err(Error::new(range.span, "range is too large"));
+        return Err(Error::RangeTooLarge(range.span));
     };
     let Some(hi) = steps
         .checked_mul(gap)
         .and_then(|offset| start.checked_add(offset))
     else {
-        return Err(Error::new(range.span, "range is too large"));
+        return Err(Error::RangeTooLarge(range.span));
     };
     Ok(OuterRange {
         lo: start,
@@ -509,31 +471,26 @@ pub(crate) fn visit_range(
 }
 
 fn outside(span: Span, value: i128, domain: &Domain) -> Error {
-    Error::new(
+    Error::OutsideDomain {
         span,
-        format!(
-            "bound {value} is outside the domain {}..={}",
-            domain.lo, domain.hi
-        ),
-    )
+        value,
+        lo: domain.lo,
+        hi: domain.hi,
+    }
 }
 
 fn expect_outer_int(bound: SpannedBound) -> Result<i128> {
     match bound.bound {
         Bound::Int(value) => Ok(value),
-        Bound::Here { .. } | Bound::LastIndex => {
-            Err(Error::new(bound.span, "outer range cannot use `#`"))
-        }
+        Bound::Here { .. } | Bound::LastIndex => Err(Error::OuterHash(bound.span)),
     }
 }
 
 fn expect_positive_int_step(bound: SpannedBound) -> Result<i128> {
     match bound.bound {
         Bound::Int(value) if value > 0 => Ok(value),
-        Bound::Int(_) => Err(Error::new(bound.span, "step must be a positive integer")),
-        Bound::Here { .. } | Bound::LastIndex => {
-            Err(Error::new(bound.span, "outer range cannot use `#`"))
-        }
+        Bound::Int(_) => Err(Error::StepNotPositive(bound.span)),
+        Bound::Here { .. } | Bound::LastIndex => Err(Error::OuterHash(bound.span)),
     }
 }
 
@@ -546,9 +503,7 @@ fn eval_pattern_bound(bound: SpannedBound, ctx: &EvalCtx<'_>) -> Result<i128> {
 }
 
 fn add_offset(index: i128, offset: i128, span: Span) -> Result<i128> {
-    index
-        .checked_add(offset)
-        .ok_or_else(|| Error::new(span, "index overflow computing a `#` bound"))
+    index.checked_add(offset).ok_or(Error::IndexOverflow(span))
 }
 
 /// `start..end` or `start..=end`. The step stays beside the range.
@@ -588,12 +543,12 @@ impl Window {
 
     fn reject_inverted(&self, span: Span) -> Result<()> {
         if self.start() > self.end() {
-            let rendered = if self.is_inclusive() {
-                format!("{}..={}", self.start(), self.end())
-            } else {
-                format!("{}..{}", self.start(), self.end())
-            };
-            return Err(Error::new(span, format!("invalid range {rendered}")));
+            return Err(Error::InvalidRange {
+                span,
+                start: self.start(),
+                end: self.end(),
+                inclusive: self.is_inclusive(),
+            });
         }
         Ok(())
     }
@@ -788,17 +743,8 @@ fn egcd(mut a: i128, mut b: i128) -> Option<(i128, i128)> {
 
 /// A bound that was missing or invalid.
 enum BoundError {
-    Absent { span: Span, message: &'static str },
+    Absent(Span),
     Invalid(Error),
-}
-
-impl BoundError {
-    fn absent_message(self, message: &'static str) -> Self {
-        match self {
-            Self::Absent { span, .. } => Self::Absent { span, message },
-            Self::Invalid(error) => Self::Invalid(error),
-        }
-    }
 }
 
 impl From<Error> for BoundError {
@@ -810,7 +756,7 @@ impl From<Error> for BoundError {
 impl From<BoundError> for Error {
     fn from(error: BoundError) -> Self {
         match error {
-            BoundError::Absent { span, message } => Error::new(span, message),
+            BoundError::Absent(span) => Self::ExpectedBound(span),
             BoundError::Invalid(error) => error,
         }
     }
@@ -870,18 +816,18 @@ impl<'a> Cursor<'a> {
 
     fn parse_range_op(&mut self) -> Result<bool> {
         let Some(first) = self.punct(0) else {
-            return Err(Error::new(self.error_span(), "expected `..` or `..=`"));
+            return Err(Error::ExpectedDots(self.error_span()));
         };
         if first.as_char() != '.' || first.spacing() != Spacing::Joint {
-            return Err(Error::new(first.span(), "expected `..` or `..=`"));
+            return Err(Error::ExpectedDots(first.span()));
         }
         let start_span = first.span();
         self.bump();
         let Some(second) = self.punct(0) else {
-            return Err(Error::new(start_span, "expected `..` or `..=`"));
+            return Err(Error::ExpectedDots(start_span));
         };
         if second.as_char() != '.' {
-            return Err(Error::new(second.span(), "expected `..` or `..=`"));
+            return Err(Error::ExpectedDots(second.span()));
         }
         self.bump();
         // `..#` and `..::S` keep the second `.` joint because `#` and `:` are
@@ -891,14 +837,14 @@ impl<'a> Cursor<'a> {
             return Ok(true);
         }
         if self.punct(0).is_some_and(|punct| punct.as_char() == '.') {
-            return Err(Error::new(start_span, "expected `..` or `..=`"));
+            return Err(Error::ExpectedDots(start_span));
         }
         Ok(false)
     }
 
     fn parse_pathsep(&mut self) -> Result<()> {
         if !self.starts_with_pathsep() {
-            return Err(Error::new(self.error_span(), "expected `::`"));
+            return Err(Error::ExpectedPathSep(self.error_span()));
         }
         self.bump();
         self.bump();
@@ -908,14 +854,17 @@ impl<'a> Cursor<'a> {
     fn maybe_bound(&mut self, style: BoundStyle) -> Result<Option<SpannedBound>> {
         match self.parse_bound(style) {
             Ok(bound) => Ok(Some(bound)),
-            Err(BoundError::Absent { .. }) => Ok(None),
+            Err(BoundError::Absent(_)) => Ok(None),
             Err(error) => Err(error.into()),
         }
     }
 
-    fn require_bound(&mut self, style: BoundStyle, message: &'static str) -> Result<SpannedBound> {
-        self.parse_bound(style)
-            .map_err(|error| error.absent_message(message).into())
+    fn require_step(&mut self) -> Result<SpannedBound> {
+        self.parse_bound(BoundStyle::Step)
+            .map_err(|error| match error {
+                BoundError::Absent(span) => Error::ExpectedStep(span),
+                BoundError::Invalid(error) => error,
+            })
     }
 
     fn parse_bound(&mut self, style: BoundStyle) -> std::result::Result<SpannedBound, BoundError> {
@@ -942,7 +891,7 @@ impl<'a> Cursor<'a> {
             }
             let signed = magnitude
                 .checked_neg()
-                .ok_or_else(|| Error::from(IntLiteralError::Overflow(span)))?;
+                .ok_or(Error::LiteralOverflow(span))?;
             return Ok(SpannedBound::int(signed, span));
         }
         let parsed = if let Some(TokenTree::Literal(literal)) = self.tokens.get(self.index) {
@@ -958,10 +907,7 @@ impl<'a> Cursor<'a> {
     }
 
     fn absent(&self) -> BoundError {
-        BoundError::Absent {
-            span: self.error_span(),
-            message: "expected a bound",
-        }
+        BoundError::Absent(self.error_span())
     }
 
     fn parse_hash_offset(&mut self) -> Result<i128> {
@@ -971,21 +917,21 @@ impl<'a> Cursor<'a> {
             _ => return Ok(0),
         };
         let Some(sign_punct) = self.punct(0) else {
-            return Err(IntLiteralError::MissingAfterSign(Span::call_site()).into());
+            return Err(Error::MissingAfterSign(Span::call_site()));
         };
         let sign_span = sign_punct.span();
         self.bump();
         let magnitude = if let Some(TokenTree::Literal(literal)) = self.tokens.get(self.index) {
             parse_unsuffixed_int(literal)?
         } else {
-            return Err(IntLiteralError::MissingAfterSign(sign_span).into());
+            return Err(Error::MissingAfterSign(sign_span));
         };
         self.bump();
         let offset = match sign {
             1 => magnitude,
             _ => magnitude
                 .checked_neg()
-                .ok_or_else(|| Error::from(IntLiteralError::Overflow(sign_span)))?,
+                .ok_or(Error::LiteralOverflow(sign_span))?,
         };
         Ok(offset)
     }
@@ -1015,41 +961,9 @@ fn parse_unsuffixed_int(literal: &Literal) -> Result<i128> {
 fn parse_int_digits(text: &str, span: Span) -> Result<i128> {
     let (radix, digits) = split_radix(text);
     if digits.is_empty() || !digits.bytes().all(|byte| is_radix_digit(byte, radix)) {
-        return Err(IntLiteralError::Unsuffixed(span).into());
+        return Err(Error::UnsuffixedLiteral(span));
     }
-    i128::from_str_radix(digits, radix).map_err(|_| IntLiteralError::Overflow(span).into())
-}
-
-/// A rejected integer literal. The message is written when this becomes [`Error`].
-enum IntLiteralError {
-    Unsuffixed(Span),
-    Overflow(Span),
-    MissingAfterSign(Span),
-}
-
-impl IntLiteralError {
-    fn span(&self) -> Span {
-        match *self {
-            Self::Unsuffixed(span) | Self::Overflow(span) | Self::MissingAfterSign(span) => span,
-        }
-    }
-}
-
-impl From<IntLiteralError> for Error {
-    fn from(error: IntLiteralError) -> Self {
-        let message = error.to_string();
-        Error::new(error.span(), message)
-    }
-}
-
-impl std::fmt::Display for IntLiteralError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(match self {
-            Self::Unsuffixed(_) => "expected an unsuffixed integer literal",
-            Self::Overflow(_) => "integer literal overflows `i128`",
-            Self::MissingAfterSign(_) => "expected an integer literal after `#` `+` or `#` `-`",
-        })
-    }
+    i128::from_str_radix(digits, radix).map_err(|_| Error::LiteralOverflow(span))
 }
 
 fn split_radix(text: &str) -> (u32, &str) {
