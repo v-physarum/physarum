@@ -1,0 +1,19 @@
+[package]
+name = "ph_build_test"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.100"
+license = "MIT"
+repository = "https://github.com/v-physarum/physarum"
+description = "Release rustc probe that emits LLVM IR and assembly."
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+
+[dependencies]
+thiserror = { version = "2.0.21", default-features = false, features = ["std"] }
