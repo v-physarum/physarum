@@ -237,6 +237,28 @@ pub(crate) struct EvalCtx<'a> {
     pub(crate) domain: &'a Domain,
 }
 
+impl EvalCtx<'_> {
+    fn eval_step(self, step: Option<SpannedBound>) -> Result<i128> {
+        let Some(step) = step else {
+            return Ok(1);
+        };
+        let value = match step.bound {
+            Bound::Int(value) => value,
+            Bound::Here { offset } => add_offset(self.index, offset, step.span)?,
+            Bound::LastIndex => {
+                return Err(Error::new(
+                    step.span,
+                    "step must be a positive integer literal or `#±N`",
+                ));
+            }
+        };
+        if value <= 0 {
+            return Err(Error::new(step.span, "step must be a positive integer"));
+        }
+        Ok(value)
+    }
+}
+
 /// Finite outer range stored as an arithmetic progression.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct OuterRange {
@@ -434,7 +456,7 @@ pub(crate) fn visit_range(
     ctx: &EvalCtx<'_>,
     mut visit: impl FnMut(i128) -> Result<()>,
 ) -> Result<()> {
-    let step = eval_step(range.step, ctx)?;
+    let step = ctx.eval_step(range.step)?;
     let start = match range.start {
         Some(bound) => eval_pattern_bound(bound, ctx)?,
         None => ctx.domain.lo,
@@ -495,26 +517,6 @@ fn expect_positive_int_step(bound: SpannedBound) -> Result<i128> {
             Err(Error::new(bound.span, "outer range cannot use `#`"))
         }
     }
-}
-
-fn eval_step(step: Option<SpannedBound>, ctx: &EvalCtx<'_>) -> Result<i128> {
-    let Some(step) = step else {
-        return Ok(1);
-    };
-    let value = match step.bound {
-        Bound::Int(value) => value,
-        Bound::Here { offset } => add_offset(ctx.index, offset, step.span)?,
-        Bound::LastIndex => {
-            return Err(Error::new(
-                step.span,
-                "step must be a positive integer literal or `#±N`",
-            ));
-        }
-    };
-    if value <= 0 {
-        return Err(Error::new(step.span, "step must be a positive integer"));
-    }
-    Ok(value)
 }
 
 fn eval_pattern_bound(bound: SpannedBound, ctx: &EvalCtx<'_>) -> Result<i128> {
