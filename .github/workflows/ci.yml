@@ -65,3 +65,30 @@ jobs:
             target/ph-util-foreach-build-time/clean.log
             target/ph-util-foreach-build-time/incremental.log
             target/ph-util-foreach-build-time/cargo-timing.html
+
+  expand-time:
+    name: expand time
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: Install pinned Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v2.0.1
+        with:
+          build-warnings: ""
+
+      - name: Measure impl_foreach in a user crate
+        run: ./scripts/measure-ph-util-foreach-expand.sh
+
+      - name: Upload expand-time report
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: ph-util-foreach-expand-time
+          if-no-files-found: error
+          path: |
+            target/ph-util-foreach-expand/report.txt
+            target/ph-util-foreach-expand/logs

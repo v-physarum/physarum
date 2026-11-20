@@ -154,6 +154,19 @@ An empty hole-edge slice expands to no tokens.
 
 `scripts/measure-ph-util-foreach-build.sh` times a clean `cargo build -p ph_util_foreach --offline --locked --timings` in a fresh target directory, then a second build with no source changes. CI runs that script, writes the report to the job summary, and uploads it as the `ph-util-foreach-build-time` artifact.
 
+## User compile time
+
+`scripts/measure-ph-util-foreach-expand.sh` times the macro from a downstream crate. It compiles `ph_util_foreach` once, then for each case cleans only the user crate and runs `cargo build`. Incremental compilation is off, so each run expands the macro again. The report is the median of three dev builds. CI job `expand time` repeats this and uploads the `ph-util-foreach-expand-time` artifact.
+
+| Case | User source |
+| --- | --- |
+| `flat_structs_N` | one call, `pub struct Ix + #` for `0..N` |
+| `hand_structs_N` | the same `N` structs written out in the crate |
+| `one_call_256` | one call that emits 256 structs |
+| `many_calls_256` | 256 calls that each emit one struct |
+| `fan_take_N` | the `impl_take!` fan pattern for `0..N` |
+| `fan_rows_N` | one const per index, `stringify!` of the fan rows `(T + #, U + #)[0..=#]` |
+
 ## License
 
 Licensed under the [MIT License](../../../LICENSE).
