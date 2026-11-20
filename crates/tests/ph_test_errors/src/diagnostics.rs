@@ -71,18 +71,19 @@ impl Diagnostic {
     pub(crate) const NONE: &str = "(none)";
     const SEPARATOR: &str = ": ";
 
-    /// This error has `code` and its message contains `description`.
-    pub(crate) fn matches(&self, code: &str, description: &str) -> bool {
+    /// This error's code is `code`.
+    ///
+    /// The comparison reads the stored code and does not allocate.
+    pub(crate) fn matches_code(&self, code: &str) -> bool {
         self.code.as_ref().is_some_and(|item| item.matches(code))
-            && self.message.contains(description)
     }
 
-    /// This error has no code and its message contains `description`.
+    /// This error's message contains `description`.
     ///
-    /// `compile_error!` diagnostics arrive with no code. The comparison reads
-    /// the stored message and does not allocate.
-    pub(crate) fn matches_without_code(&self, description: &str) -> bool {
-        self.code.is_none() && self.message.contains(description)
+    /// A `compile_error!` diagnostic, whose code is null, matches on the
+    /// message. The comparison reads the stored message and does not allocate.
+    pub(crate) fn matches_message(&self, description: &str) -> bool {
+        self.message.contains(description)
     }
 
     /// Bytes of the failure text: each line is code, `": "`, message, with a

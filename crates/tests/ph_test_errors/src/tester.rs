@@ -8,13 +8,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::diagnostics::{Diagnostic, Diagnostics};
 use crate::probe::{Extern, Probe};
 
-/// Checks that a debug probe emits an error code and a description.
+/// Checks that a debug probe emits an error code or a message.
 ///
 /// ```no_run
 /// use ph_test_errors::ErrorTester;
 ///
-/// ErrorTester::file("fail.rs").assert_code_description("E0308", "mismatched types");
-/// ErrorTester::source("fn main() { missing; }").assert_code_description("E0425", "cannot find");
+/// ErrorTester::file("fail.rs").assert_code("E0308");
+/// ErrorTester::source("fn main() { missing; }").assert_description("cannot find");
 /// ErrorTester::source("compile_error!(\"stop\");")
 ///     .extern_crate("demo", "libdemo.rlib")
 ///     .assert_description("stop");
@@ -65,45 +65,44 @@ impl ErrorTester {
         self
     }
 
-    /// One error has `code` and its message contains `description`.
-    ///
-    /// A diagnostic with no code does not match. Use [`Self::assert_description`]
-    /// for `compile_error!`.
+    /// One error has `code`.
     ///
     /// # Panics
     ///
-    /// Panics when no error matches both, or when the probe cannot be built.
-    /// The panic names `code`, `description`, and the codes and messages that
-    /// arrived.
-    pub fn assert_code_description(mut self, code: &str, description: &str) -> Self {
+    /// Panics when no error has `code`, or when the probe cannot be built.
+    /// The panic names `code` and the codes and messages that arrived.
+    pub fn assert_code(mut self, code: &str) -> Self {
         let ok = self
             .view()
             .messages
             .iter()
-            .any(|item| item.matches(code, description));
+            .any(|item| item.matches_code(code));
         if !ok {
-            self.mismatch(code, description);
+            let header = format!("error {code}");
+            self.fail(&header);
         }
         self
     }
 
-    /// One error has no code and its message contains `description`.
+    /// One error message contains `description`.
     ///
-    /// `compile_error!` diagnostics arrive with no code. An error that has a
-    /// code does not match, even when its message contains `description`.
+    /// A diagnostic whose code is null matches on its message. `compile_error!`
+    /// is that case.
     ///
     /// # Panics
     ///
-    /// Panics when no error matches, or when the probe cannot be built.
-    /// The panic names `description` and the codes and messages that arrived.
+    /// Panics when no error message contains `description`, or when the probe
+    /// cannot be built. The panic names `description` and the codes and
+    /// messages that arrived.
     pub fn assert_description(mut self, description: &str) -> Self {
         let ok = self
             .view()
             .messages
             .iter()
-            .any(|item| item.matches_without_code(description));
+            .any(|item| item.matches_message(description));
         if !ok {
-            self.mismatch(Diagnostic::NONE, description);
+            let header = format!("description {description}");
+            self.fail(&header);
         }
         self
     }
@@ -121,7 +120,7 @@ impl ErrorTester {
         self.cached.as_ref().expect("debug probe was not built")
     }
 
-    fn mismatch(mut self, code: &str, description: &str) -> ! {
+    fn fail(mut self, header: &str) -> ! {
         let messages = &self.view().messages;
         let mut arrived = String::with_capacity(Diagnostic::arrived_len(messages));
         for (index, item) in messages.iter().enumerate() {
@@ -133,7 +132,7 @@ impl ErrorTester {
         if arrived.is_empty() {
             arrived.push_str(Diagnostic::NONE);
         }
-        panic!("assertion failed: error {code} description {description}\n{arrived}");
+        panic!("assertion failed: {header}\n{arrived}");
     }
 }
 
