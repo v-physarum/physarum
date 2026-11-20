@@ -39,20 +39,12 @@ enum Input {
 impl ErrorTester {
     /// A probe read from `path`.
     pub fn file(path: impl Into<PathBuf>) -> Self {
-        Self {
-            input: Input::File(path.into()),
-            externs: Vec::new(),
-            cached: None,
-        }
+        Self { input: Input::File(path.into()), externs: Vec::new(), cached: None }
     }
 
     /// A probe whose source is `text`. `rustc` sees it as `probe.rs`.
     pub fn source(text: impl Into<String>) -> Self {
-        Self {
-            input: Input::Text(text.into()),
-            externs: Vec::new(),
-            cached: None,
-        }
+        Self { input: Input::Text(text.into()), externs: Vec::new(), cached: None }
     }
 
     /// Passes `--extern name=path` to `rustc` for this probe.

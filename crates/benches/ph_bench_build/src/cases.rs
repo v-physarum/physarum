@@ -65,10 +65,7 @@ struct CountFile {
 /// missing or duplicated, or a source file cannot be read.
 pub(crate) fn load(directory: &Path) -> Result<Groups> {
     if !directory.is_dir() {
-        return Err(ErrorKind::NotACaseDirectory {
-            path: directory.display().to_string(),
-        }
-        .into());
+        return Err(ErrorKind::NotACaseDirectory { path: directory.display().to_string() }.into());
     }
     let groups = split(directory)?;
     let mut discovered = Groups::default();
@@ -220,10 +217,7 @@ fn singular_stem(kind: &str) -> Option<&str> {
 fn reject_duplicates(kind: &str, counts: &[CountFile]) -> Result<()> {
     for pair in counts.windows(2) {
         if pair[0].count == pair[1].count {
-            return Err(ErrorKind::DuplicateCase {
-                case: case_name(kind, pair[0].count),
-            }
-            .into());
+            return Err(ErrorKind::DuplicateCase { case: case_name(kind, pair[0].count) }.into());
         }
     }
     Ok(())
@@ -256,10 +250,7 @@ fn file_stem(path: &Path) -> Option<&str> {
 }
 
 fn unexpected(path: &Path) -> Error {
-    ErrorKind::UnexpectedEntry {
-        path: path.display().to_string(),
-    }
-    .into()
+    ErrorKind::UnexpectedEntry { path: path.display().to_string() }.into()
 }
 
 #[cfg(test)]
