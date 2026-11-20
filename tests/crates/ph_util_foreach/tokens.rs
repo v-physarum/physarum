@@ -32,6 +32,26 @@ impl_foreach!(range = 0..=3, body = {
     pub struct Incl + #;
 });
 
+impl_foreach!(range = 0x10..0x12, body = {
+    pub struct Hex + #;
+});
+
+impl_foreach!(range = 0X10..0X12, body = {
+    pub struct HexUpper + #;
+});
+
+impl_foreach!(range = 0o10..0o12, body = {
+    pub struct Oct + #;
+});
+
+impl_foreach!(range = 0b1000..0b1010, body = {
+    pub struct Bin + #;
+});
+
+impl_foreach!(range = 0x1_0..0x1_2, body = {
+    pub struct HexSep + #;
+});
+
 impl_foreach!(range = 1..10::2, body = {
     pub struct Odd + #;
 });
@@ -247,6 +267,8 @@ impl_foreach!(range = 0..1, body = {
 #[test]
 fn outer_ranges_paste_the_selected_indexes() {
     let _ = (Incl0, Incl1, Incl2, Incl3);
+    let _ = (Hex16, Hex17, HexUpper16, HexUpper17);
+    let _ = (Oct8, Oct9, Bin8, Bin9, HexSep16, HexSep17);
     let _ = (Odd1, Odd3, Odd5, Odd7, Odd9);
     let _ = (Win2, Win3, Win4, Win5);
     let _ = One3;

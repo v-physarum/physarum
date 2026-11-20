@@ -997,9 +997,15 @@ impl<'a> Cursor<'a> {
     }
 }
 
-fn strip_radix_prefix<'a>(text: &'a str, prefixes: &[&str]) -> Option<&'a str> {
-    prefixes.iter().find_map(|prefix| text.strip_prefix(prefix))
-}
+const DECIMAL_RADIX: u32 = 10;
+const HEX_RADIX: u32 = 16;
+const OCTAL_RADIX: u32 = 8;
+const BINARY_RADIX: u32 = 2;
+
+const RADIX_MARKER: u8 = b'0';
+const HEX_MARKER: u8 = b'x';
+const OCTAL_MARKER: u8 = b'o';
+const BINARY_MARKER: u8 = b'b';
 
 fn parse_unsuffixed_int(literal: &Literal) -> Result<i128> {
     let text = literal.to_string();
@@ -1013,18 +1019,40 @@ fn parse_unsuffixed_int(literal: &Literal) -> Result<i128> {
 }
 
 fn parse_int_digits(text: &str, span: Span) -> Result<i128> {
-    let (radix, digits) = if let Some(rest) = strip_radix_prefix(text, &["0x", "0X"]) {
-        (16, rest)
-    } else if let Some(rest) = strip_radix_prefix(text, &["0o", "0O"]) {
-        (8, rest)
-    } else if let Some(rest) = strip_radix_prefix(text, &["0b", "0B"]) {
-        (2, rest)
-    } else {
-        (10, text)
-    };
-    if digits.is_empty() || !digits.chars().all(|character| character.is_digit(radix)) {
+    let (radix, digits) = split_radix(text);
+    if digits.is_empty() || !digits.bytes().all(|byte| is_radix_digit(byte, radix)) {
         return Err(Error::new(span, "expected an unsuffixed integer literal"));
     }
     i128::from_str_radix(digits, radix)
         .map_err(|_| Error::new(span, "integer literal overflows `i128`"))
+}
+
+fn split_radix(text: &str) -> (u32, &str) {
+    let bytes = text.as_bytes();
+    let Some((&marker, rest)) = bytes.split_first() else {
+        return (DECIMAL_RADIX, text);
+    };
+    if marker != RADIX_MARKER {
+        return (DECIMAL_RADIX, text);
+    }
+    let Some((&kind, digits)) = rest.split_first() else {
+        return (DECIMAL_RADIX, text);
+    };
+    let radix = match kind.to_ascii_lowercase() {
+        HEX_MARKER => HEX_RADIX,
+        OCTAL_MARKER => OCTAL_RADIX,
+        BINARY_MARKER => BINARY_RADIX,
+        _ => return (DECIMAL_RADIX, text),
+    };
+    let prefix_len = bytes.len() - digits.len();
+    (radix, &text[prefix_len..])
+}
+
+fn is_radix_digit(byte: u8, radix: u32) -> bool {
+    let value = match byte {
+        b'0'..=b'9' => u32::from(byte - b'0'),
+        b'a'..=b'z' | b'A'..=b'Z' => u32::from(byte.to_ascii_lowercase() - b'a') + DECIMAL_RADIX,
+        _ => return false,
+    };
+    value < radix
 }
