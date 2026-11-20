@@ -55,18 +55,87 @@ impl Call for TokenStream {
     fn split_call(self) -> Result<(Vec<TokenTree>, Vec<TokenTree>)> {
         let tokens: Vec<TokenTree> = self.into_iter().collect();
         let span = tokens.first().map_or_else(Span::call_site, TokenTree::span);
-        let Some(comma_at) = tokens.iter().position(OneToken::is_comma) else {
-            if tokens.iter().any(OneToken::is_brace) {
-                return Err(Error::new(span, ErrorKind::CallForm));
+        if let Some(split) = tokens.unnamed_block(span)? {
+            return Ok(split);
+        }
+        tokens.named_call(span)
+    }
+}
+
+trait CallParts {
+    fn unnamed_block(&self, span: Span) -> Result<Option<(Vec<TokenTree>, Vec<TokenTree>)>>;
+    fn named_body_at(&self, brace_at: usize) -> bool;
+    fn range_of_block(&self, span: Span) -> Result<Vec<TokenTree>>;
+    fn named_call(&self, span: Span) -> Result<(Vec<TokenTree>, Vec<TokenTree>)>;
+}
+
+impl CallParts for [TokenTree] {
+    /// A trailing `{ ... }` is the body. It needs no name. A comma before it is
+    /// optional. `range = ...` still names the range when that name is written.
+    fn unnamed_block(&self, span: Span) -> Result<Option<(Vec<TokenTree>, Vec<TokenTree>)>> {
+        let Some(brace_at) = self.iter().rposition(OneToken::is_brace) else {
+            return Ok(None);
+        };
+        if brace_at + 1 != self.len() {
+            if self.named_body_at(brace_at) {
+                return Ok(None);
             }
+            let after = self.get(brace_at + 1).map_or(span, TokenTree::span);
+            return Err(Error::new(after, ErrorKind::UnexpectedAfterBody));
+        }
+        if self.named_body_at(brace_at) {
+            return Ok(None);
+        }
+        let mut head = self[..brace_at].to_vec();
+        if head.last().is_some_and(OneToken::is_comma) {
+            head.pop();
+        }
+        if head.is_empty() {
+            return Err(Error::new(span, ErrorKind::ExpectedRange));
+        }
+        let range = head.range_of_block(span)?;
+        let TokenTree::Group(group) = &self[brace_at] else {
+            return Err(Error::new(span, ErrorKind::ExpectedBody));
+        };
+        Ok(Some((range, group.stream().into_iter().collect())))
+    }
+
+    fn named_body_at(&self, brace_at: usize) -> bool {
+        brace_at >= 2
+            && self
+                .get(brace_at - 2)
+                .is_some_and(|tree| matches!(tree, TokenTree::Ident(name) if name == "body"))
+            && self.is_punct_at(brace_at - 1, '=')
+    }
+
+    fn range_of_block(&self, span: Span) -> Result<Vec<TokenTree>> {
+        let named_range = self
+            .first()
+            .is_some_and(|tree| matches!(tree, TokenTree::Ident(name) if name == "range"))
+            && self.is_punct_at(1, '=');
+        if named_range {
+            let value = self[2..].to_vec();
+            if value.is_empty() {
+                return Err(Error::new(span, ErrorKind::ExpectedRange));
+            }
+            return Ok(value);
+        }
+        if self.is_ident_at(0) && self.is_punct_at(1, '=') {
+            return Err(Error::new(span, ErrorKind::CallForm));
+        }
+        Ok(self.to_vec())
+    }
+
+    fn named_call(&self, span: Span) -> Result<(Vec<TokenTree>, Vec<TokenTree>)> {
+        let Some(comma_at) = self.iter().position(OneToken::is_comma) else {
             return Err(Error::new(
-                tokens.last().map_or(span, TokenTree::span),
+                self.last().map_or(span, TokenTree::span),
                 ErrorKind::ExpectedBody,
             ));
         };
-        let (left_name, left_value) = tokens[..comma_at].named_value(span)?;
-        let right_span = tokens.get(comma_at + 1).map_or(span, TokenTree::span);
-        let (right_name, right_value) = tokens[comma_at + 1..].named_value(right_span)?;
+        let (left_name, left_value) = self[..comma_at].named_value(span)?;
+        let right_span = self.get(comma_at + 1).map_or(span, TokenTree::span);
+        let (right_name, right_value) = self[comma_at + 1..].named_value(right_span)?;
         let (range, body) = match (left_name.as_str(), right_name.as_str()) {
             ("range", "body") => (left_value, right_value),
             ("body", "range") => (right_value, left_value),

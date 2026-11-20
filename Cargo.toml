@@ -16,6 +16,7 @@ all = { level = "warn", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
 
 [dev-dependencies]
+ph_bench_build = { path = "crates/benches/ph_bench_build" }
 ph_proc_macro_dylib = { path = "crates/tests/ph_proc_macro_dylib" }
 ph_test_errors = { path = "crates/tests/ph_test_errors" }
 ph_util_foreach = { path = "crates/util/ph_util_foreach" }
@@ -49,9 +50,9 @@ name = "ph_util_foreach_tokens"
 path = "tests/crates/ph_util_foreach/tokens.rs"
 
 [[bench]]
-name = "ph_util_foreach_runtime"
+name = "ph_util_foreach_measure"
 harness = false
-path = "benches/crates/ph_util_foreach/runtime.rs"
+path = "benches/crates/ph_util_foreach/measure.rs"
 
 [workspace]
 resolver = "3"

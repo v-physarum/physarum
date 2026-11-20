@@ -98,13 +98,13 @@ Cargo only forwards `-D` to Clippy when it comes after `--`.
 
 `cargo build` compiles the crate. There is no binary to run yet.
 
-`cargo bench --bench ph_util_foreach_runtime` runs the foreach runtime bench.
+`cargo bench --bench ph_util_foreach_measure` asks `ph_bench_build` to time a downstream build of `ph_util_foreach`.
 
 ## How agents should work
 
 - Open small pull requests against `main`. Do not merge unless the owner asks.
 - Behavior changes need tests. `cargo test` must pass.
-- Keep CI green. The format, clippy, and test commands above are what the check job runs. The runtime bench job runs `cargo bench --bench ph_util_foreach_runtime --offline`.
+- Keep CI green. The format, clippy, and test commands above are what the check job runs. The user compile time job runs `cargo bench --bench ph_util_foreach_measure --offline`.
 - Do not expand scope past the requested change.
 - If a task needs a project purpose, stop and leave a TODO instead of guessing.
 

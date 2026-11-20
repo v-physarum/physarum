@@ -2,6 +2,7 @@
 
 use ph_proc_macro_dylib::proc_macro_library;
 use ph_test_errors::ErrorTester;
+use ph_util_foreach::impl_foreach;
 
 fn assert_err(input: &str, description: &str) {
     let source = format!("use ph_util_foreach::impl_foreach;\n{input}\n");
@@ -97,7 +98,7 @@ fn outer_range_errors() {
         "unexpected token after the body",
     );
     assert_err(
-        "impl_foreach!(0..2 { K; });",
+        "impl_foreach!(not_a_range = 0..2 { K; });",
         "write `impl_foreach!(range = .., body = { .. })`",
     );
 }
@@ -144,4 +145,17 @@ fn pattern_errors() {
         "impl_foreach!(range = 0..4, body = { Name[#+]; });",
         "expected an integer literal",
     );
+}
+
+#[test]
+fn unnamed_trailing_block_is_valid() {
+    impl_foreach!(0..2 {
+        let _k = #;
+    });
+    impl_foreach!(0..2, {
+        let _comma = #;
+    });
+    impl_foreach!(range = 0..2, body = {
+        let _named = #;
+    });
 }

@@ -14,7 +14,7 @@ impl_foreach!(range = 0..4, body = {
 });
 ```
 
-The call is `impl_foreach!(range = 0..4, body = { .. })`. Both arguments are named. The body is an arbitrary token tree. A semicolon ends the invocation when it is an item. Commas inside the body separate fields of a nested macro.
+The call is `impl_foreach!(0..4 { .. })`. The trailing block is the body and needs no name. `impl_foreach!(range = 0..4, body = { .. })` still names both arguments, in either order. The body is an arbitrary token tree. A semicolon ends the invocation when it is an item. Commas inside the body separate fields of a nested macro.
 
 `0..4` above expands to:
 
@@ -150,9 +150,9 @@ The macro emits `compile_error!` when:
 
 An empty hole-edge slice expands to no tokens.
 
-## Runtime bench
+## Build bench
 
-`cargo bench --bench ph_util_foreach_runtime` expands `impl_foreach!` for `0..64` and runs the generated functions. CI runs this bench offline.
+`cargo bench --bench ph_util_foreach_measure` asks `ph_bench_build` to time a downstream crate that depends on this one. The case sources live under `benches/crates/ph_util_foreach/cases`. CI runs this bench offline.
 
 ## License
 
