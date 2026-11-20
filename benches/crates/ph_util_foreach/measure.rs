@@ -1,5 +1,7 @@
 //! Times `impl_foreach!` in a downstream crate with hyperfine 2.
 //!
+//! The user-crate sources are the files in `benches/crates/ph_util_foreach/cases`.
+//!
 //! The proc-macro is compiled once and is not part of the case times.
 //! Debug and release builds are full compiles. Incremental time is debug only.
 //! Runtime time is the release bench.
@@ -124,7 +126,7 @@ impl Layout {
     }
 
     fn write_case(&self, case: &str) -> Result<()> {
-        fs::write(self.user.join("src/lib.rs"), case_source(case)?)?;
+        fs::write(self.user.join("src/lib.rs"), case_source(&self.root, case)?)?;
         Ok(())
     }
 }
@@ -497,10 +499,6 @@ fn json_escape(chars: &mut std::str::Chars<'_>) -> Result<char> {
     }
 }
 
-fn push_fmt(buf: &mut String, args: std::fmt::Arguments<'_>) {
-    let _ = std::fmt::Write::write_fmt(buf, args);
-}
-
 fn user_manifest(macro_dir: &Path) -> String {
     format!(
         "[workspace]\n\n[package]\nname = \"ph_util_foreach_user\"\nversion = \"0.1.0\"\nedition = \"2024\"\npublish = false\n\n[dependencies]\nph_util_foreach = {{ path = \"{}\" }}\n",
@@ -508,95 +506,60 @@ fn user_manifest(macro_dir: &Path) -> String {
     )
 }
 
-fn case_source(case: &str) -> Result<String> {
+fn case_source(root: &Path, case: &str) -> Result<String> {
     let (kind, count) = case
         .rsplit_once('_')
         .ok_or_else(|| fail(format!("unknown case {case}")))?;
     let count: u32 = count
         .parse()
         .map_err(|_| fail(format!("unknown case {case}")))?;
+    let cases = root.join("benches/crates/ph_util_foreach/cases");
+    let len = count.to_string();
     match kind {
-        "flat_structs" | "one_call" => Ok(struct_call(count)),
-        "hand_structs" => Ok(hand_structs(count)),
-        "many_calls" => Ok(many_calls(count)),
-        "fan_take" => Ok(fan_take(count)),
-        "fan_rows" => Ok(fan_rows(count)),
+        "flat_structs" | "one_call" => fill(&cases.join("flat_structs.rs"), &[("CASE_LEN", &len)]),
+        "hand_structs" => repeat_item(
+            &cases.join("hand_structs.rs"),
+            &cases.join("hand_struct.rs"),
+            count,
+            None,
+        ),
+        "many_calls" => repeat_item(
+            &cases.join("many_calls.rs"),
+            &cases.join("many_call.rs"),
+            count,
+            Some("NEXT"),
+        ),
+        "fan_take" => fill(&cases.join("fan_take.rs"), &[("CASE_LEN", &len)]),
+        "fan_rows" => fill(&cases.join("fan_rows.rs"), &[("CASE_LEN", &len)]),
         _ => Err(fail(format!("unknown case {case}"))),
     }
 }
 
-fn struct_call(count: u32) -> String {
-    format!(
-        "use ph_util_foreach::impl_foreach;\n\nimpl_foreach!(range = 0..{count}, body = {{\n    pub struct Ix + #;\n}});\n"
-    )
-}
-
-fn hand_structs(count: u32) -> String {
-    let mut source =
-        String::from("#![allow(unused_imports)]\nuse ph_util_foreach::impl_foreach;\n\n");
-    for index in 0..count {
-        push_fmt(&mut source, format_args!("pub struct Ix{index};\n"));
+fn fill(path: &Path, pairs: &[(&str, &str)]) -> Result<String> {
+    let mut text = fs::read_to_string(path)?;
+    for (key, value) in pairs {
+        text = text.replace(key, value);
     }
-    source
+    Ok(text)
 }
 
-fn many_calls(count: u32) -> String {
-    let mut source = String::from("use ph_util_foreach::impl_foreach;\n\n");
-    for index in 0..count {
-        let next = index + 1;
-        push_fmt(
-            &mut source,
-            format_args!(
-                "impl_foreach!(range = {index}..{next}, body = {{\n    pub struct Ix + #;\n}});\n"
-            ),
-        );
+fn repeat_item(header: &Path, item: &Path, count: u32, next_key: Option<&str>) -> Result<String> {
+    let mut source = fs::read_to_string(header)?;
+    if !source.ends_with('\n') {
+        source.push('\n');
     }
-    source
-}
-
-fn fan_take(count: u32) -> String {
-    format!(
-        "\
-use ph_util_foreach::impl_foreach;
-
-macro_rules! impl_take {{
-    (
-        args: ($($args:ident),* $(,)?),
-        ix: $ix:ident,
-        out: $out:ident,
-        rest: $($rest:ident),* $(,)?
-    ) => {{
-        #[allow(non_snake_case)]
-        mod $ix {{
-            pub const ARGS: &[&str] = &[$(stringify!($args)),*];
-            pub const OUT: &str = stringify!($out);
-            pub const REST: &[&str] = &[$(stringify!($rest)),*];
-        }}
-    }};
-}}
-
-impl_foreach!(range = 0..{count}, body = {{
-    impl_take!(
-        args: (T[..=#]),
-        ix: Ix + #,
-        out: T + #,
-        rest: T[..#] + Off[#] + T[#+1..=#],
-    );
-}});
-"
-    )
-}
-
-fn fan_rows(count: u32) -> String {
-    format!(
-        "\
-use ph_util_foreach::impl_foreach;
-
-impl_foreach!(range = 0..{count}, body = {{
-    pub const Row + #: &str = stringify!((T + #, U + #)[0..=#]);
-}});
-"
-    )
+    if !source.ends_with("\n\n") {
+        source.push('\n');
+    }
+    let item = fs::read_to_string(item)?;
+    for index in 0..count {
+        let mut line = item.replace("INDEX", &index.to_string());
+        if let Some(next_key) = next_key {
+            line = line.replace(next_key, &(index + 1).to_string());
+        }
+        source.push_str(&line);
+    }
+    Ok(source)
 }
 
 impl From<io::Error> for Failure {
