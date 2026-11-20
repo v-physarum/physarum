@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use crate::Plan;
+use crate::cases::Case;
 use crate::error::{ErrorKind, Result};
 use crate::json::{CargoMessage, WallClock};
 use crate::manifest::UserManifest;
@@ -18,7 +19,6 @@ const SRC_DIR: &str = "src";
 const CARGO_TOML: &str = "Cargo.toml";
 const LIB_RS: &str = "lib.rs";
 const REPORT_JSON: &str = "report.json";
-const WARMUP_LOG: &str = "warmup.log";
 const RUNTIME_TARGET_DIR: &str = "runtime-target";
 const RUNTIME_BUILD_LOG: &str = "runtime_build.log";
 const RUNTIME_BUILD_ERR: &str = "runtime_build.err";
@@ -205,17 +205,22 @@ impl<'a> Layout<'a> {
         })
     }
 
-    fn write_case(&self, case: &str) -> Result<()> {
-        let source = (self.plan.render)(case)?;
-        fs::write(self.user.join(SRC_DIR).join(LIB_RS), source)?;
+    fn write_case(&self, case: &Case) -> Result<()> {
+        fs::write(self.user.join(SRC_DIR).join(LIB_RS), &case.source)?;
         Ok(())
     }
 
     fn compile_dependency(&self) -> Result<()> {
-        self.write_case(&self.plan.warmup)?;
-        let mut command = Command::cargo(&self.user, &self.target, false);
-        command.args(["build", "--offline"]);
-        command.run_combined(&self.logs.join(WARMUP_LOG), "warmup")
+        for case in &self.plan.cases.warmup {
+            self.write_case(case)?;
+            let mut command = Command::cargo(&self.user, &self.target, false);
+            command.args(["build", "--offline"]);
+            let name = &case.name;
+            let log = self.logs.join(format!("warmup_{name}{LOG_EXT}"));
+            let label = format!("warmup {name}");
+            command.run_combined(&log, &label)?;
+        }
+        Ok(())
     }
 }
 
@@ -271,39 +276,43 @@ impl Report {
     }
 
     fn measure_debug(&mut self, layout: &Layout<'_>) -> Result<()> {
-        for case in &layout.plan.debug {
+        for case in &layout.plan.cases.debug {
             layout.write_case(case)?;
-            let label = format!("debug_full_{case}");
+            let name = &case.name;
+            let label = format!("debug_full_{name}");
             let prepare = format!("cargo clean -p {}", layout.plan.package);
             let timing = TimedCargo::new(&label, Some(&prepare), "cargo build --offline", false)
                 .time(layout)?;
             println!(
-                "debug_full {case} median {:.3}s stddev {:.3}s",
+                "debug_full {name} median {:.3}s stddev {:.3}s",
                 timing.median, timing.stddev
             );
-            self.sample(case, timing.median, timing.stddev)?;
+            self.sample(name, timing.median, timing.stddev)?;
         }
         Ok(())
     }
 
     fn measure_incremental(&mut self, layout: &Layout<'_>) -> Result<()> {
-        let Some(case) = layout.plan.incremental.as_deref() else {
-            return Ok(());
-        };
-        layout.write_case(case)?;
-        let label = format!("debug_incremental_{case}");
-        let timing = TimedCargo::new(&label, None, "cargo build --offline", true).time(layout)?;
-        println!(
-            "debug_incremental {case} median {:.3}s stddev {:.3}s",
-            timing.median, timing.stddev
-        );
-        self.sample(&label, timing.median, timing.stddev)
+        for case in &layout.plan.cases.incremental {
+            layout.write_case(case)?;
+            let name = &case.name;
+            let label = format!("debug_incremental_{name}");
+            let timing =
+                TimedCargo::new(&label, None, "cargo build --offline", true).time(layout)?;
+            println!(
+                "debug_incremental {name} median {:.3}s stddev {:.3}s",
+                timing.median, timing.stddev
+            );
+            self.sample(&label, timing.median, timing.stddev)?;
+        }
+        Ok(())
     }
 
     fn measure_release(&mut self, layout: &Layout<'_>) -> Result<()> {
-        for case in &layout.plan.release {
+        for case in &layout.plan.cases.release {
             layout.write_case(case)?;
-            let label = format!("release_full_{case}");
+            let name = &case.name;
+            let label = format!("release_full_{name}");
             let prepare = format!("cargo clean -p {} --release", layout.plan.package);
             let timing = TimedCargo::new(
                 &label,
@@ -313,7 +322,7 @@ impl Report {
             )
             .time(layout)?;
             println!(
-                "release_full {case} median {:.3}s stddev {:.3}s",
+                "release_full {name} median {:.3}s stddev {:.3}s",
                 timing.median, timing.stddev
             );
             self.sample(&label, timing.median, timing.stddev)?;

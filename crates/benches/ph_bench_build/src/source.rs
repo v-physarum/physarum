@@ -1,101 +1,100 @@
 //! Case templates on disk.
 
-use std::fs;
+use std::fs::File;
+use std::io::Read;
 use std::path::Path;
 
-use crate::error::{Error, Result};
+use crate::error::Result;
 
-/// The kind and count parsed from a case name such as `flat_structs_1024`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct CaseName<'a> {
-    kind: &'a str,
-    count: u32,
-}
-
-impl<'a> CaseName<'a> {
-    /// Splits `case` at the last `_` into a kind and a count.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when `case` has no `_` or the suffix is not an integer.
-    pub fn parse(case: &'a str) -> Result<Self> {
-        let (kind, count) = case
-            .rsplit_once('_')
-            .ok_or_else(|| Error::unknown_case(case))?;
-        let count = count.parse().map_err(|_| Error::unknown_case(case))?;
-        Ok(Self { kind, count })
-    }
-
-    /// The text before the last `_`.
-    #[must_use]
-    pub fn kind(self) -> &'a str {
-        self.kind
-    }
-
-    /// The integer after the last `_`.
-    #[must_use]
-    pub fn count(self) -> u32 {
-        self.count
-    }
-}
-
-/// Header file, item file, and how many times to paste the item.
+/// Header and item text, pasted `count` times into one sized string.
 ///
 /// `INDEX` in the item is the paste index. `next`, when set, is the key replaced
-/// with the following index. Each copy is written into the one output string.
-pub struct Repeat<'a> {
-    header: &'a Path,
-    item: &'a Path,
-    count: u32,
-    next: Option<&'a str>,
+/// with the following index. The header is padded so it ends on a blank line.
+#[must_use]
+pub(crate) fn render(header: &str, item: &str, count: u32, next: Option<&str>) -> String {
+    let mut source = String::with_capacity(output_len(header, item, count, next));
+    source.push_str(header);
+    for _ in 0..blank_pad(header) {
+        source.push('\n');
+    }
+    append_items(&mut source, item, count, next);
+    source
 }
 
-impl<'a> Repeat<'a> {
-    /// One repeated item under `header`.
-    #[must_use]
-    pub fn new(header: &'a Path, item: &'a Path, count: u32, next: Option<&'a str>) -> Self {
-        Self {
-            header,
-            item,
-            count,
-            next,
-        }
-    }
+/// `text` with `key` replaced by the decimal `count`, written once.
+#[must_use]
+pub(crate) fn fill_count(text: &str, key: &str, count: u32) -> String {
+    let hits = text.matches(key).count();
+    let digits = Digits::new(count);
+    let cap = text
+        .len()
+        .saturating_sub(key.len().saturating_mul(hits))
+        .saturating_add(digits.len().saturating_mul(hits));
+    let mut out = String::with_capacity(cap);
+    splice(&mut out, text, key, count);
+    out
+}
 
-    /// Reads the header and appends the item `count` times.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when a file cannot be read.
-    pub fn load(&self) -> Result<String> {
-        let mut source = fs::read_to_string(self.header)?;
-        if !source.ends_with('\n') {
-            source.push('\n');
-        }
-        if !source.ends_with("\n\n") {
-            source.push('\n');
-        }
-        let item = fs::read_to_string(self.item)?;
-        append_items(&mut source, &item, self.count, self.next);
-        Ok(source)
-    }
+/// `{kind}_{count}` in one allocation.
+#[must_use]
+pub(crate) fn case_name(kind: &str, count: u32) -> String {
+    let digits = Digits::new(count);
+    let mut name = String::with_capacity(kind.len() + 1 + digits.len());
+    name.push_str(kind);
+    name.push('_');
+    digits.append_to(&mut name);
+    name
+}
+
+/// File bytes in one buffer sized from the file length.
+///
+/// # Errors
+///
+/// Returns an error when the file cannot be read.
+pub(crate) fn read_exact(path: &Path) -> Result<String> {
+    let mut file = File::open(path)?;
+    let cap = file
+        .metadata()
+        .ok()
+        .and_then(|meta| usize::try_from(meta.len()).ok())
+        .unwrap_or(0);
+    let mut text = String::with_capacity(cap);
+    file.read_to_string(&mut text)?;
+    Ok(text)
 }
 
 const INDEX_KEY: &str = "INDEX";
 /// `u32` is at most this many decimal digits.
 const DIGIT_CAP: usize = 10;
 
-/// Appends `item` `count` times. One scratch buffer is reused when `next` is set.
-fn append_items(source: &mut String, item: &str, count: u32, next: Option<&str>) {
+/// How many newlines `render` writes so the header ends on a blank line.
+fn blank_pad(header: &str) -> usize {
+    if header.ends_with("\n\n") {
+        0
+    } else if header.ends_with('\n') {
+        1
+    } else {
+        2
+    }
+}
+
+/// Bytes `render` needs for `count` copies, including the blank line.
+fn output_len(header: &str, item: &str, count: u32, next: Option<&str>) -> usize {
     let pasted = expanded(item, INDEX_KEY);
     let per = match next {
         Some(key) => grown(pasted, key),
         None => pasted,
     };
-    source.reserve(per.saturating_mul(count as usize));
+    header
+        .len()
+        .saturating_add(blank_pad(header))
+        .saturating_add(per.saturating_mul(count as usize))
+}
+
+/// Appends `item` `count` times. One scratch buffer is reused when `next` is set.
+fn append_items(source: &mut String, item: &str, count: u32, next: Option<&str>) {
     if let Some(key) = next {
-        let mut scratch = String::new();
-        scratch.reserve(pasted);
+        let mut scratch = String::with_capacity(expanded(item, INDEX_KEY));
         for index in 0..count {
             scratch.clear();
             splice(&mut scratch, item, INDEX_KEY, index);
@@ -170,6 +169,10 @@ impl Digits {
         Self { bytes, at }
     }
 
+    fn len(self) -> usize {
+        DIGIT_CAP - self.at
+    }
+
     fn append_to(self, out: &mut String) {
         for byte in &self.bytes[self.at..] {
             out.push(char::from(*byte));
@@ -177,58 +180,18 @@ impl Digits {
     }
 }
 
-/// Replaces keys in a template file.
-pub trait Fill {
-    /// Replaces each key in `pairs` inside this file.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the file cannot be read.
-    fn fill(&self, pairs: &[(&str, &str)]) -> Result<String>;
-}
-
-impl Fill for Path {
-    fn fill(&self, pairs: &[(&str, &str)]) -> Result<String> {
-        let mut text = fs::read_to_string(self)?;
-        for (key, value) in pairs {
-            text = text.replace(key, value);
-        }
-        Ok(text)
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use std::fs;
-    use std::path::PathBuf;
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    use super::{CaseName, Repeat};
-
-    #[test]
-    fn case_name_splits_on_the_last_underscore() {
-        let name = CaseName::parse("flat_structs_1024").unwrap();
-        assert_eq!(name.kind(), "flat_structs");
-        assert_eq!(name.count(), 1024);
-    }
-
-    #[test]
-    fn unknown_case_name_is_an_error() {
-        let Err(error) = CaseName::parse("flat") else {
-            panic!("parsed");
-        };
-        let error = error.to_string();
-        assert!(error.contains("unknown case"), "{error}");
-    }
+    use super::render;
 
     #[test]
     fn repeat_writes_every_index_into_one_string() {
-        let dir = TempDir::new();
-        let header = dir.file("header.rs");
-        let item = dir.file("item.rs");
-        fs::write(&header, "use crate;\n").unwrap();
-        fs::write(&item, "struct IxINDEX;\nstruct TwinINDEX;\n").unwrap();
-        let text = Repeat::new(&header, &item, 3, None).load().unwrap();
+        let text = render(
+            "use crate;\n",
+            "struct IxINDEX;\nstruct TwinINDEX;\n",
+            3,
+            None,
+        );
         assert_eq!(
             text,
             "use crate;\n\nstruct Ix0;\nstruct Twin0;\nstruct Ix1;\nstruct Twin1;\nstruct Ix2;\nstruct Twin2;\n"
@@ -237,35 +200,7 @@ mod tests {
 
     #[test]
     fn repeat_writes_the_following_index_for_next() {
-        let dir = TempDir::new();
-        let header = dir.file("header.rs");
-        let item = dir.file("item.rs");
-        fs::write(&header, "use crate;\n\n").unwrap();
-        fs::write(&item, "range = INDEX..NEXT;\n").unwrap();
-        let text = Repeat::new(&header, &item, 2, Some("NEXT")).load().unwrap();
+        let text = render("use crate;\n\n", "range = INDEX..NEXT;\n", 2, Some("NEXT"));
         assert_eq!(text, "use crate;\n\nrange = 0..1;\nrange = 1..2;\n");
-    }
-
-    struct TempDir(PathBuf);
-
-    impl TempDir {
-        fn new() -> Self {
-            static NEXT: AtomicU64 = AtomicU64::new(0);
-            let id = NEXT.fetch_add(1, Ordering::Relaxed);
-            let path =
-                std::env::temp_dir().join(format!("ph_bench_build_{}_{id}", std::process::id()));
-            fs::create_dir_all(&path).unwrap();
-            Self(path)
-        }
-
-        fn file(&self, name: &str) -> PathBuf {
-            self.0.join(name)
-        }
-    }
-
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
-        }
     }
 }

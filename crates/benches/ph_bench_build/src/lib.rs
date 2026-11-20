@@ -1,8 +1,11 @@
 //! Runs hyperfine scenarios against a downstream crate.
 //!
-//! A bench selects cases with [`Bench`] and supplies the source for each case.
-//! The dependency compile is paid once, before the case times.
+//! A bench points [`Bench`] at a case directory. The directory's folders and
+//! file names select the warmup, debug, incremental, and release cases and
+//! supply each case's source. The dependency compile is paid once, before the
+//! case times.
 
+mod cases;
 mod engine;
 mod error;
 mod json;
@@ -10,12 +13,10 @@ mod manifest;
 mod source;
 
 pub use error::{Error, Result};
-pub use source::{CaseName, Fill, Repeat};
 
 use std::path::{Path, PathBuf};
 
-/// Builds the downstream `src/lib.rs` for one case name.
-pub(crate) type RenderCase = fn(&str) -> Result<String>;
+use cases::Groups;
 
 /// Path dependency written into the downstream crate.
 pub(crate) struct Dependency {
@@ -53,11 +54,7 @@ pub struct Bench {
     output: Option<String>,
     package: Option<String>,
     dependency: Option<Dependency>,
-    render: Option<RenderCase>,
-    warmup: Option<String>,
-    debug: Vec<String>,
-    incremental: Option<String>,
-    release: Vec<String>,
+    cases: Option<PathBuf>,
     runtime: Option<String>,
     repeats: u32,
 }
@@ -70,11 +67,7 @@ impl Bench {
             output: None,
             package: None,
             dependency: None,
-            render: None,
-            warmup: None,
-            debug: Vec::new(),
-            incremental: None,
-            release: Vec::new(),
+            cases: None,
             runtime: None,
             repeats: 3,
         }
@@ -98,34 +91,23 @@ impl Bench {
         self
     }
 
-    /// Renders one case name into the downstream `src/lib.rs`.
-    pub fn render(mut self, render: fn(&str) -> Result<String>) -> Self {
-        self.render = Some(render);
-        self
-    }
-
-    /// Case built once so the dependency is compiled before the measured runs.
-    pub fn warmup(mut self, case: impl Into<String>) -> Self {
-        self.warmup = Some(case.into());
-        self
-    }
-
-    /// Full debug builds, in the given order.
-    pub fn debug(mut self, cases: &[&str]) -> Self {
-        self.debug.extend(cases.iter().copied().map(str::to_owned));
-        self
-    }
-
-    /// One incremental debug build. The package is not cleaned first.
-    pub fn incremental(mut self, case: impl Into<String>) -> Self {
-        self.incremental = Some(case.into());
-        self
-    }
-
-    /// Full release builds, in the given order.
-    pub fn release(mut self, cases: &[&str]) -> Self {
-        self.release
-            .extend(cases.iter().copied().map(str::to_owned));
+    /// Directory whose folders and files select the cases.
+    ///
+    /// `warmup`, `debug`, `incremental`, and `release` are the group folders.
+    /// A file in a group folder names one case, `{kind}_{count}`, for example
+    /// `flat_structs_64`. That file's bytes are not read. Kinds run in name
+    /// order. Counts run in numeric order. Every file in a group is launched.
+    ///
+    /// `{kind}.rs` in the case directory is the source. `CASE_LEN` in that
+    /// file is replaced with the count. When `kind` ends in `s` and the case
+    /// directory also contains that name without the final `s` as a `.rs`
+    /// file, the shorter file is the item and `{kind}.rs` is the header. The
+    /// item is pasted once per count. `INDEX` is the paste index. `NEXT` in
+    /// the item is the following index.
+    ///
+    /// At least one warmup case is required.
+    pub fn cases(mut self, directory: impl Into<PathBuf>) -> Self {
+        self.cases = Some(directory.into());
         self
     }
 
@@ -135,23 +117,20 @@ impl Bench {
         self
     }
 
-    /// Builds the warmup case, then runs the selected scenarios.
+    /// Builds the warmup cases, then runs the selected scenarios.
     ///
     /// # Errors
     ///
-    /// Returns an error when a required setter was skipped, a case fails to
-    /// render, or a measured command fails.
+    /// Returns an error when a required setter was skipped, the case directory
+    /// cannot be read, or a measured command fails.
     pub fn run(self) -> Result<()> {
+        let directory = required(self.cases, "case directory")?;
         let plan = Plan {
             summary: format!("{} user compile time", self.name),
             output: required(self.output, "output directory")?,
             package: required(self.package, "user package")?,
             dependency: required(self.dependency, "dependency")?,
-            render: required(self.render, "case renderer")?,
-            warmup: required(self.warmup, "warmup case")?,
-            debug: self.debug,
-            incremental: self.incremental,
-            release: self.release,
+            cases: cases::load(&directory)?,
             runtime: self.runtime,
             repeats: self.repeats,
         };
@@ -173,16 +152,8 @@ pub(crate) struct Plan {
     pub(crate) package: String,
     /// Path dependency of that package.
     pub(crate) dependency: Dependency,
-    /// Renders a case name into source text.
-    pub(crate) render: RenderCase,
-    /// Case compiled before the measured runs.
-    pub(crate) warmup: String,
-    /// Full debug cases.
-    pub(crate) debug: Vec<String>,
-    /// Incremental debug case.
-    pub(crate) incremental: Option<String>,
-    /// Full release cases.
-    pub(crate) release: Vec<String>,
+    /// Cases discovered from the case directory.
+    pub(crate) cases: Groups,
     /// Release runtime bench name.
     pub(crate) runtime: Option<String>,
     /// Measured hyperfine runs per case.

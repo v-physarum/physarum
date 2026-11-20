@@ -41,6 +41,21 @@ pub(crate) enum ErrorKind {
     /// `case` is not a name this bench knows.
     #[error("unknown case {case}")]
     UnknownCase { case: String },
+    /// `path` is not a directory of case groups.
+    #[error("{path} is not a case directory")]
+    NotACaseDirectory { path: String },
+    /// `path` is not a template or a group folder.
+    #[error("unexpected entry {path}")]
+    UnexpectedEntry { path: String },
+    /// `case` names a kind with no template file.
+    #[error("case {case} has no template {template}")]
+    MissingTemplate { case: String, template: String },
+    /// Two marker files name the same case.
+    #[error("duplicate case {case}")]
+    DuplicateCase { case: String },
+    /// The case directory has no warmup case.
+    #[error("warmup case is missing")]
+    MissingWarmup,
     /// A measured command did not start.
     #[error("{label} failed to start: {source}")]
     CommandStart {
@@ -88,7 +103,7 @@ pub(crate) enum ErrorKind {
 impl Error {
     /// `case` is not a name this bench knows.
     #[must_use]
-    pub fn unknown_case(case: impl Into<String>) -> Self {
+    pub(crate) fn unknown_case(case: impl Into<String>) -> Self {
         ErrorKind::UnknownCase { case: case.into() }.into()
     }
 }
