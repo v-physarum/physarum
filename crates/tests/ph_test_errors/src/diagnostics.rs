@@ -36,7 +36,7 @@ pub(crate) fn parse(stderr: &str) -> Result<Diagnostics> {
         {
             continue;
         }
-        if raw.level != "error" || raw.message.starts_with("aborting due to ") {
+        if raw.level != Level::Error || raw.message.starts_with("aborting due to ") {
             continue;
         }
         messages.push(Diagnostic {
@@ -47,12 +47,33 @@ pub(crate) fn parse(stderr: &str) -> Result<Diagnostics> {
     Ok(Diagnostics { messages })
 }
 
+/// Severity of one `rustc` diagnostic.
+///
+/// The JSON field is the lowercase name. Any other string deserializes as
+/// [`Level::Other`] and does not fail the parse.
+#[derive(Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum Level {
+    /// Compilation failed.
+    Error,
+    /// The probe compiled, with a warning.
+    Warning,
+    /// Extra context attached to another diagnostic.
+    Note,
+    /// A suggestion attached to another diagnostic.
+    Help,
+    /// A level this crate does not name, including a missing field.
+    #[default]
+    #[serde(other)]
+    Other,
+}
+
 #[derive(Debug, Deserialize)]
 struct RawDiagnostic {
     #[serde(default)]
     message: String,
     #[serde(default)]
-    level: String,
+    level: Level,
     code: Option<RawCode>,
     #[serde(rename = "$message_type")]
     message_type: Option<String>,
