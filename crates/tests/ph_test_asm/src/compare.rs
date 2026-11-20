@@ -2,9 +2,9 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::assembly::{Assembly, Function};
 use crate::diff::unified;
 use crate::emit;
-use crate::ir::{Assembly, Function};
 use crate::normalize::{function_text, loop_text, module_text};
 
 /// Compares two probe files compiled as release.
@@ -115,8 +115,8 @@ impl LoopCompare {
         require_same(
             &self.left,
             &self.right,
-            &loop_text(left_fn, left_loop),
-            &loop_text(right_fn, right_loop),
+            &loop_text(left_loop),
+            &loop_text(right_loop),
         );
     }
 }

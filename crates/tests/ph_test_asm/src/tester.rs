@@ -3,10 +3,9 @@
 use std::path::{Path, PathBuf};
 
 use crate::emit;
-use crate::ir::{Check, CheckKind};
 use crate::scan;
 
-/// Release asm and LLVM IR checks for one probe file.
+/// Release assembly checks for one probe file.
 ///
 /// ```no_run
 /// use ph_test_asm::AsmTester;
@@ -33,7 +32,7 @@ impl AsmTester {
         }
     }
 
-    /// Selects the `define` named `name`.
+    /// Selects the symbol named `name`.
     pub fn function(self, name: impl Into<String>) -> FunctionScope {
         FunctionScope {
             source: self.source,
@@ -53,7 +52,7 @@ pub struct FunctionScope {
 impl FunctionScope {
     /// Runs `check` on the hot loop.
     ///
-    /// The hot loop is the innermost natural loop with the most instructions.
+    /// The hot loop is the backedge region with the most instructions.
     /// A loop may contain one conditional branch, its latch.
     ///
     /// # Panics
@@ -77,19 +76,15 @@ impl FunctionScope {
 #[derive(Debug)]
 pub struct Asserts {
     label: String,
-    ir: String,
     asm: String,
-    signature: String,
-    checks: Vec<Check>,
     branch_allowance: u32,
-    loop_bodies: Vec<String>,
     source: PathBuf,
     function: String,
     kind: ScopeKind,
 }
 
 impl Asserts {
-    /// The scope contains a vector type or vector instruction.
+    /// The scope contains a vector register.
     ///
     /// # Panics
     ///
@@ -127,11 +122,11 @@ impl Asserts {
         self.enforce(Rule::NoVirtualCalls);
     }
 
-    /// The scope has no `select`.
+    /// The scope has no conditional move.
     ///
     /// # Panics
     ///
-    /// Panics when a `select` is present.
+    /// Panics when a conditional move is present.
     pub fn assert_no_select(&self) {
         self.enforce(Rule::NoSelect);
     }
@@ -140,16 +135,16 @@ impl Asserts {
     ///
     /// # Panics
     ///
-    /// Panics when a div or rem opcode is present.
+    /// Panics when a division instruction is present.
     pub fn assert_no_div(&self) {
         self.enforce(Rule::NoDiv);
     }
 
-    /// The scope has no `invoke`.
+    /// The scope has no unwind resume.
     ///
     /// # Panics
     ///
-    /// Panics when an `invoke` is present.
+    /// Panics when an unwind resume is present.
     pub fn assert_no_invoke(&self) {
         self.enforce(Rule::NoInvoke);
     }
@@ -167,7 +162,7 @@ impl Asserts {
     ///
     /// # Panics
     ///
-    /// Panics when an atomic opcode is present.
+    /// Panics when an atomic instruction is present.
     pub fn assert_no_atomic(&self) {
         self.enforce(Rule::NoAtomic);
     }
@@ -176,7 +171,7 @@ impl Asserts {
     ///
     /// # Panics
     ///
-    /// Panics when one of those intrinsics is present.
+    /// Panics when one of those symbols is present.
     pub fn assert_no_memcpy(&self) {
         self.enforce(Rule::NoMemcpy);
     }
@@ -208,25 +203,7 @@ impl Asserts {
         self.enforce(Rule::MaxStores(max));
     }
 
-    /// `phi` instructions are at most `max`.
-    ///
-    /// # Panics
-    ///
-    /// Panics when the scope has more phis.
-    pub fn assert_max_phis(&self, max: u32) {
-        self.enforce(Rule::MaxPhis(max));
-    }
-
-    /// Basic blocks are at most `max`.
-    ///
-    /// # Panics
-    ///
-    /// Panics when the scope has more blocks.
-    pub fn assert_max_basic_blocks(&self, max: u32) {
-        self.enforce(Rule::MaxBasicBlocks(max));
-    }
-
-    /// The scope is a counted loop: an integer phi with a constant step and a compare.
+    /// The scope is a counted loop: a backedge, an add or increment, and a compare.
     ///
     /// # Panics
     ///
@@ -235,29 +212,16 @@ impl Asserts {
         self.enforce(Rule::CountedLoop);
     }
 
-    /// No loop in the scope allocates stack memory per iteration.
-    ///
-    /// That is an `alloca`, `llvm.stacksave`, or `llvm.lifetime.start` inside a loop.
+    /// The scope does not address the stack pointer.
     ///
     /// # Panics
     ///
-    /// Panics when a loop body has one of those operations.
+    /// Panics when the scope names the stack pointer.
     pub fn assert_no_alloca_in_loop(&self) {
         self.enforce(Rule::NoAllocaInLoop);
     }
 
-    /// Every pointer parameter is `noalias`.
-    ///
-    /// A signature with no pointer parameter passes.
-    ///
-    /// # Panics
-    ///
-    /// Panics when a pointer parameter lacks `noalias`.
-    pub fn assert_noalias(&self) {
-        self.enforce(Rule::NoAlias);
-    }
-
-    /// The scope has no gather intrinsic or gather callee.
+    /// The scope has no gather instruction or gather callee.
     ///
     /// # Panics
     ///
@@ -266,11 +230,11 @@ impl Asserts {
         self.enforce(Rule::NoGather);
     }
 
-    /// The scope has no `libm` intrinsic.
+    /// The scope has no math library call.
     ///
     /// # Panics
     ///
-    /// Panics when a callee is `llvm.sin` or another listed math intrinsic.
+    /// Panics when a callee is `sin` or another listed math symbol.
     pub fn assert_no_libm(&self) {
         self.enforce(Rule::NoLibm);
     }
@@ -279,18 +243,9 @@ impl Asserts {
     ///
     /// # Panics
     ///
-    /// Panics when a callee is `llvm.fma` or `llvm.fmuladd`.
+    /// Panics when a callee is `fma` or a fused multiply-add instruction.
     pub fn assert_no_fma(&self) {
         self.enforce(Rule::NoFma);
-    }
-
-    /// The scope does not mention `i128`.
-    ///
-    /// # Panics
-    ///
-    /// Panics when the scope uses `i128`.
-    pub fn assert_no_i128(&self) {
-        self.enforce(Rule::NoI128);
     }
 
     /// Recompiles the probe for `triple` and counts assembly instructions there.
@@ -309,14 +264,14 @@ impl Asserts {
 
     fn enforce(&self, rule: Rule) {
         match rule {
-            Rule::Simd => self.require(
-                scan::has_simd(&self.ir),
-                "simd",
-                "no vector type or vector instruction",
+            Rule::Simd => self.require(scan::has_simd(&self.asm), "simd", "no vector register"),
+            Rule::NoBounds => self.forbid(
+                scan::has_bounds(&self.asm),
+                "bounds check",
+                "bounds check is present",
             ),
-            Rule::NoBounds => self.forbid(self.bounds(), "bounds check", "bounds check is present"),
             Rule::NoBranch => {
-                let count = scan::conditional_branches(&self.ir);
+                let count = scan::conditional_branches(&self.asm);
                 self.forbid(
                     count > widen(self.branch_allowance),
                     "conditional branch",
@@ -327,61 +282,49 @@ impl Asserts {
                 );
             }
             Rule::NoVirtualCalls => self.forbid(
-                scan::has_indirect_call(&self.ir),
+                scan::has_indirect_call(&self.asm),
                 "virtual call",
                 "indirect call",
             ),
-            Rule::NoSelect => self.forbid(scan::has_opcode(&self.ir, "select"), "select", "select"),
-            Rule::NoDiv => self.forbid(scan::has_div(&self.ir), "division", "div or rem"),
-            Rule::NoInvoke => self.forbid(scan::has_opcode(&self.ir, "invoke"), "invoke", "invoke"),
-            Rule::NoAlloc => self.forbid(scan::has_alloc(&self.ir), "allocation", "allocator call"),
-            Rule::NoAtomic => self.forbid(scan::has_atomic(&self.ir), "atomic", "atomic operation"),
+            Rule::NoSelect => {
+                self.forbid(
+                    scan::has_conditional_move(&self.asm),
+                    "select",
+                    "conditional move",
+                );
+            }
+            Rule::NoDiv => self.forbid(scan::has_div(&self.asm), "division", "division"),
+            Rule::NoInvoke => self.forbid(scan::has_unwind(&self.asm), "invoke", "unwind resume"),
+            Rule::NoAlloc => {
+                self.forbid(scan::has_alloc(&self.asm), "allocation", "allocator call");
+            }
+            Rule::NoAtomic => {
+                self.forbid(scan::has_atomic(&self.asm), "atomic", "atomic operation");
+            }
             Rule::NoMemcpy => self.forbid(
-                scan::has_memcpy(&self.ir),
+                scan::has_memcpy(&self.asm),
                 "memcpy",
                 "memcpy, memmove, or memset",
             ),
             Rule::NoChecks => {
-                self.forbid(!self.checks.is_empty(), "panic check", "panic or assert");
+                self.forbid(scan::has_panic(&self.asm), "panic check", "panic or assert");
             }
-            Rule::MaxLoads(max) => self.at_most(scan::count_opcode(&self.ir, "load"), max, "loads"),
-            Rule::MaxStores(max) => {
-                self.at_most(scan::count_opcode(&self.ir, "store"), max, "stores");
-            }
-            Rule::MaxPhis(max) => self.at_most(scan::count_opcode(&self.ir, "phi"), max, "phis"),
-            Rule::MaxBasicBlocks(max) => {
-                self.at_most(scan::basic_blocks(&self.ir), max, "basic blocks");
-            }
-            Rule::CountedLoop => {
-                self.require(
-                    scan::is_counted_loop(&self.ir),
-                    "counted loop",
-                    "no integer induction",
-                );
-            }
+            Rule::MaxLoads(max) => self.at_most(scan::count_loads(&self.asm), max, "loads"),
+            Rule::MaxStores(max) => self.at_most(scan::count_stores(&self.asm), max, "stores"),
+            Rule::CountedLoop => self.require(
+                scan::is_counted_loop(&self.asm),
+                "counted loop",
+                "no counted backedge",
+            ),
             Rule::NoAllocaInLoop => self.forbid(
-                self.loop_bodies
-                    .iter()
-                    .any(|body| scan::has_alloca_in_loop(body)),
+                scan::has_stack_address(&self.asm),
                 "alloca in loop",
-                "stack allocation inside a loop",
+                "stack pointer inside the scope",
             ),
-            Rule::NoAlias => self.require(
-                scan::params_are_noalias(&self.signature),
-                "noalias",
-                "pointer parameter is not noalias",
-            ),
-            Rule::NoGather => self.forbid(scan::has_gather(&self.ir), "gather", "gather callee"),
-            Rule::NoLibm => self.forbid(scan::has_libm(&self.ir), "libm", "libm intrinsic"),
-            Rule::NoFma => self.forbid(scan::has_fma(&self.ir), "fma", "fma intrinsic"),
-            Rule::NoI128 => self.forbid(scan::has_i128(&self.ir), "i128", "i128"),
+            Rule::NoGather => self.forbid(scan::has_gather(&self.asm), "gather", "gather callee"),
+            Rule::NoLibm => self.forbid(scan::has_libm(&self.asm), "libm", "math call"),
+            Rule::NoFma => self.forbid(scan::has_fma(&self.asm), "fma", "fused multiply-add"),
         }
-    }
-
-    fn bounds(&self) -> bool {
-        self.checks
-            .iter()
-            .any(|check| check.kind() == CheckKind::Bounds)
     }
 
     fn require(&self, passed: bool, expectation: &str, detail: &str) {
@@ -406,7 +349,7 @@ impl Asserts {
     }
 
     fn fail(&self, expectation: &str, detail: &str) -> ! {
-        let snippet = self.ir.lines().take(40).collect::<Vec<_>>().join("\n");
+        let snippet = self.asm.lines().take(40).collect::<Vec<_>>().join("\n");
         panic!(
             "assertion failed: {expectation}\nscope: {}\n{detail}\n{snippet}",
             self.label
@@ -477,7 +420,7 @@ impl Rules {
         self.with(Rule::NoVirtualCalls)
     }
 
-    /// Rejects `select`.
+    /// Rejects conditional moves.
     pub fn no_select(self) -> Self {
         self.with(Rule::NoSelect)
     }
@@ -487,7 +430,7 @@ impl Rules {
         self.with(Rule::NoDiv)
     }
 
-    /// Rejects `invoke`.
+    /// Rejects unwind resumes.
     pub fn no_invoke(self) -> Self {
         self.with(Rule::NoInvoke)
     }
@@ -502,7 +445,7 @@ impl Rules {
         self.with(Rule::NoAtomic)
     }
 
-    /// Rejects memory intrinsics.
+    /// Rejects memory copy symbols.
     pub fn no_memcpy(self) -> Self {
         self.with(Rule::NoMemcpy)
     }
@@ -522,29 +465,14 @@ impl Rules {
         self.with(Rule::MaxStores(max))
     }
 
-    /// Caps phis.
-    pub fn max_phis(self, max: u32) -> Self {
-        self.with(Rule::MaxPhis(max))
-    }
-
-    /// Caps basic blocks.
-    pub fn max_basic_blocks(self, max: u32) -> Self {
-        self.with(Rule::MaxBasicBlocks(max))
-    }
-
     /// Requires a counted loop.
     pub fn counted_loop(self) -> Self {
         self.with(Rule::CountedLoop)
     }
 
-    /// Rejects stack allocation inside a loop.
+    /// Rejects stack-pointer addressing.
     pub fn no_alloca_in_loop(self) -> Self {
         self.with(Rule::NoAllocaInLoop)
-    }
-
-    /// Requires `noalias` on every pointer parameter.
-    pub fn noalias(self) -> Self {
-        self.with(Rule::NoAlias)
     }
 
     /// Rejects gather callees.
@@ -552,7 +480,7 @@ impl Rules {
         self.with(Rule::NoGather)
     }
 
-    /// Rejects `libm` intrinsics.
+    /// Rejects math library calls.
     pub fn no_libm(self) -> Self {
         self.with(Rule::NoLibm)
     }
@@ -560,11 +488,6 @@ impl Rules {
     /// Rejects fused multiply-add.
     pub fn no_fma(self) -> Self {
         self.with(Rule::NoFma)
-    }
-
-    /// Rejects `i128`.
-    pub fn no_i128(self) -> Self {
-        self.with(Rule::NoI128)
     }
 
     /// Runs each rule on `asserts`.
@@ -601,15 +524,11 @@ enum Rule {
     NoChecks,
     MaxLoads(u32),
     MaxStores(u32),
-    MaxPhis(u32),
-    MaxBasicBlocks(u32),
     CountedLoop,
     NoAllocaInLoop,
-    NoAlias,
     NoGather,
     NoLibm,
     NoFma,
-    NoI128,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -628,40 +547,27 @@ fn load(source: &Path, name: &str, kind: ScopeKind, target: Option<&str>) -> Ass
         .function(name)
         .unwrap_or_else(|error| panic!("{error}"));
     let label_name = function.name().to_owned();
-    let signature = function.signature().to_owned();
-    match kind {
-        ScopeKind::Function => Asserts {
-            label: format!("function `{label_name}`"),
-            ir: function.ir().to_owned(),
-            asm: function.asm().to_owned(),
-            signature,
-            checks: function.checks().to_vec(),
-            branch_allowance: 0,
-            loop_bodies: function
-                .loops()
-                .iter()
-                .map(|item| item.ir().to_owned())
-                .collect(),
-            source: source.to_owned(),
-            function: name.to_owned(),
-            kind,
-        },
-        ScopeKind::HotLoop => {
-            let hot = function
-                .hot_loop()
-                .unwrap_or_else(|error| panic!("{error}"));
-            Asserts {
-                label: format!("hot loop of `{label_name}`"),
-                ir: hot.ir().to_owned(),
-                asm: hot.asm().to_owned(),
-                signature,
-                checks: hot.checks().to_vec(),
-                branch_allowance: 1,
-                loop_bodies: vec![hot.ir().to_owned()],
-                source: source.to_owned(),
-                function: name.to_owned(),
-                kind,
-            }
-        }
+    let asm = match kind {
+        ScopeKind::Function => function.asm().to_owned(),
+        ScopeKind::HotLoop => function
+            .hot_loop()
+            .unwrap_or_else(|error| panic!("{error}"))
+            .to_owned(),
+    };
+    let label = match kind {
+        ScopeKind::Function => format!("function `{label_name}`"),
+        ScopeKind::HotLoop => format!("hot loop of `{label_name}`"),
+    };
+    let branch_allowance = match kind {
+        ScopeKind::Function => 0,
+        ScopeKind::HotLoop => 1,
+    };
+    Asserts {
+        label,
+        asm,
+        branch_allowance,
+        source: source.to_owned(),
+        function: name.to_owned(),
+        kind,
     }
 }

@@ -85,28 +85,19 @@ pub fn fused(left: f64, mid: f64, right: f64) -> f64 {
 }
 
 #[unsafe(no_mangle)]
-pub fn wide(left: i128, right: i128) -> i128 {
-    left.wrapping_add(right)
-}
-
-#[unsafe(no_mangle)]
-pub fn raw(ptr: *const i32) -> *const i32 {
-    ptr
-}
-
-#[unsafe(no_mangle)]
-pub fn length(values: &[i32]) -> usize {
-    values.len()
-}
-
-#[unsafe(no_mangle)]
 pub fn bump(cell: &std::sync::atomic::AtomicU32) -> u32 {
     cell.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 #[unsafe(no_mangle)]
 pub fn duplicate(source: &[u8; 64], dest: &mut [u8; 64]) {
-    *dest = *source;
+    unsafe {
+        memcpy_bytes(dest.as_mut_ptr(), source.as_ptr(), 64);
+    }
+}
+
+unsafe extern "C" {
+    fn memcpy_bytes(dest: *mut u8, src: *const u8, n: usize);
 }
 
 #[unsafe(no_mangle)]

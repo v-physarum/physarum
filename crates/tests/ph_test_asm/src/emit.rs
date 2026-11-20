@@ -1,4 +1,4 @@
-//! Release `rustc` invocation that emits LLVM IR and assembly.
+//! Release `rustc` invocation that emits assembly.
 //!
 //! These asserts compile the probe in this crate.
 
@@ -8,11 +8,12 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use crate::assembly::Assembly;
 use crate::error::{ErrorKind, Result};
-use crate::ir::Assembly;
 
 const EDITION: &str = "2024";
 const CRATE_NAME: &str = "probe";
+const EMIT_DIR_PREFIX: &str = "ph-test-asm-emit";
 
 pub(crate) fn compile(source: &Path, target: Option<&str>) -> Result<Assembly> {
     let dir = scratch_dir()?;
@@ -26,7 +27,7 @@ pub(crate) fn compile(source: &Path, target: Option<&str>) -> Result<Assembly> {
     command.arg("-C").arg("debug-assertions=off");
     command.arg("-C").arg("overflow-checks=off");
     command.arg("-C").arg("codegen-units=1");
-    command.arg("--emit=llvm-ir,asm");
+    command.arg("--emit=asm");
     command.arg("--out-dir").arg(&dir);
     if let Some(triple) = target {
         command.arg("--target").arg(triple);
@@ -46,9 +47,8 @@ pub(crate) fn compile(source: &Path, target: Option<&str>) -> Result<Assembly> {
         }
         .into());
     }
-    let ir = read_emit(&dir, "ll", "LLVM IR")?;
     let asm = read_emit(&dir, "s", "assembly")?;
-    Ok(Assembly::parse(&ir, &asm))
+    Ok(Assembly::parse(&asm))
 }
 
 fn rustc_program() -> String {
@@ -58,7 +58,7 @@ fn rustc_program() -> String {
 fn scratch_dir() -> Result<PathBuf> {
     static TICK: AtomicU64 = AtomicU64::new(0);
     let n = TICK.fetch_add(1, Ordering::Relaxed);
-    let dir = env::temp_dir().join(format!("ph-test-asm-emit-{}-{n}", std::process::id()));
+    let dir = env::temp_dir().join(format!("{EMIT_DIR_PREFIX}-{}-{n}", std::process::id()));
     fs::create_dir_all(&dir)?;
     Ok(dir)
 }

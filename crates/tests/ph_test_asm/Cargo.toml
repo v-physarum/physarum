@@ -5,7 +5,7 @@ edition = "2024"
 rust-version = "1.100"
 license = "MIT"
 repository = "https://github.com/v-physarum/physarum"
-description = "Assembly and LLVM IR assertions for tests."
+description = "Assembly assertions for tests."
 readme = "README.md"
 
 [lints.rust]

@@ -1,8 +1,8 @@
 # ph_test_asm
 
-Assembly and LLVM IR assertions for tests. Probes compile as release in this crate. There is no debug profile and no profile switch.
+Assembly assertions for tests. Probes compile as release in this crate. There is no debug profile and no profile switch.
 
-`AsmTester` checks one function or its hot loop. `AsmCompare` checks that two probes match after symbols are sorted and volatile labels and debug metadata are stripped. A failed compare panics with a unified diff.
+`AsmTester` checks one function or its hot loop. `AsmCompare` checks that two probes match after symbols are sorted and local labels are stripped. A failed compare panics with a unified diff.
 
 ```rust
 use ph_test_asm::AsmTester;
