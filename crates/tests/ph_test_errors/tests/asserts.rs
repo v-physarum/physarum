@@ -31,6 +31,9 @@ fn demo() {
 }
 ";
 
+const FAIL_FILE_NAME: &str = "fail.rs";
+const PROBE_FILE_NAME: &str = "probe.rs";
+
 #[test]
 fn missing_name_matches_its_code() {
     ErrorTester::source(MISSING).assert_code("E0425");
@@ -43,7 +46,7 @@ fn missing_name_matches_its_message() {
 
 #[test]
 fn file_matches_the_type_error() {
-    let path = common::write_probe("fail.rs", TYPE_ERROR);
+    let path = common::write_probe(FAIL_FILE_NAME, TYPE_ERROR);
     ErrorTester::file(&path).assert_code("E0308");
     ErrorTester::file(&path).assert_description("mismatched types");
 }
@@ -103,7 +106,7 @@ fn extern_crates_are_passed_as_name_and_path() {
     let demo = common::write_rlib("demo", "pub fn present() {}\n");
     let other = common::write_rlib("other", "pub fn present() {}\n");
     let path = common::write_probe(
-        "probe.rs",
+        PROBE_FILE_NAME,
         "pub fn probe() {\n    demo::missing();\n    other::missing();\n}\n",
     );
     ErrorTester::file(&path)

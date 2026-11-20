@@ -13,6 +13,13 @@ use crate::error::{Error, Result};
 const EDITION: &str = "2024";
 const CRATE_NAME: &str = "probe";
 const OUT_DIR_PREFIX: &str = "ph-test-errors-out";
+const DIR_NAME_SEPARATOR: &str = "-";
+const OPT_LEVEL_PREFIX: &str = "opt-level=";
+const OPT_LEVEL: &str = "0";
+const EXTERN_SEPARATOR: &str = "=";
+const RUSTC_PROGRAM: &str = "rustc";
+const START_TICK: u64 = 0;
+const TICK_STEP: u64 = 1;
 
 /// One `--extern name=path` passed to `rustc`.
 #[derive(Debug)]
@@ -41,9 +48,11 @@ impl Extern {
     }
 
     fn arg(&self) -> OsString {
-        let mut arg = OsString::with_capacity(self.name.len() + 1 + self.path.as_os_str().len());
+        let mut arg = OsString::with_capacity(
+            self.name.len() + EXTERN_SEPARATOR.len() + self.path.as_os_str().len(),
+        );
         arg.push(&self.name);
-        arg.push("=");
+        arg.push(EXTERN_SEPARATOR);
         arg.push(&self.path);
         arg
     }
@@ -73,7 +82,9 @@ impl Probe {
         command.arg("--edition").arg(EDITION);
         command.arg("--crate-type").arg("lib");
         command.arg("--crate-name").arg(CRATE_NAME);
-        command.arg("-C").arg("opt-level=0");
+        command
+            .arg("-C")
+            .arg(format!("{OPT_LEVEL_PREFIX}{OPT_LEVEL}"));
         command.arg("--error-format").arg("json");
         command.arg("--color").arg("never");
         command.arg("--emit=metadata");
@@ -97,7 +108,7 @@ impl Probe {
     }
 
     fn rustc_program() -> String {
-        env::var("RUSTC").unwrap_or_else(|_| "rustc".to_owned())
+        env::var("RUSTC").unwrap_or_else(|_| RUSTC_PROGRAM.to_owned())
     }
 }
 
@@ -105,9 +116,12 @@ struct TempDir(PathBuf);
 
 impl TempDir {
     fn scratch() -> Result<Self> {
-        static TICK: AtomicU64 = AtomicU64::new(0);
-        let n = TICK.fetch_add(1, Ordering::Relaxed);
-        let dir = env::temp_dir().join(format!("{OUT_DIR_PREFIX}-{}-{n}", std::process::id()));
+        static TICK: AtomicU64 = AtomicU64::new(START_TICK);
+        let n = TICK.fetch_add(TICK_STEP, Ordering::Relaxed);
+        let id = std::process::id();
+        let dir = env::temp_dir().join(format!(
+            "{OUT_DIR_PREFIX}{DIR_NAME_SEPARATOR}{id}{DIR_NAME_SEPARATOR}{n}"
+        ));
         fs::create_dir_all(&dir)?;
         Ok(Self(dir))
     }

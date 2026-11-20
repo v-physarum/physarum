@@ -78,7 +78,7 @@ impl ErrorTester {
             .iter()
             .any(|item| item.matches_code(code));
         if !ok {
-            let header = format!("error {code}");
+            let header = format!("{CODE_HEADER_PREFIX}{code}");
             self.fail(&header);
         }
         self
@@ -101,7 +101,7 @@ impl ErrorTester {
             .iter()
             .any(|item| item.matches_message(description));
         if !ok {
-            let header = format!("description {description}");
+            let header = format!("{DESCRIPTION_HEADER_PREFIX}{description}");
             self.fail(&header);
         }
         self
@@ -124,15 +124,16 @@ impl ErrorTester {
         let messages = &self.view().messages;
         let mut arrived = String::with_capacity(Diagnostic::arrived_len(messages));
         for (index, item) in messages.iter().enumerate() {
-            if index > 0 {
-                arrived.push('\n');
+            if index > Diagnostic::FIRST_LINE {
+                arrived.push_str(Diagnostic::LINE_BREAK);
             }
             item.push_line(&mut arrived);
         }
         if arrived.is_empty() {
             arrived.push_str(Diagnostic::NONE);
         }
-        panic!("assertion failed: {header}\n{arrived}");
+        let line_break = Diagnostic::LINE_BREAK;
+        panic!("{ASSERTION_PREFIX}{header}{line_break}{arrived}");
     }
 }
 
@@ -142,7 +143,7 @@ impl Input {
             Self::File(path) => (path.clone(), None),
             Self::Text(text) => {
                 let dir = TempDir::scratch();
-                let path = dir.0.join("probe.rs");
+                let path = dir.0.join(PROBE_FILE_NAME);
                 fs::write(&path, text).unwrap_or_else(|error| {
                     panic!("failed to write probe: {error}");
                 });
@@ -152,15 +153,25 @@ impl Input {
     }
 }
 
+const PROBE_FILE_NAME: &str = "probe.rs";
+const CODE_HEADER_PREFIX: &str = "error ";
+const DESCRIPTION_HEADER_PREFIX: &str = "description ";
+const ASSERTION_PREFIX: &str = "assertion failed: ";
 const SCRATCH_DIR_PREFIX: &str = "ph-test-errors";
+const DIR_NAME_SEPARATOR: &str = "-";
+const START_TICK: u64 = 0;
+const TICK_STEP: u64 = 1;
 
 struct TempDir(PathBuf);
 
 impl TempDir {
     fn scratch() -> Self {
-        static TICK: AtomicU64 = AtomicU64::new(0);
-        let n = TICK.fetch_add(1, Ordering::Relaxed);
-        let dir = env::temp_dir().join(format!("{SCRATCH_DIR_PREFIX}-{}-{n}", std::process::id()));
+        static TICK: AtomicU64 = AtomicU64::new(START_TICK);
+        let n = TICK.fetch_add(TICK_STEP, Ordering::Relaxed);
+        let id = std::process::id();
+        let dir = env::temp_dir().join(format!(
+            "{SCRATCH_DIR_PREFIX}{DIR_NAME_SEPARATOR}{id}{DIR_NAME_SEPARATOR}{n}"
+        ));
         fs::create_dir_all(&dir).unwrap_or_else(|error| {
             panic!("failed to create probe dir: {error}");
         });
