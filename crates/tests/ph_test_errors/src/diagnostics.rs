@@ -29,7 +29,7 @@ impl Diagnostics {
         let mut messages = Vec::new();
         for line in stderr.lines() {
             let line = line.trim();
-            if line.is_empty() || !line.starts_with('{') {
+            if line.is_empty() || !line.starts_with(JSON_LINE_PREFIX) {
                 continue;
             }
             let raw: RawDiagnostic =
@@ -41,7 +41,7 @@ impl Diagnostics {
             {
                 continue;
             }
-            if raw.level != Level::Error || raw.message.starts_with("aborting due to ") {
+            if raw.level != Level::Error || raw.message.starts_with(ABORT_PREFIX) {
                 continue;
             }
             messages.push(Diagnostic {
@@ -67,14 +67,29 @@ impl ErrorCode {
     }
 }
 
+const JSON_LINE_PREFIX: &str = "{";
+const ABORT_PREFIX: &str = "aborting due to ";
+
 impl Diagnostic {
     pub(crate) const NONE: &str = "(none)";
     const SEPARATOR: &str = ": ";
+    pub(crate) const LINE_BREAK: &str = "\n";
+    pub(crate) const FIRST_LINE: usize = 0;
+    const NEWLINES_PER_GAP: usize = 1;
 
-    /// This error has `code` and its message contains `description`.
-    pub(crate) fn matches(&self, code: &str, description: &str) -> bool {
+    /// This error's code is `code`.
+    ///
+    /// The comparison reads the stored code and does not allocate.
+    pub(crate) fn matches_code(&self, code: &str) -> bool {
         self.code.as_ref().is_some_and(|item| item.matches(code))
-            && self.message.contains(description)
+    }
+
+    /// This error's message contains `description`.
+    ///
+    /// A `compile_error!` diagnostic, whose code is null, matches on the
+    /// message. The comparison reads the stored message and does not allocate.
+    pub(crate) fn matches_message(&self, description: &str) -> bool {
+        self.message.contains(description)
     }
 
     /// Bytes of the failure text: each line is code, `": "`, message, with a
@@ -84,7 +99,8 @@ impl Diagnostic {
             return Self::NONE.len();
         }
         let lines: usize = messages.iter().map(Self::line_len).sum();
-        lines + messages.len() - 1
+        let gaps = messages.len() - Self::NEWLINES_PER_GAP;
+        lines + gaps * Self::LINE_BREAK.len()
     }
 
     fn line_len(&self) -> usize {
