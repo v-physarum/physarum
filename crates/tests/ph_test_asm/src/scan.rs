@@ -1,5 +1,8 @@
 //! Instruction scans over one function or loop.
 
+use crate::bound::Count;
+use crate::span::ByteSpan;
+
 const LIBM: &[&str] = &[
     "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "sinh", "cosh", "tanh", "exp", "exp2",
     "exp10", "log", "log2", "log10", "pow", "fmod", "cbrt", "hypot", "sqrt",
@@ -8,8 +11,8 @@ const LIBM: &[&str] = &[
 /// Byte span of the backedge region with the most instructions.
 ///
 /// The span is into `asm`. Nothing is allocated.
-pub(crate) fn hot_span(asm: &str) -> Option<(usize, usize)> {
-    let mut best: Option<(usize, usize, usize)> = None;
+pub(crate) fn hot_span(asm: &str) -> Option<ByteSpan> {
+    let mut best: Option<(ByteSpan, Count)> = None;
     for (start, line) in LineIter::new(asm) {
         let Some(target) = branch_target(line) else {
             continue;
@@ -17,13 +20,13 @@ pub(crate) fn hot_span(asm: &str) -> Option<(usize, usize)> {
         let Some(label_at) = label_before(asm, start, target) else {
             continue;
         };
-        let end = start + line.len();
-        let weight = asm_instructions(&asm[label_at..end]);
-        if best.is_none_or(|(_, _, best_weight)| weight > best_weight) {
-            best = Some((label_at, end, weight));
+        let span = ByteSpan::new(label_at, start + line.len());
+        let weight = asm_instructions(span.slice(asm));
+        if best.is_none_or(|(_, best_weight)| weight.get() > best_weight.get()) {
+            best = Some((span, weight));
         }
     }
-    best.map(|(start, end, _)| (start, end))
+    best.map(|(span, _)| span)
 }
 
 /// Lines of `text` with the byte offset of each line.
@@ -66,10 +69,12 @@ pub(crate) fn has_simd(asm: &str) -> bool {
         .any(|line| line.contains("%xmm") || line.contains("%ymm") || line.contains("%zmm"))
 }
 
-pub(crate) fn conditional_branches(asm: &str) -> usize {
-    instructions(asm)
-        .filter(|line| mnemonic(line).is_some_and(is_conditional_jump))
-        .count()
+pub(crate) fn conditional_branches(asm: &str) -> Count {
+    Count::new(
+        instructions(asm)
+            .filter(|line| mnemonic(line).is_some_and(is_conditional_jump))
+            .count(),
+    )
 }
 
 pub(crate) fn has_indirect_call(asm: &str) -> bool {
@@ -121,12 +126,12 @@ pub(crate) fn has_bounds(asm: &str) -> bool {
         || asm.contains("slice_end_index_len_fail")
 }
 
-pub(crate) fn count_loads(asm: &str) -> usize {
-    memory_ops(asm).filter(|op| op.load).count()
+pub(crate) fn count_loads(asm: &str) -> Count {
+    Count::new(memory_ops(asm).filter(|access| access.is_load()).count())
 }
 
-pub(crate) fn count_stores(asm: &str) -> usize {
-    memory_ops(asm).filter(|op| op.store).count()
+pub(crate) fn count_stores(asm: &str) -> Count {
+    Count::new(memory_ops(asm).filter(|access| access.is_store()).count())
 }
 
 pub(crate) fn is_counted_loop(asm: &str) -> bool {
@@ -174,8 +179,8 @@ pub(crate) fn has_fma(asm: &str) -> bool {
     })
 }
 
-pub(crate) fn asm_instructions(asm: &str) -> usize {
-    asm.lines().filter(|line| is_instruction(line)).count()
+pub(crate) fn asm_instructions(asm: &str) -> Count {
+    Count::new(asm.lines().filter(|line| is_instruction(line)).count())
 }
 
 /// Every pointer parameter in an LLVM IR signature is `noalias`.
@@ -191,12 +196,25 @@ fn has_backedge(asm: &str) -> bool {
     hot_span(asm).is_some()
 }
 
-struct MemoryOp {
-    load: bool,
-    store: bool,
+/// How one instruction touches memory.
+#[derive(Clone, Copy)]
+enum Access {
+    Load,
+    Store,
+    Both,
 }
 
-fn memory_ops(asm: &str) -> impl Iterator<Item = MemoryOp> + '_ {
+impl Access {
+    fn is_load(self) -> bool {
+        matches!(self, Self::Load | Self::Both)
+    }
+
+    fn is_store(self) -> bool {
+        matches!(self, Self::Store | Self::Both)
+    }
+}
+
+fn memory_ops(asm: &str) -> impl Iterator<Item = Access> + '_ {
     instructions(asm).filter_map(|line| {
         let name = mnemonic(line)?;
         if name.starts_with("lea")
@@ -207,8 +225,7 @@ fn memory_ops(asm: &str) -> impl Iterator<Item = MemoryOp> + '_ {
             return None;
         }
         let operands = line[line.find(name)? + name.len()..].trim();
-        let (load, store) = memory_operands(operands)?;
-        Some(MemoryOp { load, store })
+        operand_access(operands)
     })
 }
 
@@ -327,49 +344,68 @@ fn strip_comment(line: &str) -> &str {
     line.split('#').next().unwrap_or(line)
 }
 
-fn memory_operands(text: &str) -> Option<(bool, bool)> {
+/// Independent facts about the operands seen so far.
+#[derive(Clone, Copy, Default)]
+struct OperandBits(u8);
+
+impl OperandBits {
+    const SEEN: u8 = 1 << 0;
+    const PRIOR_LOAD: u8 = 1 << 1;
+    const LAST_MEMORY: u8 = 1 << 2;
+
+    fn note(mut self, memory: bool) -> Self {
+        if self.has(Self::SEEN) && self.has(Self::LAST_MEMORY) {
+            self.0 |= Self::PRIOR_LOAD;
+        }
+        self.0 |= Self::SEEN;
+        if memory {
+            self.0 |= Self::LAST_MEMORY;
+        } else {
+            self.0 &= !Self::LAST_MEMORY;
+        }
+        self
+    }
+
+    fn access(self) -> Option<Access> {
+        if !self.has(Self::SEEN) {
+            return None;
+        }
+        match (self.has(Self::PRIOR_LOAD), self.has(Self::LAST_MEMORY)) {
+            (false, false) => None,
+            (true, false) => Some(Access::Load),
+            (false, true) => Some(Access::Store),
+            (true, true) => Some(Access::Both),
+        }
+    }
+
+    fn has(self, flag: u8) -> bool {
+        self.0 & flag != 0
+    }
+}
+
+fn operand_access(text: &str) -> Option<Access> {
     let mut depth = 0i32;
     let mut start = 0usize;
-    let mut saw = false;
-    let mut earlier_load = false;
-    let mut last_memory = false;
+    let mut bits = OperandBits::default();
     for (index, ch) in text.char_indices() {
         match ch {
             '(' => depth += 1,
             ')' => depth -= 1,
             ',' if depth == 0 => {
-                note_operand(
-                    text[start..index].trim(),
-                    &mut saw,
-                    &mut earlier_load,
-                    &mut last_memory,
-                );
+                bits = note_operand(text[start..index].trim(), bits);
                 start = index + 1;
             }
             _ => {}
         }
     }
-    note_operand(
-        text[start..].trim(),
-        &mut saw,
-        &mut earlier_load,
-        &mut last_memory,
-    );
-    if !saw || (!earlier_load && !last_memory) {
-        return None;
-    }
-    Some((earlier_load, last_memory))
+    note_operand(text[start..].trim(), bits).access()
 }
 
-fn note_operand(part: &str, saw: &mut bool, earlier_load: &mut bool, last_memory: &mut bool) {
+fn note_operand(part: &str, bits: OperandBits) -> OperandBits {
     if part.is_empty() {
-        return;
+        return bits;
     }
-    if *saw {
-        *earlier_load |= *last_memory;
-    }
-    *saw = true;
-    *last_memory = part.contains('(');
+    bits.note(part.contains('('))
 }
 
 fn contains_ascii_ignore_case(haystack: &str, needle: &str) -> bool {

@@ -2,8 +2,10 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::bound::{Count, Limit};
 use crate::emit;
 use crate::scan;
+use crate::span::ByteSpan;
 
 /// Release assembly checks for one probe file.
 ///
@@ -77,10 +79,9 @@ impl FunctionScope {
 pub struct Asserts {
     label: String,
     asm: String,
-    scope_start: usize,
-    scope_end: usize,
+    scope: ByteSpan,
     signature: String,
-    branch_allowance: u32,
+    branch_allowance: Limit,
     source: PathBuf,
     function: String,
     kind: ScopeKind,
@@ -194,7 +195,7 @@ impl Asserts {
     ///
     /// Panics when the scope has more loads.
     pub fn assert_max_loads(&self, max: u32) {
-        self.enforce(Rule::MaxLoads(max));
+        self.enforce(Rule::MaxLoads(Limit::new(max)));
     }
 
     /// Store instructions are at most `max`.
@@ -203,7 +204,7 @@ impl Asserts {
     ///
     /// Panics when the scope has more stores.
     pub fn assert_max_stores(&self, max: u32) {
-        self.enforce(Rule::MaxStores(max));
+        self.enforce(Rule::MaxStores(Limit::new(max)));
     }
 
     /// The scope is a counted loop: a backedge, an add or increment, and a compare.
@@ -277,7 +278,7 @@ impl Asserts {
     }
 
     fn scope_text(&self) -> &str {
-        &self.asm[self.scope_start..self.scope_end]
+        self.scope.slice(&self.asm)
     }
 
     fn enforce(&self, rule: Rule) {
@@ -293,12 +294,13 @@ impl Asserts {
             }
             Rule::NoBranch => {
                 let count = scan::conditional_branches(asm);
-                if count > widen(self.branch_allowance) {
+                if !self.branch_allowance.allows(count) {
                     self.fail(
                         "conditional branch",
                         &format!(
-                            "{count} conditional branches, allowance is {}",
-                            self.branch_allowance
+                            "{} conditional branches, allowance is {}",
+                            count.get(),
+                            self.branch_allowance.get()
                         ),
                     );
                 }
@@ -364,17 +366,17 @@ impl Asserts {
         }
     }
 
-    fn at_most(&self, count: usize, max: u32, expectation: &str) {
-        if count > widen(max) {
+    fn at_most(&self, count: Count, max: Limit, expectation: &str) {
+        if !max.allows(count) {
             self.fail(
                 expectation,
-                &format!("{count} {expectation}, limit is {max}"),
+                &format!("{} {expectation}, limit is {}", count.get(), max.get()),
             );
         }
     }
 
     fn fail(&self, expectation: &str, detail: &str) -> ! {
-        let snippet = first_lines(self.scope_text(), SNIPPET_LINES);
+        let snippet = first_lines(self.scope_text());
         panic!(
             "assertion failed: {expectation}\nscope: {}\n{detail}\n{snippet}",
             self.label
@@ -384,11 +386,11 @@ impl Asserts {
 
 const SNIPPET_LINES: usize = 40;
 
-fn first_lines(text: &str, max_lines: usize) -> String {
+fn first_lines(text: &str) -> String {
     let mut len = 0usize;
     let mut count = 0usize;
     for line in text.lines() {
-        if count == max_lines {
+        if count == SNIPPET_LINES {
             break;
         }
         if count > 0 {
@@ -400,7 +402,7 @@ fn first_lines(text: &str, max_lines: usize) -> String {
     let mut snippet = String::with_capacity(len);
     count = 0;
     for line in text.lines() {
-        if count == max_lines {
+        if count == SNIPPET_LINES {
             break;
         }
         if count > 0 {
@@ -433,10 +435,15 @@ impl TargetAssert<'_> {
             Some(self.triple),
         );
         let count = scan::asm_instructions(reloaded.scope_text());
-        if count > widen(max) {
+        let max = Limit::new(max);
+        if !max.allows(count) {
             reloaded.fail(
                 "instructions",
-                &format!("{count} assembly instructions, limit is {max}"),
+                &format!(
+                    "{} assembly instructions, limit is {}",
+                    count.get(),
+                    max.get()
+                ),
             );
         }
     }
@@ -512,12 +519,12 @@ impl Rules {
 
     /// Caps loads.
     pub fn max_loads(self, max: u32) -> Self {
-        self.with(Rule::MaxLoads(max))
+        self.with(Rule::MaxLoads(Limit::new(max)))
     }
 
     /// Caps stores.
     pub fn max_stores(self, max: u32) -> Self {
-        self.with(Rule::MaxStores(max))
+        self.with(Rule::MaxStores(Limit::new(max)))
     }
 
     /// Requires a counted loop.
@@ -582,8 +589,8 @@ enum Rule {
     NoAtomic,
     NoMemcpy,
     NoChecks,
-    MaxLoads(u32),
-    MaxStores(u32),
+    MaxLoads(Limit),
+    MaxStores(Limit),
     CountedLoop,
     NoAllocaInLoop,
     NoAlias,
@@ -598,24 +605,20 @@ enum ScopeKind {
     HotLoop,
 }
 
-fn widen(value: u32) -> usize {
-    usize::try_from(value).unwrap_or(usize::MAX)
-}
-
 fn load(source: &Path, name: &str, kind: ScopeKind, target: Option<&str>) -> Asserts {
     let assembly = emit::compile(source, target).unwrap_or_else(|error| panic!("{error}"));
     let function = assembly
         .into_function(name)
         .unwrap_or_else(|error| panic!("{error}"));
-    let (scope_start, scope_end) = match kind {
-        ScopeKind::Function => (0, function.asm().len()),
+    let scope = match kind {
+        ScopeKind::Function => ByteSpan::whole(function.asm().len()),
         ScopeKind::HotLoop => function
             .hot_bounds()
             .unwrap_or_else(|error| panic!("{error}")),
     };
     let branch_allowance = match kind {
-        ScopeKind::Function => 0,
-        ScopeKind::HotLoop => 1,
+        ScopeKind::Function => Limit::ZERO,
+        ScopeKind::HotLoop => Limit::ONE,
     };
     let label = scope_label(kind, function.name());
     let crate::assembly::Function {
@@ -627,8 +630,7 @@ fn load(source: &Path, name: &str, kind: ScopeKind, target: Option<&str>) -> Ass
     Asserts {
         label,
         asm,
-        scope_start,
-        scope_end,
+        scope,
         signature,
         branch_allowance,
         source: source.to_owned(),
@@ -642,9 +644,11 @@ fn scope_label(kind: ScopeKind, name: &str) -> String {
         ScopeKind::Function => "function `",
         ScopeKind::HotLoop => "hot loop of `",
     };
-    let mut label = String::with_capacity(prefix.len() + name.len() + 1);
+    let mut label = String::with_capacity(prefix.len() + name.len() + LABEL_SUFFIX.len());
     label.push_str(prefix);
     label.push_str(name);
-    label.push('`');
+    label.push_str(LABEL_SUFFIX);
     label
 }
+
+const LABEL_SUFFIX: &str = "`";

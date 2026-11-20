@@ -1,6 +1,12 @@
 //! Normalization for assembly equivalence.
 
 use crate::assembly::{Assembly, Function};
+use crate::span::ByteSpan;
+
+const NEWLINE_LEN: usize = 1;
+const LOCAL_PREFIX: &str = ".L";
+const LOCAL_LABEL_MIN_BYTES: usize = 3;
+const DECIMAL_DIGITS: usize = 20;
 
 /// Whole module, functions sorted by symbol.
 pub(crate) fn module_text(assembly: &Assembly) -> String {
@@ -8,14 +14,17 @@ pub(crate) fn module_text(assembly: &Assembly) -> String {
     functions.sort_by(|left, right| left.name().cmp(right.name()));
     let mut cap = 0usize;
     for function in &functions {
-        cap = cap.saturating_add(function.asm().len()).saturating_add(1);
+        cap = cap
+            .saturating_add(function.asm().len())
+            .saturating_add(NEWLINE_LEN);
     }
+    let mut labels = LabelTable::new();
     let mut out = String::with_capacity(cap);
     for (index, function) in functions.iter().enumerate() {
         if index > 0 {
             out.push('\n');
         }
-        append_normalized(function.asm(), &mut out);
+        append_normalized(function.asm(), &mut labels, &mut out);
     }
     out
 }
@@ -23,48 +32,107 @@ pub(crate) fn module_text(assembly: &Assembly) -> String {
 /// One function, local labels canonicalized.
 pub(crate) fn function_text(function: &Function) -> String {
     let mut out = String::with_capacity(function.asm().len());
-    append_normalized(function.asm(), &mut out);
+    let mut labels = LabelTable::new();
+    append_normalized(function.asm(), &mut labels, &mut out);
     out
 }
 
 /// Hot loop text for one function.
 pub(crate) fn loop_text(hot: &str) -> String {
     let mut out = String::with_capacity(hot.len());
-    append_normalized(hot, &mut out);
+    let mut labels = LabelTable::new();
+    append_normalized(hot, &mut labels, &mut out);
     out
 }
 
-fn append_normalized(asm: &str, out: &mut String) {
-    let mut names: Vec<&str> = Vec::new();
-    let mut first = true;
-    for line in asm.lines() {
-        let trimmed = line.split('#').next().unwrap_or(line).trim();
-        if trimmed.is_empty() || trimmed.starts_with('.') || trimmed.starts_with('#') {
-            continue;
+struct LabelTable {
+    spans: Vec<ByteSpan>,
+}
+
+impl LabelTable {
+    fn new() -> Self {
+        Self { spans: Vec::new() }
+    }
+
+    fn fill(&mut self, asm: &str) {
+        self.spans.clear();
+        let bound = asm.len() / LOCAL_LABEL_MIN_BYTES;
+        let extra = bound.saturating_sub(self.spans.capacity());
+        self.spans.reserve(extra);
+        for line in kept_lines(asm) {
+            discover_line(asm, line, &mut self.spans);
         }
+    }
+
+    fn ordinal(&self, asm: &str, name: &str) -> usize {
+        self.spans
+            .iter()
+            .position(|span| span.slice(asm) == name)
+            .expect("local label")
+    }
+}
+
+fn append_normalized(asm: &str, labels: &mut LabelTable, out: &mut String) {
+    labels.fill(asm);
+    let mut first = true;
+    for line in kept_lines(asm) {
         if !first {
             out.push('\n');
         }
         first = false;
-        write_canonical(trimmed, &mut names, out);
+        write_canonical(asm, line, labels, out);
     }
 }
 
-fn write_canonical<'a>(line: &'a str, names: &mut Vec<&'a str>, out: &mut String) {
+fn kept_lines(asm: &str) -> impl Iterator<Item = &str> {
+    asm.lines().filter_map(|line| {
+        let trimmed = line.split('#').next().unwrap_or(line).trim();
+        if trimmed.is_empty() || trimmed.starts_with('.') || trimmed.starts_with('#') {
+            None
+        } else {
+            Some(trimmed)
+        }
+    })
+}
+
+fn discover_line(asm: &str, line: &str, spans: &mut Vec<ByteSpan>) {
     let bytes = line.as_bytes();
     let mut index = 0;
     while index < bytes.len() {
         if is_local_label_at(bytes, index) {
             let start = index;
-            index += 2;
+            index += LOCAL_PREFIX.len();
             while index < bytes.len() && is_name_byte(bytes[index]) {
                 index += 1;
             }
             let name = &line[start..index];
-            if name.len() > 2 {
-                let ordinal = ordinal_of(names, name);
+            if name.len() > LOCAL_PREFIX.len() {
+                if spans.iter().all(|span| span.slice(asm) != name) {
+                    spans.push(ByteSpan::covering(asm, name));
+                }
+                continue;
+            }
+            index = start;
+        }
+        let ch = line[index..].chars().next().expect("index is in range");
+        index += ch.len_utf8();
+    }
+}
+
+fn write_canonical(asm: &str, line: &str, labels: &LabelTable, out: &mut String) {
+    let bytes = line.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if is_local_label_at(bytes, index) {
+            let start = index;
+            index += LOCAL_PREFIX.len();
+            while index < bytes.len() && is_name_byte(bytes[index]) {
+                index += 1;
+            }
+            let name = &line[start..index];
+            if name.len() > LOCAL_PREFIX.len() {
                 out.push('L');
-                push_usize(out, ordinal);
+                push_usize(out, labels.ordinal(asm, name));
                 continue;
             }
             index = start;
@@ -76,23 +144,14 @@ fn write_canonical<'a>(line: &'a str, names: &mut Vec<&'a str>, out: &mut String
 }
 
 fn is_local_label_at(bytes: &[u8], index: usize) -> bool {
-    index + 2 <= bytes.len()
-        && bytes[index] == b'.'
-        && bytes[index + 1] == b'L'
+    let prefix = LOCAL_PREFIX.as_bytes();
+    index + prefix.len() <= bytes.len()
+        && bytes[index..].starts_with(prefix)
         && (index == 0 || !is_name_byte(bytes[index - 1]))
 }
 
-fn ordinal_of<'a>(names: &mut Vec<&'a str>, name: &'a str) -> usize {
-    if let Some(ordinal) = names.iter().position(|existing| *existing == name) {
-        return ordinal;
-    }
-    let ordinal = names.len();
-    names.push(name);
-    ordinal
-}
-
 fn push_usize(out: &mut String, value: usize) {
-    let mut buf = [0u8; 20];
+    let mut buf = [0u8; DECIMAL_DIGITS];
     let mut n = value;
     let mut index = buf.len();
     loop {

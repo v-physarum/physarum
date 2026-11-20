@@ -2,10 +2,23 @@
 
 use std::fmt::Write;
 
+const DIFF_LINE_CAP: usize = 2000;
+const DIFF_ORIGIN: usize = 1;
+const CONTEXT: usize = 3;
+const CONTEXT_GAP: usize = CONTEXT * 2;
+const HEADER_SLACK: usize = 32;
+const MARK_LEN: usize = 1;
+
 struct Hunk {
     left_start: usize,
     right_start: usize,
     lines: Vec<String>,
+}
+
+struct Mark {
+    left: usize,
+    right: usize,
+    same: bool,
 }
 
 /// Line diff used when two probes are not equivalent.
@@ -24,7 +37,7 @@ pub(crate) fn unified(
             .saturating_add(right_name.len())
             .saturating_add(left_text.len())
             .saturating_add(right_text.len())
-            .saturating_add(32),
+            .saturating_add(HEADER_SLACK),
     );
     let _ = writeln!(out, "--- {left_name}");
     let _ = writeln!(out, "+++ {right_name}");
@@ -59,7 +72,7 @@ enum Edit<'a> {
 }
 
 fn edits<'a>(left: &'a [&str], right: &'a [&str]) -> Vec<Edit<'a>> {
-    if left.len() > 2000 || right.len() > 2000 {
+    if left.len() > DIFF_LINE_CAP || right.len() > DIFF_LINE_CAP {
         return fallback(left, right);
     }
     let mut lengths = vec![vec![0usize; right.len() + 1]; left.len() + 1];
@@ -72,7 +85,7 @@ fn edits<'a>(left: &'a [&str], right: &'a [&str]) -> Vec<Edit<'a>> {
             };
         }
     }
-    let mut result = Vec::new();
+    let mut result = Vec::with_capacity(left.len().saturating_add(right.len()));
     let mut row = 0;
     let mut column = 0;
     while row < left.len() && column < right.len() {
@@ -100,7 +113,7 @@ fn edits<'a>(left: &'a [&str], right: &'a [&str]) -> Vec<Edit<'a>> {
 }
 
 fn fallback<'a>(left: &'a [&str], right: &'a [&str]) -> Vec<Edit<'a>> {
-    let mut result = Vec::new();
+    let mut result = Vec::with_capacity(left.len().saturating_add(right.len()));
     for line in left {
         result.push(Edit::Delete(line));
     }
@@ -116,20 +129,22 @@ fn prefixed(edit: &Edit<'_>) -> String {
         Edit::Delete(line) => ("-", *line),
         Edit::Insert(line) => ("+", *line),
     };
-    let mut text = String::with_capacity(line.len() + 1);
+    let mut text = String::with_capacity(line.len() + MARK_LEN);
     text.push_str(mark);
     text.push_str(line);
     text
 }
 
 fn hunks(edits: &[Edit<'_>]) -> Vec<Hunk> {
-    const CONTEXT: usize = 3;
-    let mut rendered = Vec::new();
-    let mut left_line = 1usize;
-    let mut right_line = 1usize;
+    let mut marks = Vec::with_capacity(edits.len());
+    let mut left_line = DIFF_ORIGIN;
+    let mut right_line = DIFF_ORIGIN;
     for edit in edits {
-        let text = prefixed(edit);
-        rendered.push((text, left_line, right_line, matches!(edit, Edit::Same(_))));
+        marks.push(Mark {
+            left: left_line,
+            right: right_line,
+            same: matches!(edit, Edit::Same(_)),
+        });
         match edit {
             Edit::Same(_) => {
                 left_line += 1;
@@ -141,36 +156,31 @@ fn hunks(edits: &[Edit<'_>]) -> Vec<Hunk> {
     }
     let mut groups = Vec::new();
     let mut index = 0;
-    while index < rendered.len() {
-        if rendered[index].3 {
+    while index < marks.len() {
+        if marks[index].same {
             index += 1;
             continue;
         }
         let start = index.saturating_sub(CONTEXT);
         let mut end = index + 1;
-        while end < rendered.len() {
-            let next = rendered[end..]
+        while end < marks.len() {
+            let next = marks[end..]
                 .iter()
-                .position(|item| !item.3)
+                .position(|item| !item.same)
                 .map(|at| end + at);
             let Some(change) = next else {
                 break;
             };
-            if change - end > CONTEXT * 2 {
+            if change - end > CONTEXT_GAP {
                 break;
             }
             end = change + 1;
         }
-        let stop = (end + CONTEXT).min(rendered.len());
-        let left_start = rendered[start].1;
-        let right_start = rendered[start].2;
-        let lines = rendered[start..stop]
-            .iter_mut()
-            .map(|item| std::mem::take(&mut item.0))
-            .collect();
+        let stop = (end + CONTEXT).min(marks.len());
+        let lines = edits[start..stop].iter().map(prefixed).collect();
         groups.push(Hunk {
-            left_start,
-            right_start,
+            left_start: marks[start].left,
+            right_start: marks[start].right,
             lines,
         });
         index = stop;

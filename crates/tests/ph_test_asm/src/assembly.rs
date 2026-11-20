@@ -2,6 +2,7 @@
 
 use crate::error::{ErrorKind, Result};
 use crate::scan;
+use crate::span::ByteSpan;
 
 /// Assembly of one release probe.
 #[derive(Debug)]
@@ -80,8 +81,8 @@ pub(crate) struct Function {
     pub(crate) name: String,
     pub(crate) asm: String,
     pub(crate) signature: String,
-    /// Byte span of the hot loop inside `asm`.
-    pub(crate) hot: Option<(usize, usize)>,
+    /// Hot loop inside `asm`.
+    pub(crate) hot: Option<ByteSpan>,
 }
 
 impl Function {
@@ -103,15 +104,15 @@ impl Function {
     ///
     /// Returns an error when the function has no backedge.
     pub(crate) fn hot_loop(&self) -> Result<&str> {
-        self.hot_bounds().map(|(start, end)| &self.asm[start..end])
+        self.hot_bounds().map(|span| span.slice(&self.asm))
     }
 
-    /// Byte span of the hot loop inside [`Self::asm`].
+    /// Hot loop inside [`Self::asm`].
     ///
     /// # Errors
     ///
     /// Returns an error when the function has no backedge.
-    pub(crate) fn hot_bounds(&self) -> Result<(usize, usize)> {
+    pub(crate) fn hot_bounds(&self) -> Result<ByteSpan> {
         self.hot.ok_or_else(|| {
             ErrorKind::NoHotLoop {
                 name: self.name.clone(),
@@ -121,8 +122,12 @@ impl Function {
     }
 }
 
+const SHORTEST_TYPE_DIRECTIVE: &str = ".type a,@function";
+const SHORTEST_DEFINE: &str = "define void @a(){";
+const LABEL_COLON_LEN: usize = 1;
+
 fn asm_functions(asm: &str) -> Vec<(String, String)> {
-    let mut symbols = Vec::new();
+    let mut symbols = Vec::with_capacity(asm.len() / SHORTEST_TYPE_DIRECTIVE.len());
     for (start, line) in scan::LineIter::new(asm) {
         if let Some(name) = function_type_symbol(line) {
             symbols.push((name, start));
@@ -161,11 +166,13 @@ fn find_label(asm: &str, from: usize, name: &str) -> Option<usize> {
 
 fn is_label(line: &str, name: &str) -> bool {
     let trimmed = line.trim();
-    trimmed.len() == name.len() + 1 && trimmed.starts_with(name) && trimmed.ends_with(':')
+    trimmed.len() == name.len() + LABEL_COLON_LEN
+        && trimmed.starts_with(name)
+        && trimmed.ends_with(':')
 }
 
 fn signatures(ir: &str) -> Vec<(&str, &str)> {
-    let mut found = Vec::new();
+    let mut found = Vec::with_capacity(ir.len() / SHORTEST_DEFINE.len());
     let mut index = 0;
     while index < ir.len() {
         let (line, next) = one_line(ir, index);

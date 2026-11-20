@@ -17,21 +17,29 @@ use crate::error::{ErrorKind, Result};
 
 const EDITION: &str = "2024";
 const CRATE_NAME: &str = "probe";
+const CRATE_TYPE: &str = "lib";
 const EMIT_DIR_PREFIX: &str = "ph-test-asm-emit";
+const EMIT_FLAG: &str = "--emit=llvm-ir,asm";
+const OPT_LEVEL: &str = "opt-level=3";
+const DEBUGINFO: &str = "debuginfo=0";
+const DEBUG_ASSERTIONS: &str = "debug-assertions=off";
+const OVERFLOW_CHECKS: &str = "overflow-checks=off";
+const CODEGEN_UNITS: &str = "codegen-units=1";
+const EMIT_SEPARATOR_LEN: usize = 1;
 
 pub(crate) fn compile(source: &Path, target: Option<&str>) -> Result<Assembly> {
     let dir = scratch_dir()?;
     let _guard = TempDir(dir.clone());
     let mut command = Command::new(rustc_program());
     command.arg("--edition").arg(EDITION);
-    command.arg("--crate-type").arg("lib");
+    command.arg("--crate-type").arg(CRATE_TYPE);
     command.arg("--crate-name").arg(CRATE_NAME);
-    command.arg("-C").arg("opt-level=3");
-    command.arg("-C").arg("debuginfo=0");
-    command.arg("-C").arg("debug-assertions=off");
-    command.arg("-C").arg("overflow-checks=off");
-    command.arg("-C").arg("codegen-units=1");
-    command.arg("--emit=llvm-ir,asm");
+    command.arg("-C").arg(OPT_LEVEL);
+    command.arg("-C").arg(DEBUGINFO);
+    command.arg("-C").arg(DEBUG_ASSERTIONS);
+    command.arg("-C").arg(OVERFLOW_CHECKS);
+    command.arg("-C").arg(CODEGEN_UNITS);
+    command.arg(EMIT_FLAG);
     command.arg("--out-dir").arg(&dir);
     if let Some(triple) = target {
         command.arg("--target").arg(triple);
@@ -91,7 +99,7 @@ fn read_emit(dir: &Path, extension: &str, what: &'static str) -> Result<String> 
     let mut total = 0usize;
     for path in &paths {
         let len = usize::try_from(fs::metadata(path)?.len()).unwrap_or(usize::MAX);
-        total = total.saturating_add(len).saturating_add(1);
+        total = total.saturating_add(len).saturating_add(EMIT_SEPARATOR_LEN);
     }
     let mut text = String::with_capacity(total);
     for path in paths {

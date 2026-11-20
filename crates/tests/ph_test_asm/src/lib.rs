@@ -9,12 +9,14 @@
 #![forbid(unsafe_code)]
 
 mod assembly;
+mod bound;
 mod compare;
 mod diff;
 mod emit;
 mod error;
 mod normalize;
 mod scan;
+mod span;
 mod tester;
 
 pub use compare::{AsmCompare, FunctionCompare, LoopCompare};

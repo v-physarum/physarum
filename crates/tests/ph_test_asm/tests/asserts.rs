@@ -6,6 +6,11 @@ use common::{SHAPES, host_triple, write_probe};
 use ph_test_asm::{AsmTester, Rules};
 use ph_test_errors::ErrorTester;
 
+const VECTOR_LOAD_LIMIT: u32 = 8;
+const NO_STORES: u32 = 0;
+const VECTOR_INSTRUCTION_LIMIT: u32 = 64;
+const EMPTY_BUDGET: u32 = 0;
+
 fn shapes() -> std::path::PathBuf {
     write_probe("shapes.rs", SHAPES)
 }
@@ -32,9 +37,10 @@ fn hot_loop_accepts_release_vector_body() {
         hot.assert_counted_loop();
         hot.assert_no_alloca_in_loop();
         hot.assert_noalias();
-        hot.assert_max_loads(8);
-        hot.assert_max_stores(0);
-        hot.on_target(&triple).assert_max_instructions(64);
+        hot.assert_max_loads(VECTOR_LOAD_LIMIT);
+        hot.assert_max_stores(NO_STORES);
+        hot.on_target(&triple)
+            .assert_max_instructions(VECTOR_INSTRUCTION_LIMIT);
         Rules::new()
             .simd()
             .no_bounds()
@@ -239,7 +245,7 @@ fn hot_loop_load_cap_is_enforced() {
     let path = shapes();
     AsmTester::new(&path)
         .function("sum")
-        .hot_loop(|hot| hot.assert_max_loads(0));
+        .hot_loop(|hot| hot.assert_max_loads(EMPTY_BUDGET));
 }
 
 #[test]
@@ -248,7 +254,7 @@ fn instruction_cap_rejects_an_empty_budget() {
     let path = shapes();
     let triple = host_triple();
     AsmTester::new(&path).function("sum").hot_loop(|hot| {
-        hot.on_target(&triple).assert_max_instructions(0);
+        hot.on_target(&triple).assert_max_instructions(EMPTY_BUDGET);
     });
 }
 
