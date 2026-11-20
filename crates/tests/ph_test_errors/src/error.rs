@@ -10,10 +10,10 @@ use thiserror::Error;
 /// A probe failure. The message is the text shown to the caller.
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct Error(#[from] ErrorKind);
+pub(crate) struct Error(#[from] ErrorKind);
 
 /// Result of building one probe.
-pub type Result<T> = std::result::Result<T, Error>;
+pub(crate) type Result<T> = std::result::Result<T, Error>;
 
 /// Why a probe step failed.
 #[derive(Debug, Error)]

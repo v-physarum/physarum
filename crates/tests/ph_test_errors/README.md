@@ -1,6 +1,6 @@
 # ph_test_errors
 
-Compile-fail asserts for debug probes. Each probe is its own crate. The first assert builds it with `rustc` at `opt-level=0` and edition 2024. Later asserts on the same chain walk the parsed diagnostics without allocating.
+Compile-fail asserts for debug probes. `ErrorTester` is the public API. Each probe is its own crate. The first assert builds it with `rustc` at `opt-level=0` and edition 2024. Later asserts on the same chain walk the parsed diagnostics without allocating.
 
 This crate does not emit LLVM IR or assembly.
 

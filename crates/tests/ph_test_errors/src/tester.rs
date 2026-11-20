@@ -5,7 +5,8 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::{Diagnostic, Diagnostics, Level, Probe};
+use crate::diagnostics::{Diagnostic, Diagnostics, Level};
+use crate::probe::Probe;
 
 /// Compile-fail checks for one debug probe.
 ///
@@ -21,7 +22,7 @@ use crate::{Diagnostic, Diagnostics, Level, Probe};
 /// ErrorTester::file("ok.rs").assert_pass();
 /// ```
 ///
-/// The chain compiles the probe once, through [`Probe::diagnostics`](Probe::diagnostics).
+/// The chain compiles the probe once. Later asserts reuse that result.
 #[derive(Debug)]
 pub struct ErrorTester {
     input: Input,

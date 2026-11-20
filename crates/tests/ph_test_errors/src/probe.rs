@@ -18,13 +18,13 @@ const CRATE_NAME: &str = "probe";
 /// diagnostics. It does not emit LLVM IR or assembly.
 #[must_use]
 #[derive(Debug)]
-pub struct Probe {
+pub(crate) struct Probe {
     source: PathBuf,
 }
 
 impl Probe {
     /// A probe read from `source`.
-    pub fn new(source: impl Into<PathBuf>) -> Self {
+    pub(crate) fn new(source: impl Into<PathBuf>) -> Self {
         Self {
             source: source.into(),
         }
@@ -39,7 +39,7 @@ impl Probe {
     ///
     /// Returns an error when `rustc` cannot start, its stderr is not UTF-8,
     /// a diagnostic line is not JSON, or `rustc` fails without a diagnostic.
-    pub fn diagnostics(self) -> Result<Diagnostics> {
+    pub(crate) fn diagnostics(self) -> Result<Diagnostics> {
         let dir = scratch_dir()?;
         let _guard = TempDir(dir.clone());
         let mut command = Command::new(rustc_program());
