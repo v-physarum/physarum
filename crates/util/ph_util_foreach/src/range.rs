@@ -942,7 +942,7 @@ impl<'a> Cursor<'a> {
             }
             let signed = magnitude
                 .checked_neg()
-                .ok_or_else(|| Error::new(span, "integer literal overflows `i128`"))?;
+                .ok_or_else(|| Error::from(IntLiteralError::Overflow(span)))?;
             return Ok(SpannedBound::int(signed, span));
         }
         let parsed = if let Some(TokenTree::Literal(literal)) = self.tokens.get(self.index) {
@@ -971,27 +971,21 @@ impl<'a> Cursor<'a> {
             _ => return Ok(0),
         };
         let Some(sign_punct) = self.punct(0) else {
-            return Err(Error::new(
-                Span::call_site(),
-                "expected an integer literal after `#` `+` or `#` `-`",
-            ));
+            return Err(IntLiteralError::MissingAfterSign(Span::call_site()).into());
         };
         let sign_span = sign_punct.span();
         self.bump();
         let magnitude = if let Some(TokenTree::Literal(literal)) = self.tokens.get(self.index) {
             parse_unsuffixed_int(literal)?
         } else {
-            return Err(Error::new(
-                sign_span,
-                "expected an integer literal after `#` `+` or `#` `-`",
-            ));
+            return Err(IntLiteralError::MissingAfterSign(sign_span).into());
         };
         self.bump();
         let offset = match sign {
             1 => magnitude,
             _ => magnitude
                 .checked_neg()
-                .ok_or_else(|| Error::new(sign_span, "integer literal overflows `i128`"))?,
+                .ok_or_else(|| Error::from(IntLiteralError::Overflow(sign_span)))?,
         };
         Ok(offset)
     }
@@ -1021,10 +1015,41 @@ fn parse_unsuffixed_int(literal: &Literal) -> Result<i128> {
 fn parse_int_digits(text: &str, span: Span) -> Result<i128> {
     let (radix, digits) = split_radix(text);
     if digits.is_empty() || !digits.bytes().all(|byte| is_radix_digit(byte, radix)) {
-        return Err(Error::new(span, "expected an unsuffixed integer literal"));
+        return Err(IntLiteralError::Unsuffixed(span).into());
     }
-    i128::from_str_radix(digits, radix)
-        .map_err(|_| Error::new(span, "integer literal overflows `i128`"))
+    i128::from_str_radix(digits, radix).map_err(|_| IntLiteralError::Overflow(span).into())
+}
+
+/// A rejected integer literal. The message is written when this becomes [`Error`].
+enum IntLiteralError {
+    Unsuffixed(Span),
+    Overflow(Span),
+    MissingAfterSign(Span),
+}
+
+impl IntLiteralError {
+    fn span(&self) -> Span {
+        match *self {
+            Self::Unsuffixed(span) | Self::Overflow(span) | Self::MissingAfterSign(span) => span,
+        }
+    }
+}
+
+impl From<IntLiteralError> for Error {
+    fn from(error: IntLiteralError) -> Self {
+        let message = error.to_string();
+        Error::new(error.span(), message)
+    }
+}
+
+impl std::fmt::Display for IntLiteralError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Unsuffixed(_) => "expected an unsuffixed integer literal",
+            Self::Overflow(_) => "integer literal overflows `i128`",
+            Self::MissingAfterSign(_) => "expected an integer literal after `#` `+` or `#` `-`",
+        })
+    }
 }
 
 fn split_radix(text: &str) -> (u32, &str) {
