@@ -1084,13 +1084,29 @@ fn push_comma(emitted: &mut bool, out: &mut TokenStream) {
     *emitted = true;
 }
 
-const PASTE_CAP: usize = 128;
+/// Stack buffer that holds one pasted identifier.
+struct Paste;
+
+impl Paste {
+    const CAP: usize = 128;
+}
+
+/// Decimal text of a `u128` index.
+struct Decimal;
+
+impl Decimal {
+    const RADIX: u128 = 10;
+    /// `u128::MAX` is 39 digits.
+    const MAX_DIGITS: usize = (u128::MAX.ilog10() + 1) as usize;
+    const ZERO: u8 = b'0';
+    const DIGITS: &[u8] = b"0123456789";
+}
 
 fn emit_pasted(base: &str, index: i128, span: Span, out: &mut TokenStream) -> Result<()> {
     let Ok(value) = u128::try_from(index) else {
         return Err(Error::new(span, ErrorKind::NegativePaste));
     };
-    let mut stack = [0u8; PASTE_CAP];
+    let mut stack = [0u8; Paste::CAP];
     if let Some(text) = write_paste(&mut stack, base, value) {
         out.extend([TokenTree::Ident(Ident::new(text, span))]);
         return Ok(());
@@ -1119,7 +1135,7 @@ fn decimal_len(value: u128) -> usize {
     }
     match usize::try_from(value.ilog10()) {
         Ok(width) => width + 1,
-        Err(_) => 39,
+        Err(_) => Decimal::MAX_DIGITS,
     }
 }
 
@@ -1128,25 +1144,25 @@ fn write_decimal(slot: &mut [u8], mut value: u128) {
         return;
     }
     if value == 0 {
-        slot[0] = b'0';
+        slot[0] = Decimal::ZERO;
         return;
     }
     for byte in slot.iter_mut().rev() {
         *byte = digit_byte(value);
-        value /= 10;
+        value /= Decimal::RADIX;
     }
 }
 
 fn push_decimal(out: &mut String, mut value: u128) {
     if value == 0 {
-        out.push('0');
+        out.push(char::from(Decimal::ZERO));
         return;
     }
-    let mut digits = [0u8; 39];
+    let mut digits = [0u8; Decimal::MAX_DIGITS];
     let mut count = 0;
     while value > 0 {
         digits[count] = digit_byte(value);
-        value /= 10;
+        value /= Decimal::RADIX;
         count += 1;
     }
     for index in (0..count).rev() {
@@ -1155,8 +1171,7 @@ fn push_decimal(out: &mut String, mut value: u128) {
 }
 
 fn digit_byte(value: u128) -> u8 {
-    const DIGITS: &[u8; 10] = b"0123456789";
-    DIGITS[(value % 10) as usize]
+    Decimal::DIGITS[(value % Decimal::RADIX) as usize]
 }
 
 fn is_exactly_hash(tokens: &[TokenTree]) -> bool {
