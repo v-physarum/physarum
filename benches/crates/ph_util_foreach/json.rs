@@ -1,22 +1,34 @@
 //! Readers for the JSON this bench consumes.
 //!
 //! `serde` and `serde_json` are built with default features off. Only `derive`
-//! and `std` are enabled.
+//! and `std` are enabled. Read failures are `thiserror` values.
 
 use std::path::PathBuf;
 
 use serde::Deserialize;
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub(crate) enum ReadError {
+    #[error("hyperfine json: {0}")]
+    Hyperfine(serde_json::Error),
+    #[error("hyperfine json has no time_wall_clock")]
+    MissingWallClock,
+    #[error("cargo json: {0}")]
+    Cargo(serde_json::Error),
+    #[error("runtime bench executable missing")]
+    MissingExecutable,
+}
 
 pub(crate) struct WallClock {
     pub(crate) median: f64,
     pub(crate) stddev: f64,
 }
 
-pub(crate) fn wall_clock(json: &str) -> Result<WallClock, String> {
-    let report: HyperfineReport =
-        serde_json::from_str(json).map_err(|error| format!("hyperfine json: {error}"))?;
+pub(crate) fn wall_clock(json: &str) -> Result<WallClock, ReadError> {
+    let report: HyperfineReport = serde_json::from_str(json).map_err(ReadError::Hyperfine)?;
     let Some(result) = report.results.first() else {
-        return Err("hyperfine json has no time_wall_clock".to_owned());
+        return Err(ReadError::MissingWallClock);
     };
     let stat = &result.summary.time_wall_clock;
     Ok(WallClock {
@@ -25,13 +37,12 @@ pub(crate) fn wall_clock(json: &str) -> Result<WallClock, String> {
     })
 }
 
-pub(crate) fn runtime_executable(log: &str) -> Result<PathBuf, String> {
+pub(crate) fn runtime_executable(log: &str) -> Result<PathBuf, ReadError> {
     for line in log.lines() {
         if line.is_empty() {
             continue;
         }
-        let message: CargoMessage =
-            serde_json::from_str(line).map_err(|error| format!("cargo json: {error}"))?;
+        let message: CargoMessage = serde_json::from_str(line).map_err(ReadError::Cargo)?;
         if message.reason != "compiler-artifact" {
             continue;
         }
@@ -45,7 +56,7 @@ pub(crate) fn runtime_executable(log: &str) -> Result<PathBuf, String> {
             return Ok(PathBuf::from(path));
         }
     }
-    Err("runtime bench executable missing".to_owned())
+    Err(ReadError::MissingExecutable)
 }
 
 #[derive(Deserialize)]

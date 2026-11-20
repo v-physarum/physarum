@@ -12,6 +12,8 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Output};
 
+use thiserror::Error;
+
 mod json;
 
 const REPEATS: u32 = 3;
@@ -55,19 +57,16 @@ struct Report {
     rows: Vec<String>,
 }
 
-#[derive(Debug)]
-struct Failure(String);
-
-impl std::fmt::Display for Failure {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(&self.0)
-    }
+#[derive(Debug, Error)]
+enum Failure {
+    #[error(transparent)]
+    Read(#[from] json::ReadError),
+    #[error("{0}")]
+    Message(String),
 }
 
-impl std::error::Error for Failure {}
-
 fn fail(message: impl Into<String>) -> Failure {
-    Failure(message.into())
+    Failure::Message(message.into())
 }
 
 type Result<T> = std::result::Result<T, Failure>;
@@ -278,7 +277,7 @@ fn measure_runtime(layout: &Layout, report: &mut Report) -> Result<()> {
     }
     let log = String::from_utf8(output.stdout)
         .map_err(|error| fail(format!("runtime build log is not utf-8: {error}")))?;
-    let executable = json::runtime_executable(&log).map_err(fail)?;
+    let executable = json::runtime_executable(&log)?;
     let mut samples = Vec::new();
     for run in 1..=REPEATS {
         let output = Command::new(&executable)
@@ -331,7 +330,7 @@ fn time_build(
     command.arg(cargo_command);
     run_combined(&mut command, &log, label)?;
     let text = fs::read_to_string(&json)?;
-    let clock = json::wall_clock(&text).map_err(fail)?;
+    let clock = json::wall_clock(&text)?;
     Ok(Timing {
         median: clock.median,
         stddev: clock.stddev,

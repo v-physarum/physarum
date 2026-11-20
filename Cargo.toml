@@ -19,6 +19,7 @@ pedantic = { level = "warn", priority = -1 }
 ph_util_foreach = { path = "crates/util/ph_util_foreach" }
 serde = { version = "1.0.229", default-features = false, features = ["derive"] }
 serde_json = { version = "1.0.154", default-features = false, features = ["std"] }
+thiserror = { version = "2.0.21", default-features = false, features = ["std"] }
 
 [[test]]
 name = "ph_util_foreach_json"

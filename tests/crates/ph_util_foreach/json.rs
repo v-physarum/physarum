@@ -30,6 +30,7 @@ fn empty_hyperfine_results_are_an_error() {
     let Err(error) = json::wall_clock(r#"{"results":[]}"#) else {
         panic!("empty results parsed");
     };
+    let error = error.to_string();
     assert!(error.contains("time_wall_clock"), "{error}");
 }
 
@@ -49,5 +50,6 @@ fn missing_runtime_executable_is_an_error() {
     let Err(error) = json::runtime_executable(log) else {
         panic!("missing executable parsed");
     };
+    let error = error.to_string();
     assert!(error.contains("executable"), "{error}");
 }
