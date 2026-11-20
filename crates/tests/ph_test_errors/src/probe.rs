@@ -1,0 +1,90 @@
+//! `rustc` invocation for one debug probe.
+
+use std::env;
+use std::fs;
+use std::path::PathBuf;
+use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use crate::diagnostics::Diagnostics;
+use crate::error::{Error, Result};
+
+const EDITION: &str = "2024";
+const CRATE_NAME: &str = "probe";
+const OUT_DIR_PREFIX: &str = "ph-test-errors-out";
+
+/// One Rust probe built for compiler diagnostics.
+///
+/// [`Probe::diagnostics`] runs `rustc` at `opt-level=0` and reads JSON
+/// diagnostics.
+#[must_use]
+#[derive(Debug)]
+pub(crate) struct Probe {
+    source: PathBuf,
+}
+
+impl Probe {
+    /// A probe read from `source`.
+    pub(crate) fn new(source: impl Into<PathBuf>) -> Self {
+        Self {
+            source: source.into(),
+        }
+    }
+
+    /// Builds the probe and returns the compiler diagnostics.
+    ///
+    /// An error diagnostic is part of the returned value. [`Err`] means `rustc`
+    /// did not start, or it failed without a JSON diagnostic.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `rustc` cannot start, its stderr is not UTF-8,
+    /// a diagnostic line is not JSON, or `rustc` fails without a diagnostic.
+    pub(crate) fn diagnostics(self) -> Result<Diagnostics> {
+        let dir = TempDir::scratch()?;
+        let mut command = Command::new(Self::rustc_program());
+        command.arg("--edition").arg(EDITION);
+        command.arg("--crate-type").arg("lib");
+        command.arg("--crate-name").arg(CRATE_NAME);
+        command.arg("-C").arg("opt-level=0");
+        command.arg("--error-format").arg("json");
+        command.arg("--color").arg("never");
+        command.arg("--emit=metadata");
+        command.arg("--out-dir").arg(&dir.0);
+        command.arg(&self.source);
+        let output = command
+            .output()
+            .map_err(|source| Error::RustcStart { source })?;
+        let stderr = String::from_utf8(output.stderr).map_err(|source| Error::Utf8 { source })?;
+        let parsed = Diagnostics::parse(&stderr)?;
+        if !output.status.success() && parsed.messages.is_empty() {
+            return Err(Error::ProbeFailed {
+                path: self.source.display().to_string(),
+                stderr,
+            });
+        }
+        Ok(parsed)
+    }
+
+    fn rustc_program() -> String {
+        env::var("RUSTC").unwrap_or_else(|_| "rustc".to_owned())
+    }
+}
+
+struct TempDir(PathBuf);
+
+impl TempDir {
+    fn scratch() -> Result<Self> {
+        static TICK: AtomicU64 = AtomicU64::new(0);
+        let n = TICK.fetch_add(1, Ordering::Relaxed);
+        let dir = env::temp_dir().join(format!("{OUT_DIR_PREFIX}-{}-{n}", std::process::id()));
+        fs::create_dir_all(&dir)?;
+        Ok(Self(dir))
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
