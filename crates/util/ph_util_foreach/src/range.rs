@@ -3,6 +3,8 @@
 //! Outer ranges and `Name[<pat>]` patterns share one parser. The outer range
 //! must already be finite. A pattern may use open ends, `#`, and the literal `-1`.
 
+use std::ops::{Range, RangeInclusive};
+
 use proc_macro::{Literal, Punct, Spacing, Span, TokenTree};
 
 use crate::error::{Error, Result};
@@ -393,12 +395,12 @@ pub(crate) fn compile_outer(range: &RangeExpr) -> Result<OuterRange> {
         None => 1,
         Some(step) => expect_positive_int_step(step)?,
     };
-    let window = IntRange::builder()
-        .start(start)
-        .end(end)
-        .end_inclusive(range.end_inclusive)
-        .step(gap)
-        .build();
+    let window = if range.end_inclusive {
+        IntRange::from(start..=end)
+    } else {
+        IntRange::from(start..end)
+    }
+    .with_step(gap);
     window.reject_inverted(range.span)?;
     let Some(count) = window.step_count() else {
         return Err(Error::new(range.span, "range is too large"));
@@ -445,12 +447,12 @@ pub(crate) fn visit_range(
         Some(bound) => (eval_pattern_bound(bound, ctx)?, range.end_inclusive),
         None => (ctx.domain.hi, true),
     };
-    let window = IntRange::builder()
-        .start(start)
-        .end(end)
-        .end_inclusive(end_inclusive)
-        .step(step)
-        .build();
+    let window = if end_inclusive {
+        IntRange::from(start..=end)
+    } else {
+        IntRange::from(start..end)
+    }
+    .with_step(step);
     // `T[#+1..=#]` when `#` is the last index: the window is empty and the
     // start sits one past the domain. That hole edge is allowed.
     if window.is_high_hole(ctx.domain) {
@@ -541,9 +543,33 @@ struct IntRange {
     step: i128,
 }
 
+impl From<Range<i128>> for IntRange {
+    fn from(range: Range<i128>) -> Self {
+        Self {
+            start: range.start,
+            end: range.end,
+            end_inclusive: false,
+            step: 1,
+        }
+    }
+}
+
+impl From<RangeInclusive<i128>> for IntRange {
+    fn from(range: RangeInclusive<i128>) -> Self {
+        let (start, end) = range.into_inner();
+        Self {
+            start,
+            end,
+            end_inclusive: true,
+            step: 1,
+        }
+    }
+}
+
 impl IntRange {
-    fn builder() -> IntRangeBuilder {
-        IntRangeBuilder::default()
+    fn with_step(mut self, step: i128) -> Self {
+        self.step = step;
+        self
     }
 
     fn is_high_hole(self, domain: &Domain) -> bool {
@@ -616,57 +642,6 @@ impl IntRange {
         }
         let steps = span / self.step;
         usize::try_from(steps.checked_add(1)?).ok()
-    }
-}
-
-#[derive(Clone, Copy)]
-#[must_use]
-struct IntRangeBuilder {
-    start: i128,
-    end: i128,
-    end_inclusive: bool,
-    step: i128,
-}
-
-impl Default for IntRangeBuilder {
-    fn default() -> Self {
-        Self {
-            start: 0,
-            end: 0,
-            end_inclusive: false,
-            step: 1,
-        }
-    }
-}
-
-impl IntRangeBuilder {
-    fn start(mut self, start: i128) -> Self {
-        self.start = start;
-        self
-    }
-
-    fn end(mut self, end: i128) -> Self {
-        self.end = end;
-        self
-    }
-
-    fn end_inclusive(mut self, end_inclusive: bool) -> Self {
-        self.end_inclusive = end_inclusive;
-        self
-    }
-
-    fn step(mut self, step: i128) -> Self {
-        self.step = step;
-        self
-    }
-
-    fn build(self) -> IntRange {
-        IntRange {
-            start: self.start,
-            end: self.end,
-            end_inclusive: self.end_inclusive,
-            step: self.step,
-        }
     }
 }
 
