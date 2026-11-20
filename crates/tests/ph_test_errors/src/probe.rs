@@ -15,7 +15,7 @@ const CRATE_NAME: &str = "probe";
 /// One Rust probe built for compiler diagnostics.
 ///
 /// [`Probe::diagnostics`] runs `rustc` at `opt-level=0` and reads JSON
-/// diagnostics. It does not emit LLVM IR or assembly.
+/// diagnostics.
 #[must_use]
 #[derive(Debug)]
 pub(crate) struct Probe {
