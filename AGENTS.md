@@ -6,7 +6,8 @@ TODO: the owner has not defined the project purpose (library, CLI, or service). 
 
 ## Repository layout
 
-- `Cargo.toml`, `src/` — the `physarum` package. One crate today; it can become a Cargo workspace later.
+- `Cargo.toml`, `src/` — the `physarum` package and the workspace root.
+- `crates/benches/ph_bench_build/` — hyperfine runner. A bench selects scenarios and runs them.
 - `docs/adr/` — architecture decision records. See `docs/adr/README.md`.
 - `.github/` — CI workflow and issue and pull request templates.
 - `rust-toolchain.toml`, `rustfmt.toml` — pinned stable toolchain and formatting.
@@ -21,6 +22,7 @@ TODO: the owner has not defined the project purpose (library, CLI, or service). 
 - `unsafe` is forbidden.
 - Public items need rustdoc. The crate-level purpose stays a TODO until the owner writes it.
 - Comments, docs, issues, and commit messages are in English.
+- JSON is read and written with `serde` and `serde_json`. Do not assemble JSON text by hand.
 - Keep diffs small. Do not add a domain, product story, or sample use case.
 
 ## Macro design rules
@@ -73,8 +75,8 @@ From the repository root, with the pinned toolchain:
 
 ```bash
 cargo fmt --check
-cargo clippy -- -D warnings
-cargo test
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
 ```
 
 Cargo only forwards `-D` to Clippy when it comes after `--`.
