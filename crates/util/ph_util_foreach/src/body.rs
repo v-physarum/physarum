@@ -47,6 +47,9 @@ pub(crate) fn expand(input: TokenStream) -> Result<TokenStream> {
     Ok(output)
 }
 
+const RANGE_ARG: &str = "range";
+const BODY_ARG: &str = "body";
+
 trait Call {
     fn split_call(self) -> Result<(Vec<TokenTree>, Vec<TokenTree>)>;
 }
@@ -104,14 +107,14 @@ impl CallParts for [TokenTree] {
         brace_at >= 2
             && self
                 .get(brace_at - 2)
-                .is_some_and(|tree| matches!(tree, TokenTree::Ident(name) if name == "body"))
+                .is_some_and(|tree| matches!(tree, TokenTree::Ident(name) if name == BODY_ARG))
             && self.is_punct_at(brace_at - 1, '=')
     }
 
     fn range_of_block(&self, span: Span) -> Result<Vec<TokenTree>> {
         let named_range = self
             .first()
-            .is_some_and(|tree| matches!(tree, TokenTree::Ident(name) if name == "range"))
+            .is_some_and(|tree| matches!(tree, TokenTree::Ident(name) if name == RANGE_ARG))
             && self.is_punct_at(1, '=');
         if named_range {
             let value = self[2..].to_vec();
@@ -137,8 +140,8 @@ impl CallParts for [TokenTree] {
         let right_span = self.get(comma_at + 1).map_or(span, TokenTree::span);
         let (right_name, right_value) = self[comma_at + 1..].named_value(right_span)?;
         let (range, body) = match (left_name.as_str(), right_name.as_str()) {
-            ("range", "body") => (left_value, right_value),
-            ("body", "range") => (right_value, left_value),
+            (RANGE_ARG, BODY_ARG) => (left_value, right_value),
+            (BODY_ARG, RANGE_ARG) => (right_value, left_value),
             _ => return Err(Error::new(span, ErrorKind::CallForm)),
         };
         if range.is_empty() {
