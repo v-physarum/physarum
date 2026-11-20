@@ -1,0 +1,17 @@
+[package]
+name = "ph_proc_macro_dylib"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.100"
+license = "MIT"
+repository = "https://github.com/v-physarum/physarum"
+description = "Path of a built proc-macro dynamic library."
+readme = "README.md"
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
