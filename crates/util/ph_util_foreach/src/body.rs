@@ -253,7 +253,7 @@ fn compile_into(prog: &mut Program, source_at: usize, source_len: usize) -> Resu
     })
 }
 
-fn try_compile_list(
+fn compile_bracket_sequence(
     prog: &mut Program,
     counts: &mut Counts,
     source_at: usize,
@@ -278,7 +278,7 @@ fn try_compile_list(
     Ok(Some(next))
 }
 
-fn try_compile_prefixed(
+fn compile_prefixed_sequence(
     prog: &mut Program,
     counts: &mut Counts,
     source_at: usize,
@@ -292,28 +292,49 @@ fn try_compile_prefixed(
         return Ok(None);
     };
     if is_plus(prog, source_at, source_len, after_name)? {
-        let Some(piece_at) = index.checked_add(2) else {
-            return Ok(None);
-        };
-        let Some(first) = try_push_piece(prog, source_at, source_len, piece_at)? else {
-            return Ok(None);
-        };
-        let saved = rewind(prog.ops.len(), first.physical)?;
-        prog.ops.insert(
-            saved,
-            Inst {
-                op: Op::Ident(ident),
-                width: 1,
-            },
-        );
-        let physical = checked_add(1, first.physical)?;
-        let (pieces, physical, next, fan) = chain_pieces(
-            prog, source_at, source_len, 2, physical, first.next, first.fan,
-        )?;
-        let width = checked_add(physical, 1)?;
-        insert_before_body(prog, counts, saved, Op::List { pieces }, width, fan)?;
-        return Ok(Some(next));
+        return concat_ident_and_sequence(prog, counts, source_at, source_len, ident, after_name);
     }
+    reject_ident_before_sequence(prog, source_at, source_len, &ident, after_name)
+}
+
+fn concat_ident_and_sequence(
+    prog: &mut Program,
+    counts: &mut Counts,
+    source_at: usize,
+    source_len: usize,
+    ident: Ident,
+    plus_at: usize,
+) -> Result<Option<usize>> {
+    let Some(piece_at) = plus_at.checked_add(1) else {
+        return Ok(None);
+    };
+    let Some(first) = try_push_piece(prog, source_at, source_len, piece_at)? else {
+        return Ok(None);
+    };
+    let saved = rewind(prog.ops.len(), first.physical)?;
+    prog.ops.insert(
+        saved,
+        Inst {
+            op: Op::Ident(ident),
+            width: 1,
+        },
+    );
+    let physical = checked_add(1, first.physical)?;
+    let (pieces, physical, next, fan) = chain_pieces(
+        prog, source_at, source_len, 2, physical, first.next, first.fan,
+    )?;
+    let width = checked_add(physical, 1)?;
+    insert_before_body(prog, counts, saved, Op::List { pieces }, width, fan)?;
+    Ok(Some(next))
+}
+
+fn reject_ident_before_sequence(
+    prog: &mut Program,
+    source_at: usize,
+    source_len: usize,
+    ident: &Ident,
+    after_name: usize,
+) -> Result<Option<usize>> {
     if is_sequence_start(prog, source_at, source_len, after_name)? {
         return Err(Error::new(
             ident.span(),
@@ -417,7 +438,7 @@ fn push_rows(
     Ok((width, pattern.uses_index() || nested.fan))
 }
 
-fn try_compile_paste(
+fn compile_pasted_ident(
     prog: &mut Program,
     counts: &mut Counts,
     source_at: usize,
@@ -444,7 +465,7 @@ fn try_compile_paste(
     Ok(Some(index + 3))
 }
 
-fn try_compile_hash(
+fn compile_index_literal(
     prog: &mut Program,
     counts: &mut Counts,
     source_at: usize,
@@ -463,7 +484,7 @@ fn try_compile_hash(
     Ok(true)
 }
 
-fn try_compile_group(
+fn compile_delimited_group(
     prog: &mut Program,
     counts: &mut Counts,
     source_at: usize,
@@ -473,31 +494,64 @@ fn try_compile_group(
     let Some((delimiter, span, stream)) = group_parts(prog, pos) else {
         return Ok(false);
     };
-    let saved_ops = prog.ops.len();
-    let saved_tokens = prog.tokens.len();
-    let saved_bytes = prog.bytes.len();
+    let mark = BufferMark::capture(prog);
     let nested = compile_stream(prog, stream)?;
     if nested.expands {
-        let width = checked_add(nested.physical, 1)?;
-        insert_before_body(
-            prog,
-            counts,
-            saved_ops,
-            Op::Group {
-                delimiter,
-                span,
-                body: nested.logical,
-            },
-            width,
-            nested.fan,
-        )?;
+        install_expanding_group(prog, counts, mark.ops, delimiter, span, &nested)?;
     } else {
-        prog.ops.truncate(saved_ops);
-        prog.tokens.truncate(saved_tokens);
-        prog.bytes.truncate(saved_bytes);
-        push_verbatim(prog, counts, cloned_token(prog, pos)?)?;
+        mark.restore(prog);
+        keep_original_group(prog, counts, pos)?;
     }
     Ok(true)
+}
+
+struct BufferMark {
+    ops: usize,
+    tokens: usize,
+    bytes: usize,
+}
+
+impl BufferMark {
+    fn capture(prog: &Program) -> Self {
+        Self {
+            ops: prog.ops.len(),
+            tokens: prog.tokens.len(),
+            bytes: prog.bytes.len(),
+        }
+    }
+
+    fn restore(self, prog: &mut Program) {
+        prog.ops.truncate(self.ops);
+        prog.tokens.truncate(self.tokens);
+        prog.bytes.truncate(self.bytes);
+    }
+}
+
+fn install_expanding_group(
+    prog: &mut Program,
+    counts: &mut Counts,
+    at: usize,
+    delimiter: Delimiter,
+    span: Span,
+    nested: &SeqStat,
+) -> Result<()> {
+    let width = checked_add(nested.physical, 1)?;
+    insert_before_body(
+        prog,
+        counts,
+        at,
+        Op::Group {
+            delimiter,
+            span,
+            body: nested.logical,
+        },
+        width,
+        nested.fan,
+    )
+}
+
+fn keep_original_group(prog: &mut Program, counts: &mut Counts, pos: usize) -> Result<()> {
+    push_verbatim(prog, counts, cloned_token(prog, pos)?)
 }
 
 fn compile_stream(prog: &mut Program, stream: TokenStream) -> Result<SeqStat> {
@@ -521,33 +575,50 @@ fn compile_range(
 ) -> Result<()> {
     let mut index = 0;
     while index < source_len {
-        if let Some(next) = try_compile_list(prog, counts, source_at, source_len, index)? {
-            index = next;
-            continue;
-        }
-        if let Some(next) = try_compile_paste(prog, counts, source_at, source_len, index)? {
-            index = next;
-            continue;
-        }
-        reject_spaced_paste(prog, source_at, source_len, index)?;
-        if let Some(next) = try_compile_prefixed(prog, counts, source_at, source_len, index)? {
-            index = next;
-            continue;
-        }
-        if try_compile_hash(prog, counts, source_at, source_len, index)? {
-            index += 1;
-            continue;
-        }
-        if try_compile_group(prog, counts, source_at, index)? {
-            index += 1;
-            continue;
-        }
-        let token = cloned_token(prog, source_pos(source_at, index)?)?;
-        push_verbatim(prog, counts, token)?;
-        index += 1;
+        index = compile_one(prog, counts, source_at, source_len, index)?;
     }
-    flush_copy(prog, counts)?;
-    Ok(())
+    flush_copy(prog, counts)
+}
+
+fn compile_one(
+    prog: &mut Program,
+    counts: &mut Counts,
+    source_at: usize,
+    source_len: usize,
+    index: usize,
+) -> Result<usize> {
+    if let Some(next) = compile_bracket_sequence(prog, counts, source_at, source_len, index)? {
+        return Ok(next);
+    }
+    if let Some(next) = compile_pasted_ident(prog, counts, source_at, source_len, index)? {
+        return Ok(next);
+    }
+    reject_spaced_ident_hash(prog, source_at, source_len, index)?;
+    if let Some(next) = compile_prefixed_sequence(prog, counts, source_at, source_len, index)? {
+        return Ok(next);
+    }
+    if compile_index_literal(prog, counts, source_at, source_len, index)? {
+        return next_token(index);
+    }
+    if compile_delimited_group(prog, counts, source_at, index)? {
+        return next_token(index);
+    }
+    copy_verbatim_token(prog, counts, source_at, index)?;
+    next_token(index)
+}
+
+fn copy_verbatim_token(
+    prog: &mut Program,
+    counts: &mut Counts,
+    source_at: usize,
+    index: usize,
+) -> Result<()> {
+    let token = cloned_token(prog, source_pos(source_at, index)?)?;
+    push_verbatim(prog, counts, token)
+}
+
+fn next_token(index: usize) -> Result<usize> {
+    index.checked_add(1).ok_or_else(too_large)
 }
 
 fn push_op(prog: &mut Program, counts: &mut Counts, op: Op, fan: bool) -> Result<()> {
@@ -1033,7 +1104,7 @@ fn is_exactly_hash(tokens: &[TokenTree]) -> bool {
     }
 }
 
-fn reject_spaced_paste(
+fn reject_spaced_ident_hash(
     prog: &Program,
     source_at: usize,
     source_len: usize,
