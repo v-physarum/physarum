@@ -12,6 +12,8 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Output};
 
+mod json;
+
 const REPEATS: u32 = 3;
 const DEBUG_CASES: &[&str] = &[
     "flat_structs_64",
@@ -276,7 +278,7 @@ fn measure_runtime(layout: &Layout, report: &mut Report) -> Result<()> {
     }
     let log = String::from_utf8(output.stdout)
         .map_err(|error| fail(format!("runtime build log is not utf-8: {error}")))?;
-    let executable = runtime_executable(&log)?;
+    let executable = json::runtime_executable(&log).map_err(fail)?;
     let mut samples = Vec::new();
     for run in 1..=REPEATS {
         let output = Command::new(&executable)
@@ -329,7 +331,11 @@ fn time_build(
     command.arg(cargo_command);
     run_combined(&mut command, &log, label)?;
     let text = fs::read_to_string(&json)?;
-    wall_clock(&text)
+    let clock = json::wall_clock(&text).map_err(fail)?;
+    Ok(Timing {
+        median: clock.median,
+        stddev: clock.stddev,
+    })
 }
 
 fn cargo(cwd: &Path, target_dir: &Path, incremental: bool) -> Command {
@@ -381,63 +387,6 @@ fn stdout_text(program: &str, output: &Output) -> Result<String> {
     Ok(text.trim().to_owned())
 }
 
-fn wall_clock(json: &str) -> Result<Timing> {
-    let marker = "\"time_wall_clock\"";
-    let start = json
-        .rfind(marker)
-        .ok_or_else(|| fail("hyperfine json has no time_wall_clock"))?;
-    let tail = &json[start..];
-    Ok(Timing {
-        median: json_number_after(tail, "median")?,
-        stddev: json_number_after(tail, "stddev")?,
-    })
-}
-
-fn json_number_after(text: &str, key: &str) -> Result<f64> {
-    let pattern = format!("\"{key}\"");
-    let index = text
-        .find(&pattern)
-        .ok_or_else(|| fail(format!("missing {key}")))?;
-    let rest = text[index + pattern.len()..].trim_start();
-    let rest = rest
-        .strip_prefix(':')
-        .ok_or_else(|| fail(format!("missing colon after {key}")))?
-        .trim_start();
-    if rest.starts_with("null") {
-        return Err(fail(format!("{key} is null")));
-    }
-    let end = rest
-        .find(|character: char| {
-            !(character.is_ascii_digit() || matches!(character, '.' | '-' | '+' | 'e' | 'E'))
-        })
-        .unwrap_or(rest.len());
-    if end == 0 {
-        return Err(fail(format!("{key} is not a number")));
-    }
-    rest[..end]
-        .parse()
-        .map_err(|_| fail(format!("{key} is not a number")))
-}
-
-fn runtime_executable(log: &str) -> Result<PathBuf> {
-    for line in log.lines() {
-        if !line.contains("\"compiler-artifact\"") || !line.contains("ph_util_foreach_runtime") {
-            continue;
-        }
-        let Some(value) = json_value_after(line, "executable")? else {
-            continue;
-        };
-        if value == "null" {
-            continue;
-        }
-        let path = parse_json_string(value)?;
-        if !path.is_empty() {
-            return Ok(PathBuf::from(path));
-        }
-    }
-    Err(fail("runtime bench executable missing"))
-}
-
 fn runtime_seconds(stdout: &str) -> Result<f64> {
     for line in stdout.lines() {
         if let Some(rest) = line.strip_prefix("runtime_seconds ") {
@@ -456,46 +405,6 @@ fn median(sorted: &[f64]) -> f64 {
         f64::midpoint(sorted[mid - 1], sorted[mid])
     } else {
         sorted[mid]
-    }
-}
-
-fn json_value_after<'a>(text: &'a str, key: &str) -> Result<Option<&'a str>> {
-    let pattern = format!("\"{key}\"");
-    let Some(index) = text.find(&pattern) else {
-        return Ok(None);
-    };
-    let rest = text[index + pattern.len()..].trim_start();
-    let rest = rest
-        .strip_prefix(':')
-        .ok_or_else(|| fail(format!("missing colon after {key}")))?
-        .trim_start();
-    Ok(Some(rest))
-}
-
-fn parse_json_string(text: &str) -> Result<String> {
-    let mut chars = text.chars();
-    if chars.next() != Some('"') {
-        return Err(fail("expected a json string"));
-    }
-    let mut value = String::new();
-    while let Some(character) = chars.next() {
-        match character {
-            '"' => return Ok(value),
-            '\\' => value.push(json_escape(&mut chars)?),
-            other => value.push(other),
-        }
-    }
-    Err(fail("truncated json string"))
-}
-
-fn json_escape(chars: &mut std::str::Chars<'_>) -> Result<char> {
-    match chars.next() {
-        Some('\\') => Ok('\\'),
-        Some('"') => Ok('"'),
-        Some('/') => Ok('/'),
-        Some('n') => Ok('\n'),
-        Some(other) => Err(fail(format!("unsupported json escape {other}"))),
-        None => Err(fail("truncated json escape")),
     }
 }
 
