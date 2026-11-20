@@ -2,30 +2,57 @@
 
 use ph_util_foreach::impl_foreach;
 
-fn words(input: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut current = String::new();
-    for character in input.chars() {
-        if character.is_ascii_alphanumeric() || character == '_' {
-            current.push(character);
-        } else {
-            if !current.is_empty() {
-                out.push(std::mem::take(&mut current));
-            }
-            if !character.is_whitespace() {
-                out.push(character.to_string());
-            }
-        }
+/// One token of expanded text: an identifier run or a single punctuation mark.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Word<'a>(&'a str);
+
+impl<'a> Word<'a> {
+    fn new(text: &'a str) -> Self {
+        Self(text)
     }
-    if !current.is_empty() {
-        out.push(current);
-    }
-    out
 }
 
-fn assert_rows(rows: &[&str], expected: &str) {
-    let actual = rows.join(" ");
-    assert_eq!(words(&actual), words(expected), "actual: {actual}");
+/// Expanded text compared by its words.
+#[derive(Clone, Copy)]
+struct Text<'a>(&'a str);
+
+impl<'a> Text<'a> {
+    fn new(text: &'a str) -> Self {
+        Self(text)
+    }
+
+    fn words(self) -> Vec<Word<'a>> {
+        let mut out = Vec::new();
+        let mut start = None;
+        for (index, character) in self.0.char_indices() {
+            if character.is_ascii_alphanumeric() || character == '_' {
+                if start.is_none() {
+                    start = Some(index);
+                }
+            } else {
+                if let Some(from) = start.take() {
+                    out.push(Word::new(&self.0[from..index]));
+                }
+                if !character.is_whitespace() {
+                    let end = index + character.len_utf8();
+                    out.push(Word::new(&self.0[index..end]));
+                }
+            }
+        }
+        if let Some(from) = start {
+            out.push(Word::new(&self.0[from..]));
+        }
+        out
+    }
+}
+
+fn assert_rows(rows: &[Text<'_>], expected: Text<'_>) {
+    let actual = rows.iter().map(|row| row.0).collect::<Vec<_>>().join(" ");
+    assert_eq!(
+        Text::new(&actual).words(),
+        expected.words(),
+        "actual: {actual}"
+    );
 }
 
 impl_foreach!(range = 0..=3, body = {
@@ -285,35 +312,53 @@ fn pattern_forms_match_the_clipped_domain() {
     let names: [&str; 10] = [
         "Name0", "Name1", "Name2", "Name3", "Name4", "Name5", "Name6", "Name7", "Name8", "Name9",
     ];
-    assert_rows(&[excl0::TEXT], &names.join(", "));
+    assert_rows(&[Text::new(excl0::TEXT)], Text::new(&names.join(", ")));
     assert_rows(
-        &[incl0::TEXT],
-        "Name0, Name1, Name2, Name3, Name4, Name5, Name6, Name7, Name8, Name9, Name10",
+        &[Text::new(incl0::TEXT)],
+        Text::new("Name0, Name1, Name2, Name3, Name4, Name5, Name6, Name7, Name8, Name9, Name10"),
     );
-    assert_rows(&[from0::TEXT], &names.join(", "));
-    assert_rows(&[to0::TEXT], &names.join(", "));
+    assert_rows(&[Text::new(from0::TEXT)], Text::new(&names.join(", ")));
+    assert_rows(&[Text::new(to0::TEXT)], Text::new(&names.join(", ")));
     assert_rows(
-        &[to_incl0::TEXT],
-        "Name0, Name1, Name2, Name3, Name4, Name5, Name6, Name7, Name8, Name9, Name10",
+        &[Text::new(to_incl0::TEXT)],
+        Text::new("Name0, Name1, Name2, Name3, Name4, Name5, Name6, Name7, Name8, Name9, Name10"),
     );
-    assert_rows(&[full0::TEXT], &names.join(", "));
-    assert_rows(&[step_excl0::TEXT], "Name0, Name2, Name4, Name6, Name8");
-    assert_rows(&[step_incl0::TEXT], "Name0, Name2, Name4, Name6, Name8");
-    assert_rows(&[step_full0::TEXT], "Name0, Name2, Name4, Name6, Name8");
+    assert_rows(&[Text::new(full0::TEXT)], Text::new(&names.join(", ")));
     assert_rows(
-        &[from_step0::TEXT],
-        "Name0, Name2, Name4, Name6, Name8, Name10",
+        &[Text::new(step_excl0::TEXT)],
+        Text::new("Name0, Name2, Name4, Name6, Name8"),
     );
-    assert_rows(&[to_step0::TEXT], "Name0, Name2, Name4, Name6, Name8");
-    assert_rows(&[window0::TEXT], "Name2, Name3, Name4, Name5");
-    assert_rows(&[from_one0::TEXT], "Name1, Name3, Name5, Name7, Name9");
-    assert_rows(&[last0::TEXT], "Name10");
     assert_rows(
-        &[through_last0::TEXT],
-        "Name0, Name1, Name2, Name3, Name4, Name5, Name6, Name7, Name8, Name9, Name10",
+        &[Text::new(step_incl0::TEXT)],
+        Text::new("Name0, Name2, Name4, Name6, Name8"),
     );
-    assert_rows(&[last_only0::TEXT], "Name4");
-    assert_rows(&[last_tail0::TEXT], "Name4");
+    assert_rows(
+        &[Text::new(step_full0::TEXT)],
+        Text::new("Name0, Name2, Name4, Name6, Name8"),
+    );
+    assert_rows(
+        &[Text::new(from_step0::TEXT)],
+        Text::new("Name0, Name2, Name4, Name6, Name8, Name10"),
+    );
+    assert_rows(
+        &[Text::new(to_step0::TEXT)],
+        Text::new("Name0, Name2, Name4, Name6, Name8"),
+    );
+    assert_rows(
+        &[Text::new(window0::TEXT)],
+        Text::new("Name2, Name3, Name4, Name5"),
+    );
+    assert_rows(
+        &[Text::new(from_one0::TEXT)],
+        Text::new("Name1, Name3, Name5, Name7, Name9"),
+    );
+    assert_rows(&[Text::new(last0::TEXT)], Text::new("Name10"));
+    assert_rows(
+        &[Text::new(through_last0::TEXT)],
+        Text::new("Name0, Name1, Name2, Name3, Name4, Name5, Name6, Name7, Name8, Name9, Name10"),
+    );
+    assert_rows(&[Text::new(last_only0::TEXT)], Text::new("Name4"));
+    assert_rows(&[Text::new(last_tail0::TEXT)], Text::new("Name4"));
     let _ = excl9::TEXT;
     let _ = incl10::TEXT;
 }
@@ -322,33 +367,59 @@ fn pattern_forms_match_the_clipped_domain() {
 fn flat_domain_repeats_the_full_outer_set() {
     let full = "X, Name0, Name1, Name2;";
     assert_rows(
-        &[flat_full0::TEXT, flat_full1::TEXT, flat_full2::TEXT],
-        &format!("{full} {full} {full}"),
+        &[
+            Text::new(flat_full0::TEXT),
+            Text::new(flat_full1::TEXT),
+            Text::new(flat_full2::TEXT),
+        ],
+        Text::new(&format!("{full} {full} {full}")),
     );
     assert_rows(
-        &[flat_paste0::TEXT, flat_paste1::TEXT, flat_paste2::TEXT],
-        "Ix0 Name0, Name1, Name2; Ix1 Name0, Name1, Name2; Ix2 Name0, Name1, Name2;",
+        &[
+            Text::new(flat_paste0::TEXT),
+            Text::new(flat_paste1::TEXT),
+            Text::new(flat_paste2::TEXT),
+        ],
+        Text::new("Ix0 Name0, Name1, Name2; Ix1 Name0, Name1, Name2; Ix2 Name0, Name1, Name2;"),
     );
 }
 
 #[test]
 fn fan_domain_is_the_prefix_through_the_outer_index() {
     assert_rows(
-        &[fan_prefix0::TEXT, fan_prefix1::TEXT, fan_prefix2::TEXT],
-        "X, Name0; Y, Name0; X, Name0, Name1; Y, Name0, Name1; X, Name0, Name1, Name2; Y, Name0, Name1, Name2;",
+        &[
+            Text::new(fan_prefix0::TEXT),
+            Text::new(fan_prefix1::TEXT),
+            Text::new(fan_prefix2::TEXT),
+        ],
+        Text::new(
+            "X, Name0; Y, Name0; X, Name0, Name1; Y, Name0, Name1; X, Name0, Name1, Name2; Y, Name0, Name1, Name2;",
+        ),
     );
     assert_rows(
-        &[fan_short0::TEXT, fan_short1::TEXT, fan_short2::TEXT],
-        "K, Name0; K, Name0, Name1; K, Name0, Name1, Name2;",
+        &[
+            Text::new(fan_short0::TEXT),
+            Text::new(fan_short1::TEXT),
+            Text::new(fan_short2::TEXT),
+        ],
+        Text::new("K, Name0; K, Name0, Name1; K, Name0, Name1, Name2;"),
     );
     assert_rows(
-        &[fan_step0::TEXT, fan_step2::TEXT, fan_step4::TEXT],
-        "K, Name0; K, Name0, Name1, Name2; K, Name0, Name1, Name2, Name3, Name4;",
+        &[
+            Text::new(fan_step0::TEXT),
+            Text::new(fan_step2::TEXT),
+            Text::new(fan_step4::TEXT),
+        ],
+        Text::new("K, Name0; K, Name0, Name1, Name2; K, Name0, Name1, Name2, Name3, Name4;"),
     );
     let evens = "K, Name0, Name2, Name4;";
     assert_rows(
-        &[flat_step0::TEXT, flat_step2::TEXT, flat_step4::TEXT],
-        &format!("{evens} {evens} {evens}"),
+        &[
+            Text::new(flat_step0::TEXT),
+            Text::new(flat_step2::TEXT),
+            Text::new(flat_step4::TEXT),
+        ],
+        Text::new(&format!("{evens} {evens} {evens}")),
     );
 }
 
@@ -357,78 +428,107 @@ fn gapped_domain_keeps_only_outer_indexes() {
     let evens = "K, Name0, Name2, Name4, Name6, Name8;";
     assert_rows(
         &[
-            gap_all0::TEXT,
-            gap_all2::TEXT,
-            gap_all4::TEXT,
-            gap_all6::TEXT,
-            gap_all8::TEXT,
+            Text::new(gap_all0::TEXT),
+            Text::new(gap_all2::TEXT),
+            Text::new(gap_all4::TEXT),
+            Text::new(gap_all6::TEXT),
+            Text::new(gap_all8::TEXT),
         ],
-        &format!("{evens} {evens} {evens} {evens} {evens}"),
+        Text::new(&format!("{evens} {evens} {evens} {evens} {evens}")),
     );
     let middle = "K, Name2, Name4, Name6;";
     assert_rows(
         &[
-            gap_mid0::TEXT,
-            gap_mid2::TEXT,
-            gap_mid4::TEXT,
-            gap_mid6::TEXT,
-            gap_mid8::TEXT,
+            Text::new(gap_mid0::TEXT),
+            Text::new(gap_mid2::TEXT),
+            Text::new(gap_mid4::TEXT),
+            Text::new(gap_mid6::TEXT),
+            Text::new(gap_mid8::TEXT),
         ],
-        &format!("{middle} {middle} {middle} {middle} {middle}"),
+        Text::new(&format!("{middle} {middle} {middle} {middle} {middle}")),
     );
 }
 
 #[test]
 fn placeholders_concat_tuples_and_offsets() {
-    assert_rows(&[off_bare0::TEXT, off_bare1::TEXT], "K, Off; K, Off;");
     assert_rows(
-        &[off_seq0::TEXT, off_seq1::TEXT],
-        "K, Off0, Off1; K, Off0, Off1;",
+        &[Text::new(off_bare0::TEXT), Text::new(off_bare1::TEXT)],
+        Text::new("K, Off; K, Off;"),
     );
     assert_rows(
-        &[empty_plus0::TEXT, empty_plus1::TEXT],
-        "K, Name0, Name1; K, Name0, Name1;",
+        &[Text::new(off_seq0::TEXT), Text::new(off_seq1::TEXT)],
+        Text::new("K, Off0, Off1; K, Off0, Off1;"),
     );
     assert_rows(
-        &[plus_literal0::TEXT, plus_literal1::TEXT],
-        "K, Name0, Name1 + 1; K, Name0, Name1 + 1;",
+        &[Text::new(empty_plus0::TEXT), Text::new(empty_plus1::TEXT)],
+        Text::new("K, Name0, Name1; K, Name0, Name1;"),
+    );
+    assert_rows(
+        &[
+            Text::new(plus_literal0::TEXT),
+            Text::new(plus_literal1::TEXT),
+        ],
+        Text::new("K, Name0, Name1 + 1; K, Name0, Name1 + 1;"),
     );
     let row = "K, (T0, U0), (T1, U1), (T2, U2);";
     assert_rows(
-        &[rows0::TEXT, rows1::TEXT, rows2::TEXT],
-        &format!("{row} {row} {row}"),
+        &[
+            Text::new(rows0::TEXT),
+            Text::new(rows1::TEXT),
+            Text::new(rows2::TEXT),
+        ],
+        Text::new(&format!("{row} {row} {row}")),
     );
-    assert_rows(
-        &[fan_row0::TEXT, fan_row1::TEXT, fan_row2::TEXT],
-        "K, (T0); K, (T0), (T1); K, (T0), (T1), (T2);",
-    );
-    assert_rows(
-        &[offset1::TEXT, offset2::TEXT],
-        "K, Name0, Name1; K, Name1, Name2;",
-    );
-    assert_rows(&[step_hash1::TEXT, step_hash2::TEXT], "K, Name0; K, Name0;");
-    assert_rows(&[hole0::TEXT, hole1::TEXT], "K ; K ;");
     assert_rows(
         &[
-            hole_edge0::TEXT,
-            hole_edge1::TEXT,
-            hole_edge2::TEXT,
-            hole_edge3::TEXT,
+            Text::new(fan_row0::TEXT),
+            Text::new(fan_row1::TEXT),
+            Text::new(fan_row2::TEXT),
         ],
-        "K ; K ; K ; K ;",
+        Text::new("K, (T0); K, (T0), (T1); K, (T0), (T1), (T2);"),
+    );
+    assert_rows(
+        &[Text::new(offset1::TEXT), Text::new(offset2::TEXT)],
+        Text::new("K, Name0, Name1; K, Name1, Name2;"),
+    );
+    assert_rows(
+        &[Text::new(step_hash1::TEXT), Text::new(step_hash2::TEXT)],
+        Text::new("K, Name0; K, Name0;"),
+    );
+    assert_rows(
+        &[Text::new(hole0::TEXT), Text::new(hole1::TEXT)],
+        Text::new("K ; K ;"),
+    );
+    assert_rows(
+        &[
+            Text::new(hole_edge0::TEXT),
+            Text::new(hole_edge1::TEXT),
+            Text::new(hole_edge2::TEXT),
+            Text::new(hole_edge3::TEXT),
+        ],
+        Text::new("K ; K ; K ; K ;"),
     );
 }
 
 #[test]
 fn paste_and_ordinary_tokens() {
     assert_rows(
-        &[paste_plus0::TEXT, paste_plus1::TEXT],
-        "let x = Ix0 + 1; let x = Ix1 + 1;",
+        &[Text::new(paste_plus0::TEXT), Text::new(paste_plus1::TEXT)],
+        Text::new("let x = Ix0 + 1; let x = Ix1 + 1;"),
     );
     assert_rows(
-        &[index_brackets0::TEXT, index_brackets1::TEXT],
-        "let x = arr[(0)]; let x = arr[(1)];",
+        &[
+            Text::new(index_brackets0::TEXT),
+            Text::new(index_brackets1::TEXT),
+        ],
+        Text::new("let x = arr[(0)]; let x = arr[(1)];"),
     );
-    assert_rows(&[ordinary0::TEXT], "let x = values[i]; let y = Name[];");
-    assert_rows(&[attribute0::TEXT], "#[allow(dead_code)] struct Ix0;");
+    assert_rows(
+        &[Text::new(ordinary0::TEXT)],
+        Text::new("let x = values[i]; let y = Name[];"),
+    );
+    assert_rows(
+        &[Text::new(attribute0::TEXT)],
+        Text::new("#[allow(dead_code)] struct Ix0;"),
+    );
 }
