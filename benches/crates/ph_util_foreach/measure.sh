@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Time impl_foreach! in a downstream crate.
+# Time impl_foreach! in a downstream crate with hyperfine 2.
 # The proc-macro is compiled once and is not part of the case times.
 # Debug and release builds are full compiles. Incremental time is debug only.
 # Runtime time is the release bench.
@@ -112,31 +112,56 @@ Path(dest).write_text("\n".join(lines) + "\n")
 PY
 }
 
-cargo_seconds() {
-    local logfile=$1
-    local line seconds
-    line="$(grep -E 'Finished' "$logfile" | tail -n 1 || true)"
-    line="$(printf '%s\n' "$line" | sed -E 's/\x1b\[[0-9;]*m//g')"
-    seconds="$(sed -n 's/.* in \([0-9.][0-9.]*\)s.*/\1/p' <<<"$line")"
-    if [[ -z "$seconds" ]]; then
-        echo "missing Finished line in $logfile" >&2
+if ! command -v hyperfine >/dev/null 2>&1; then
+    echo "hyperfine 2 is required" >&2
+    exit 1
+fi
+
+# Times one cargo command with hyperfine. Prints "median stddev" in seconds.
+# prepare runs before every measured build and is not included in the time.
+# warmup is the number of untimed runs before the sample. A cleaned build still
+# gets one warmup so the first load of rustc is outside the sample.
+time_cargo() {
+    local label=$1
+    local prepare=$2
+    local command=$3
+    local warmup=$4
+    local json="$out/logs/$label.json"
+    local log="$out/logs/$label.hyperfine.log"
+    local cargo_log="$out/logs/$label.cargo.log"
+    local -a args=(
+        --style basic
+        --runs "$repeats"
+        --metrics time_wall_clock
+        --export-json "$json"
+        --output "$cargo_log"
+    )
+    if [[ "$warmup" -gt 0 ]]; then
+        args+=(--warmup "$warmup")
+    fi
+    if [[ -n "$prepare" ]]; then
+        args+=(--prepare "$prepare")
+    fi
+    if ! (
+        cd "$user"
+        hyperfine "${args[@]}" "$command"
+    ) >"$log" 2>&1; then
+        echo "hyperfine failed for $label" >&2
+        cat "$log" >&2
         exit 1
     fi
-    printf '%s\n' "$seconds"
-}
+    python3 - "$json" <<'PY'
+import json
+import sys
+from pathlib import Path
 
-median() {
-    sort -n | awk '
-        { values[NR] = $1 }
-        END {
-            mid = int((NR + 1) / 2)
-            if (NR % 2 == 1) {
-                printf "%.3f\n", values[mid]
-            } else {
-                printf "%.3f\n", (values[mid] + values[mid + 1]) / 2
-            }
-        }
-    '
+summary = json.loads(Path(sys.argv[1]).read_text())["results"][0]["summary"]["time_wall_clock"]
+median = summary["median"]
+stddev = summary["stddev"]
+if stddev is None:
+    raise SystemExit("hyperfine reported no stddev")
+print(f"{median:.3f} {stddev:.3f}")
+PY
 }
 
 # Compile the proc-macro before any timed case.
@@ -168,77 +193,27 @@ report="$out/report.txt"
     echo "package ph_util_foreach_user"
     echo "proc_macro compiled once before these cases"
     echo "repeats $repeats"
+    echo "timer $(hyperfine --version)"
     echo "section=debug_full incremental_off"
-    echo "columns case median_cargo_seconds median_wall_seconds"
+    echo "columns case median_seconds stddev_seconds"
 } >"$report"
 
 for case in "${cases[@]}"; do
     write_source "$case" "$user/src/lib.rs"
-    walls="$out/logs/$case.wall"
-    cargos="$out/logs/$case.cargo"
-    : >"$walls"
-    : >"$cargos"
-    for run in $(seq 1 "$repeats"); do
-        (
-            cd "$user"
-            cargo clean -p ph_util_foreach_user
-        ) >"$out/logs/$case.clean$run.log" 2>&1
-        start="$(date +%s.%N)"
-        set +e
-        (
-            cd "$user"
-            cargo build --offline
-        ) >"$out/logs/$case.run$run.log" 2>&1
-        status=$?
-        set -e
-        end="$(date +%s.%N)"
-        if [[ "$status" -ne 0 ]]; then
-            echo "case $case run $run failed ($status)" >&2
-            cat "$out/logs/$case.run$run.log" >&2
-            exit "$status"
-        fi
-        awk -v start="$start" -v end="$end" 'BEGIN { printf "%.3f\n", (end - start) }' >>"$walls"
-        cargo_seconds "$out/logs/$case.run$run.log" >>"$cargos"
-    done
-    cargo_median="$(median <"$cargos")"
-    wall_median="$(median <"$walls")"
-    printf '%s %s %s\n' "$case" "$cargo_median" "$wall_median" >>"$report"
-    printf 'debug_full %s cargo %ss wall %ss\n' "$case" "$cargo_median" "$wall_median"
+    stats="$(time_cargo "debug_full_$case" "cargo clean -p ph_util_foreach_user" "cargo build --offline" 1)"
+    read -r median stddev <<<"$stats"
+    printf '%s %s %s\n' "$case" "$median" "$stddev" >>"$report"
+    printf 'debug_full %s median %ss stddev %ss\n' "$case" "$median" "$stddev"
 done
 
-# Incremental builds are debug only. The second build does not change source.
+# Incremental builds are debug only. The warmup compiles the new source.
+# The measured runs rebuild that same source.
 export CARGO_INCREMENTAL=1
 write_source flat_structs_1024 "$user/src/lib.rs"
-(
-    cd "$user"
-    cargo build --offline
-) >"$out/logs/debug_incremental_warmup.log" 2>&1
-incremental_walls="$out/logs/debug_incremental.wall"
-incremental_cargos="$out/logs/debug_incremental.cargo"
-: >"$incremental_walls"
-: >"$incremental_cargos"
-for run in $(seq 1 "$repeats"); do
-    start="$(date +%s.%N)"
-    set +e
-    (
-        cd "$user"
-        cargo build --offline
-    ) >"$out/logs/debug_incremental.run$run.log" 2>&1
-    status=$?
-    set -e
-    end="$(date +%s.%N)"
-    if [[ "$status" -ne 0 ]]; then
-        echo "debug incremental run $run failed ($status)" >&2
-        cat "$out/logs/debug_incremental.run$run.log" >&2
-        exit "$status"
-    fi
-    awk -v start="$start" -v end="$end" 'BEGIN { printf "%.3f\n", (end - start) }' >>"$incremental_walls"
-    cargo_seconds "$out/logs/debug_incremental.run$run.log" >>"$incremental_cargos"
-done
-incremental_cargo="$(median <"$incremental_cargos")"
-incremental_wall="$(median <"$incremental_walls")"
-printf 'debug_incremental_flat_structs_1024 %s %s\n' "$incremental_cargo" "$incremental_wall" >>"$report"
-printf 'debug_incremental flat_structs_1024 cargo %ss wall %ss\n' "$incremental_cargo" "$incremental_wall"
+stats="$(time_cargo "debug_incremental_flat_structs_1024" "" "cargo build --offline" 1)"
+read -r median stddev <<<"$stats"
+printf 'debug_incremental_flat_structs_1024 %s %s\n' "$median" "$stddev" >>"$report"
+printf 'debug_incremental flat_structs_1024 median %ss stddev %ss\n' "$median" "$stddev"
 
 # Release build time. Incremental release builds are not measured.
 export CARGO_INCREMENTAL=0
@@ -251,36 +226,10 @@ release_cases=(
 )
 for case in "${release_cases[@]}"; do
     write_source "$case" "$user/src/lib.rs"
-    walls="$out/logs/release_$case.wall"
-    cargos="$out/logs/release_$case.cargo"
-    : >"$walls"
-    : >"$cargos"
-    for run in $(seq 1 "$repeats"); do
-        (
-            cd "$user"
-            cargo clean -p ph_util_foreach_user --release
-        ) >"$out/logs/release_$case.clean$run.log" 2>&1
-        start="$(date +%s.%N)"
-        set +e
-        (
-            cd "$user"
-            cargo build --release --offline
-        ) >"$out/logs/release_$case.run$run.log" 2>&1
-        status=$?
-        set -e
-        end="$(date +%s.%N)"
-        if [[ "$status" -ne 0 ]]; then
-            echo "release $case run $run failed ($status)" >&2
-            cat "$out/logs/release_$case.run$run.log" >&2
-            exit "$status"
-        fi
-        awk -v start="$start" -v end="$end" 'BEGIN { printf "%.3f\n", (end - start) }' >>"$walls"
-        cargo_seconds "$out/logs/release_$case.run$run.log" >>"$cargos"
-    done
-    cargo_median="$(median <"$cargos")"
-    wall_median="$(median <"$walls")"
-    printf 'release_full_%s %s %s\n' "$case" "$cargo_median" "$wall_median" >>"$report"
-    printf 'release_full %s cargo %ss wall %ss\n' "$case" "$cargo_median" "$wall_median"
+    stats="$(time_cargo "release_full_$case" "cargo clean -p ph_util_foreach_user --release" "cargo build --release --offline" 1)"
+    read -r median stddev <<<"$stats"
+    printf 'release_full_%s %s %s\n' "$case" "$median" "$stddev" >>"$report"
+    printf 'release_full %s median %ss stddev %ss\n' "$case" "$median" "$stddev"
 done
 
 # Runtime performance is release only.
@@ -327,9 +276,9 @@ if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
     {
         echo "## ph_util_foreach user compile time"
         echo
-        echo "Proc-macro already built. Median of $repeats runs: full debug, incremental debug, full release, and release runtime."
+        echo "Proc-macro already built. Hyperfine median of $repeats runs: full debug, incremental debug, and full release. Release runtime is the bench's own timer."
         echo
-        echo "| case | cargo Finished (s) | wall (s) |"
+        echo "| case | median (s) | stddev (s) |"
         echo "| --- | ---: | ---: |"
         awk 'NF == 3 { printf "| `%s` | %s | %s |\n", $1, $2, $3 }' "$report"
     } >>"$GITHUB_STEP_SUMMARY"

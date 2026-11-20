@@ -152,7 +152,7 @@ An empty hole-edge slice expands to no tokens.
 
 ## User compile time
 
-Downstream compile time is a tracked metric. `benches/crates/ph_util_foreach/measure.sh` times a crate that calls `impl_foreach!`. It records a full debug build, a full release build, an incremental debug build, and release runtime. CI job `user compile time` repeats this and uploads the `ph-util-foreach-expand-time` artifact.
+Downstream compile time is a tracked metric. `benches/crates/ph_util_foreach/measure.sh` times a crate that calls `impl_foreach!` with hyperfine (median and standard deviation of three runs). It records a full debug build, a full release build, an incremental debug build, and release runtime. CI job `user compile time` installs hyperfine 2.0.0, repeats this, and uploads the `ph-util-foreach-expand-time` artifact.
 
 | Case | User source |
 | --- | --- |

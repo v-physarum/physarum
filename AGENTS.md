@@ -70,7 +70,7 @@ Cargo only forwards `-D` to Clippy when it comes after `--`.
 
 `cargo build` compiles the crate. There is no binary to run yet.
 
-Downstream compile time of `impl_foreach!` is a tracked metric. `benches/crates/ph_util_foreach/measure.sh` records the measurements in rule 5.
+Downstream compile time of `impl_foreach!` is a tracked metric. `benches/crates/ph_util_foreach/measure.sh` records the measurements in rule 5 with hyperfine.
 
 ## How agents should work
 
