@@ -20,14 +20,14 @@ fn reads_hyperfine_wall_clock() {
             }
         }]
     }"#;
-    let clock = json::wall_clock(json).unwrap();
+    let clock = json::WallClock::parse(json).unwrap();
     assert_eq!(clock.median.to_bits(), 1.5_f64.to_bits());
     assert_eq!(clock.stddev.to_bits(), 0.25_f64.to_bits());
 }
 
 #[test]
 fn empty_hyperfine_results_are_an_error() {
-    let Err(error) = json::wall_clock(r#"{"results":[]}"#) else {
+    let Err(error) = json::WallClock::parse(r#"{"results":[]}"#) else {
         panic!("empty results parsed");
     };
     let error = error.to_string();
@@ -40,14 +40,14 @@ fn reads_runtime_executable() {
 {"reason":"compiler-artifact","executable":null,"target":{"name":"ph_util_foreach_runtime"}}
 {"reason":"compiler-artifact","executable":"/tmp/runtime","target":{"name":"ph_util_foreach_runtime"}}
 "#;
-    let path = json::runtime_executable(log).unwrap();
+    let path = json::CargoMessage::runtime_executable(log).unwrap();
     assert_eq!(path.as_os_str(), "/tmp/runtime");
 }
 
 #[test]
 fn missing_runtime_executable_is_an_error() {
     let log = r#"{"reason":"compiler-artifact","executable":null,"target":{"name":"other"}}"#;
-    let Err(error) = json::runtime_executable(log) else {
+    let Err(error) = json::CargoMessage::runtime_executable(log) else {
         panic!("missing executable parsed");
     };
     let error = error.to_string();

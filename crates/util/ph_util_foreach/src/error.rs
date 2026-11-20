@@ -85,6 +85,11 @@ impl Error {
         Self { span, kind }
     }
 
+    /// The compiled body does not fit in the instruction tape.
+    pub(crate) fn too_large() -> Self {
+        Self::new(Span::call_site(), ErrorKind::BodyTooLarge)
+    }
+
     pub(crate) fn to_compile_error(&self) -> TokenStream {
         let span = self.span;
         let message = self.to_string();

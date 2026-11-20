@@ -366,7 +366,7 @@ impl<'a> EvalCtx<'a> {
         };
         let value = match step.bound {
             Bound::Int(value) => value,
-            Bound::Here { offset } => add_offset(self.index, offset, step.span)?,
+            Bound::Here { offset } => self.add_offset(offset, step.span)?,
             Bound::LastIndex => return Err(Error::new(step.span, ErrorKind::StepLastIndex)),
         };
         if value <= 0 {
@@ -375,11 +375,17 @@ impl<'a> EvalCtx<'a> {
         Ok(value)
     }
 
+    fn add_offset(self, offset: i128, span: Span) -> Result<i128> {
+        self.index
+            .checked_add(offset)
+            .ok_or(Error::new(span, ErrorKind::IndexOverflow))
+    }
+
     fn eval_bound(self, bound: SpannedBound) -> Result<i128> {
         match bound.bound {
             Bound::Int(value) => Ok(value),
             Bound::LastIndex => Ok(self.domain.hi),
-            Bound::Here { offset } => add_offset(self.index, offset, bound.span),
+            Bound::Here { offset } => self.add_offset(offset, bound.span),
         }
     }
 
@@ -525,12 +531,6 @@ impl<'a> RangeParse<'a> {
     }
 }
 
-fn add_offset(index: i128, offset: i128, span: Span) -> Result<i128> {
-    index
-        .checked_add(offset)
-        .ok_or(Error::new(span, ErrorKind::IndexOverflow))
-}
-
 /// `start..end` or `start..=end`. The step stays beside the range.
 enum Window {
     Exclusive(Range<i128>),
@@ -645,14 +645,14 @@ impl Window {
             return Clip::Empty;
         }
         let gap = domain.gap;
-        let g = gcd(step, gap);
+        let g = Self::gcd(step, gap);
         let Some(offset) = start.checked_sub(domain.lo) else {
             return Clip::Filtered;
         };
         if offset.rem_euclid(g) != 0 {
             return Clip::Empty;
         }
-        let Some(k) = steps_until_aligned(step, gap, offset) else {
+        let Some(k) = Self::steps_until_aligned(step, gap, offset) else {
             return Clip::Filtered;
         };
         let Some(stride) = (step / g).checked_mul(gap) else {
@@ -704,6 +704,50 @@ impl Window {
         let steps = span / step;
         usize::try_from(steps.checked_add(1)?).ok()
     }
+
+    fn gcd(mut a: i128, mut b: i128) -> i128 {
+        while b != 0 {
+            let next = a % b;
+            a = b;
+            b = next;
+        }
+        a.abs()
+    }
+
+    /// Smallest `k >= 0` such that `offset + k * step` is divisible by `gap`.
+    fn steps_until_aligned(step: i128, gap: i128, offset: i128) -> Option<i128> {
+        let need = (-offset).rem_euclid(gap);
+        if need == 0 {
+            return Some(0);
+        }
+        let (g, coefficient) = Self::egcd(step % gap, gap)?;
+        if need % g != 0 {
+            return None;
+        }
+        let period = gap / g;
+        let factor = (need / g).rem_euclid(period);
+        let k = coefficient.rem_euclid(period).checked_mul(factor)?;
+        Some(k.rem_euclid(period))
+    }
+
+    /// `(g, x)` with `a * x + b * y = g` and `g > 0`.
+    fn egcd(mut a: i128, mut b: i128) -> Option<(i128, i128)> {
+        let (mut x0, mut x1) = (1i128, 0i128);
+        while b != 0 {
+            let q = a.checked_div(b)?;
+            let r = a.checked_rem(b)?;
+            a = b;
+            b = r;
+            let next_x = x0.checked_sub(q.checked_mul(x1)?)?;
+            x0 = x1;
+            x1 = next_x;
+        }
+        if a < 0 {
+            Some((a.checked_neg()?, x0.checked_neg()?))
+        } else {
+            Some((a, x0))
+        }
+    }
 }
 
 enum Clip {
@@ -714,50 +758,6 @@ enum Clip {
         last: i128,
     },
     Filtered,
-}
-
-fn gcd(mut a: i128, mut b: i128) -> i128 {
-    while b != 0 {
-        let next = a % b;
-        a = b;
-        b = next;
-    }
-    a.abs()
-}
-
-/// Smallest `k >= 0` such that `offset + k * step` is divisible by `gap`.
-fn steps_until_aligned(step: i128, gap: i128, offset: i128) -> Option<i128> {
-    let need = (-offset).rem_euclid(gap);
-    if need == 0 {
-        return Some(0);
-    }
-    let (g, coefficient) = egcd(step % gap, gap)?;
-    if need % g != 0 {
-        return None;
-    }
-    let period = gap / g;
-    let factor = (need / g).rem_euclid(period);
-    let k = coefficient.rem_euclid(period).checked_mul(factor)?;
-    Some(k.rem_euclid(period))
-}
-
-/// `(g, x)` with `a * x + b * y = g` and `g > 0`.
-fn egcd(mut a: i128, mut b: i128) -> Option<(i128, i128)> {
-    let (mut x0, mut x1) = (1i128, 0i128);
-    while b != 0 {
-        let q = a.checked_div(b)?;
-        let r = a.checked_rem(b)?;
-        a = b;
-        b = r;
-        let next_x = x0.checked_sub(q.checked_mul(x1)?)?;
-        x0 = x1;
-        x1 = next_x;
-    }
-    if a < 0 {
-        Some((a.checked_neg()?, x0.checked_neg()?))
-    } else {
-        Some((a, x0))
-    }
 }
 
 /// A bound that was missing or invalid.

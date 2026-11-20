@@ -29,37 +29,16 @@ impl WallClock {
     fn new(median: f64, stddev: f64) -> Self {
         Self { median, stddev }
     }
-}
 
-pub(crate) fn wall_clock(json: &str) -> Result<WallClock, ReadError> {
-    let report: HyperfineReport = serde_json::from_str(json).map_err(ReadError::Hyperfine)?;
-    let Some(result) = report.results.first() else {
-        return Err(ReadError::MissingWallClock);
-    };
-    let stat = &result.summary.time_wall_clock;
-    Ok(WallClock::new(stat.median, stat.stddev))
-}
-
-pub(crate) fn runtime_executable(log: &str) -> Result<PathBuf, ReadError> {
-    for line in log.lines() {
-        if line.is_empty() {
-            continue;
-        }
-        let message: CargoMessage = serde_json::from_str(line).map_err(ReadError::Cargo)?;
-        if message.reason != "compiler-artifact" {
-            continue;
-        }
-        let Some(target) = message.target else {
-            continue;
+    /// Reads the wall-clock median and standard deviation from a hyperfine report.
+    pub(crate) fn parse(json: &str) -> Result<Self, ReadError> {
+        let report: HyperfineReport = serde_json::from_str(json).map_err(ReadError::Hyperfine)?;
+        let Some(result) = report.results.first() else {
+            return Err(ReadError::MissingWallClock);
         };
-        if target.name != "ph_util_foreach_runtime" {
-            continue;
-        }
-        if let Some(path) = message.executable.filter(|path| !path.is_empty()) {
-            return Ok(PathBuf::from(path));
-        }
+        let stat = &result.summary.time_wall_clock;
+        Ok(Self::new(stat.median, stat.stddev))
     }
-    Err(ReadError::MissingExecutable)
 }
 
 #[derive(Deserialize)]
@@ -83,13 +62,39 @@ struct HyperfineStat {
     stddev: f64,
 }
 
+/// One line of cargo `--message-format=json`.
 #[derive(Deserialize)]
-struct CargoMessage {
+pub(crate) struct CargoMessage {
     reason: String,
     #[serde(default)]
     executable: Option<String>,
     #[serde(default)]
     target: Option<CargoTarget>,
+}
+
+impl CargoMessage {
+    /// The path of the `ph_util_foreach_runtime` artifact in a cargo JSON log.
+    pub(crate) fn runtime_executable(log: &str) -> Result<PathBuf, ReadError> {
+        for line in log.lines() {
+            if line.is_empty() {
+                continue;
+            }
+            let message: Self = serde_json::from_str(line).map_err(ReadError::Cargo)?;
+            if message.reason != "compiler-artifact" {
+                continue;
+            }
+            let Some(target) = message.target else {
+                continue;
+            };
+            if target.name != "ph_util_foreach_runtime" {
+                continue;
+            }
+            if let Some(path) = message.executable.filter(|path| !path.is_empty()) {
+                return Ok(PathBuf::from(path));
+            }
+        }
+        Err(ReadError::MissingExecutable)
+    }
 }
 
 #[derive(Deserialize)]

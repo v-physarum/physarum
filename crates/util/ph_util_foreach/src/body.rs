@@ -255,7 +255,7 @@ impl Source {
     }
 
     fn pos(self, index: usize) -> Result<usize> {
-        self.at.checked_add(index).ok_or_else(too_large)
+        self.at.checked_add(index).ok_or_else(Error::too_large)
     }
 }
 
@@ -322,17 +322,19 @@ impl Program {
     }
 
     fn pack_str(&mut self, text: &str) -> Result<(u32, u32)> {
-        let at = fit(self.bytes.len())?;
-        let len = fit(text.len())?;
+        let at = Self::fit(self.bytes.len())?;
+        let len = Self::fit(text.len())?;
         self.bytes.extend(text.as_bytes());
         Ok((at, len))
     }
 
     fn text(&self, at: u32, len: u32) -> Result<&str> {
-        let start = widen(at)?;
-        let end = start.checked_add(widen(len)?).ok_or_else(too_large)?;
-        let bytes = self.bytes.get(start..end).ok_or_else(too_large)?;
-        std::str::from_utf8(bytes).map_err(|_| too_large())
+        let start = Program::widen(at)?;
+        let end = start
+            .checked_add(Program::widen(len)?)
+            .ok_or_else(Error::too_large)?;
+        let bytes = self.bytes.get(start..end).ok_or_else(Error::too_large)?;
+        std::str::from_utf8(bytes).map_err(|_| Error::too_large())
     }
     fn compile_seq(&mut self, source: Source) -> Result<SeqStat> {
         let source_limit = self.source.len();
@@ -359,9 +361,9 @@ impl Program {
         let Some(first) = self.try_push_piece(source, index)? else {
             return Ok(None);
         };
-        let saved = rewind(self.ops.len(), first.physical)?;
+        let saved = Self::rewind(self.ops.len(), first.physical)?;
         let (pieces, first) = self.chain_pieces(source, 1, first)?;
-        let width = checked_add(first.physical, 1)?;
+        let width = Self::checked_add(first.physical, 1)?;
         let inserted = Inserted::new(saved, Op::List { pieces }, width, first.fan);
         self.insert_before_body(counts, inserted)?;
         Ok(Some(first.next))
@@ -396,13 +398,13 @@ impl Program {
         let Some(first) = self.try_push_piece(source, piece_at)? else {
             return Ok(None);
         };
-        let saved = rewind(self.ops.len(), first.physical)?;
+        let saved = Self::rewind(self.ops.len(), first.physical)?;
         self.ops
             .insert(saved, Inst::new(Op::Ident(prefix.ident), 1));
-        let physical = checked_add(1, first.physical)?;
+        let physical = Self::checked_add(1, first.physical)?;
         let first = Pushed::new(physical, first.next, first.fan);
         let (pieces, first) = self.chain_pieces(source, 2, first)?;
-        let width = checked_add(first.physical, 1)?;
+        let width = Self::checked_add(first.physical, 1)?;
         let inserted = Inserted::new(saved, Op::List { pieces }, width, first.fan);
         self.insert_before_body(counts, inserted)?;
         Ok(Some(first.next))
@@ -431,8 +433,8 @@ impl Program {
             let Some(chained) = self.try_push_piece(source, followed)? else {
                 break;
             };
-            pieces = checked_add(pieces, 1)?;
-            let physical = checked_add(first.physical, chained.physical)?;
+            pieces = Self::checked_add(pieces, 1)?;
+            let physical = Self::checked_add(first.physical, chained.physical)?;
             let fan = first.fan || chained.fan;
             first = Pushed::new(physical, chained.next, fan);
         }
@@ -448,7 +450,7 @@ impl Program {
         };
         Ok(Some(Pushed::new(
             physical,
-            index.checked_add(2).ok_or_else(too_large)?,
+            index.checked_add(2).ok_or_else(Error::too_large)?,
             fan,
         )))
     }
@@ -472,7 +474,7 @@ impl Program {
     ) -> Result<(u32, bool)> {
         let saved = self.ops.len();
         let nested = self.compile_stream(stream)?;
-        let width = checked_add(nested.physical, 1)?;
+        let width = Self::checked_add(nested.physical, 1)?;
         self.ops.insert(
             saved,
             Inst::new(Op::Rows { span, pattern, body: nested.logical }, width),
@@ -546,7 +548,7 @@ impl Program {
         at: usize,
         group: &Expanding,
     ) -> Result<()> {
-        let width = checked_add(group.nested.physical, 1)?;
+        let width = Self::checked_add(group.nested.physical, 1)?;
         let op =
             Op::Group { delimiter: group.delimiter, span: group.span, body: group.nested.logical };
         self.insert_before_body(counts, Inserted::new(at, op, width, group.nested.fan))
@@ -561,7 +563,7 @@ impl Program {
             .source
             .len()
             .checked_sub(inner_at)
-            .ok_or_else(too_large)?;
+            .ok_or_else(Error::too_large)?;
         let stat = self.compile_into(Source::new(inner_at, inner_len))?;
         self.source.truncate(inner_at);
         Ok(stat)
@@ -585,13 +587,13 @@ impl Program {
             return Ok(next);
         }
         if self.compile_index_literal(counts, source, index)? {
-            return next_token(index);
+            return Self::next_token(index);
         }
         if self.compile_delimited_group(counts, source, index)? {
-            return next_token(index);
+            return Self::next_token(index);
         }
         self.copy_verbatim_token(counts, source, index)?;
-        next_token(index)
+        Self::next_token(index)
     }
     fn copy_verbatim_token(
         &mut self,
@@ -604,17 +606,17 @@ impl Program {
     }
     fn push_op(&mut self, counts: &mut Counts, op: Op, fan: bool) -> Result<()> {
         self.ops.push(Inst::new(op, 1));
-        counts.logical = checked_add(counts.logical, 1)?;
-        counts.physical = checked_add(counts.physical, 1)?;
+        counts.logical = Self::checked_add(counts.logical, 1)?;
+        counts.physical = Self::checked_add(counts.physical, 1)?;
         counts.expands = true;
         counts.fan |= fan;
         Ok(())
     }
     fn push_verbatim(&mut self, counts: &mut Counts, token: TokenTree) -> Result<()> {
-        let at = fit(self.tokens.len())?;
+        let at = Self::fit(self.tokens.len())?;
         self.tokens.push(token);
         match &mut counts.pending {
-            Some(pending) => pending.len = checked_add(pending.len, 1)?,
+            Some(pending) => pending.len = Self::checked_add(pending.len, 1)?,
             None => counts.pending = Some(PendingCopy::new(at, 1)),
         }
         Ok(())
@@ -625,8 +627,8 @@ impl Program {
         };
         self.ops
             .push(Inst::new(Op::Copy { at: pending.at, len: pending.len }, 1));
-        counts.logical = checked_add(counts.logical, 1)?;
-        counts.physical = checked_add(counts.physical, 1)?;
+        counts.logical = Self::checked_add(counts.logical, 1)?;
+        counts.physical = Self::checked_add(counts.physical, 1)?;
         Ok(())
     }
     fn insert_before_body(&mut self, counts: &mut Counts, inserted: Inserted) -> Result<()> {
@@ -639,11 +641,11 @@ impl Program {
                 at,
                 Inst::new(Op::Copy { at: pending.at, len: pending.len }, 1),
             );
-            counts.logical = checked_add(counts.logical, 1)?;
-            counts.physical = checked_add(counts.physical, 1)?;
+            counts.logical = Self::checked_add(counts.logical, 1)?;
+            counts.physical = Self::checked_add(counts.physical, 1)?;
         }
-        counts.logical = checked_add(counts.logical, 1)?;
-        counts.physical = checked_add(counts.physical, width)?;
+        counts.logical = Self::checked_add(counts.logical, 1)?;
+        counts.physical = Self::checked_add(counts.physical, width)?;
         counts.expands = true;
         counts.fan |= fan;
         Ok(())
@@ -710,7 +712,7 @@ impl Program {
     }
     fn classify_at(&self, start: usize, span: Span) -> Result<Class> {
         let Some(tokens) = self.source.get(start..) else {
-            return Err(too_large());
+            return Err(Error::too_large());
         };
         if tokens.is_exactly_hash() {
             return Ok(Class::Pattern(Pattern::Shorthand { span }));
@@ -739,15 +741,18 @@ impl Program {
         }
     }
     fn cloned_token(&self, pos: usize) -> Result<TokenTree> {
-        self.source.get(pos).cloned().ok_or_else(too_large)
+        self.source.get(pos).cloned().ok_or_else(Error::too_large)
     }
     fn is_plus(&self, source: Source, index: usize) -> Result<bool> {
         let tokens = self.source_slice(source)?;
         Ok(tokens.is_plus_at(index))
     }
     fn source_slice(&self, source: Source) -> Result<&[TokenTree]> {
-        let end = source.at.checked_add(source.len).ok_or_else(too_large)?;
-        self.source.get(source.at..end).ok_or_else(too_large)
+        let end = source
+            .at
+            .checked_add(source.len)
+            .ok_or_else(Error::too_large)?;
+        self.source.get(source.at..end).ok_or_else(Error::too_large)
     }
     fn reject_spaced_ident_hash(&self, source: Source, index: usize) -> Result<()> {
         let tokens = self.source_slice(source)?;
@@ -759,6 +764,27 @@ impl Program {
 
     fn mark(&self) -> BufferMark {
         BufferMark { ops: self.ops.len(), tokens: self.tokens.len(), bytes: self.bytes.len() }
+    }
+
+    fn next_token(index: usize) -> Result<usize> {
+        index.checked_add(1).ok_or_else(Error::too_large)
+    }
+
+    fn fit(value: usize) -> Result<u32> {
+        u32::try_from(value).map_err(|_| Error::too_large())
+    }
+
+    fn widen(value: u32) -> Result<usize> {
+        usize::try_from(value).map_err(|_| Error::too_large())
+    }
+
+    fn checked_add(left: u32, right: u32) -> Result<u32> {
+        left.checked_add(right).ok_or_else(Error::too_large)
+    }
+
+    fn rewind(len: usize, physical: u32) -> Result<usize> {
+        len.checked_sub(Self::widen(physical)?)
+            .ok_or_else(Error::too_large)
     }
 }
 
@@ -780,10 +806,6 @@ impl BufferMark {
         prog.tokens.truncate(self.tokens);
         prog.bytes.truncate(self.bytes);
     }
-}
-
-fn next_token(index: usize) -> Result<usize> {
-    index.checked_add(1).ok_or_else(too_large)
 }
 
 /// A run of instructions on the tape.
@@ -866,10 +888,15 @@ impl<'a> Emitting<'a> {
     fn emit_seq(&mut self, tape: Tape, ctx: &EvalCtx<'_>) -> Result<()> {
         let mut at = tape.at;
         for _ in 0..tape.count {
-            let inst = self.prog.ops.get(at).cloned().ok_or_else(too_large)?;
-            let width = widen(inst.width)?;
+            let inst = self
+                .prog
+                .ops
+                .get(at)
+                .cloned()
+                .ok_or_else(Error::too_large)?;
+            let width = Program::widen(inst.width)?;
             if width == 0 {
-                return Err(too_large());
+                return Err(Error::too_large());
             }
             match inst.op {
                 Op::Copy { at: tok_at, len } => self.emit_copy(tok_at, len)?,
@@ -885,7 +912,7 @@ impl<'a> Emitting<'a> {
                     self.emit_pasted(self.prog.text(base_at, len)?, ctx.index, span)?;
                 }
                 Op::List { pieces } => {
-                    let body_at = at.checked_add(1).ok_or_else(too_large)?;
+                    let body_at = at.checked_add(1).ok_or_else(Error::too_large)?;
                     self.emit_list(Tape::new(body_at, pieces), ctx)?;
                 }
                 Op::Ident(_) | Op::Off(_) | Op::Named { .. } | Op::Rows { .. } => {
@@ -894,14 +921,14 @@ impl<'a> Emitting<'a> {
                     self.emit_piece(at, &mut out)?;
                 }
             }
-            at = at.checked_add(width).ok_or_else(too_large)?;
+            at = at.checked_add(width).ok_or_else(Error::too_large)?;
         }
         Ok(())
     }
 
     fn emit_group(&mut self, group: &GroupEmit, ctx: &EvalCtx<'_>) -> Result<()> {
         let mut inner = TokenStream::new();
-        let body_at = group.at.checked_add(1).ok_or_else(too_large)?;
+        let body_at = group.at.checked_add(1).ok_or_else(Error::too_large)?;
         let tape = Tape::new(body_at, group.body);
         inner.with_program(self.prog).emit_seq(tape, ctx)?;
         let mut built = Group::new(group.delimiter, inner);
@@ -920,19 +947,25 @@ impl<'a> Emitting<'a> {
                 .ops
                 .get(at)
                 .map(|inst| inst.width)
-                .ok_or_else(too_large)?;
-            let width = widen(width)?;
+                .ok_or_else(Error::too_large)?;
+            let width = Program::widen(width)?;
             if width == 0 {
-                return Err(too_large());
+                return Err(Error::too_large());
             }
             self.emit_piece(at, &mut out)?;
-            at = at.checked_add(width).ok_or_else(too_large)?;
+            at = at.checked_add(width).ok_or_else(Error::too_large)?;
         }
         Ok(())
     }
 
     fn emit_piece(&mut self, at: usize, out: &mut ListOut<'_>) -> Result<()> {
-        let op = self.prog.ops.get(at).cloned().ok_or_else(too_large)?.op;
+        let op = self
+            .prog
+            .ops
+            .get(at)
+            .cloned()
+            .ok_or_else(Error::too_large)?
+            .op;
         match op {
             Op::Ident(ident) | Op::Off(ident) => {
                 self.emit_ident(out.emitted, ident);
@@ -943,7 +976,7 @@ impl<'a> Emitting<'a> {
                 self.emit_named(out, &name)
             }
             Op::Rows { span, pattern, body } => {
-                let body_at = at.checked_add(1).ok_or_else(too_large)?;
+                let body_at = at.checked_add(1).ok_or_else(Error::too_large)?;
                 let row = RowHead::new(body_at, span, pattern, body);
                 self.emit_rows(out, &row)
             }
@@ -951,15 +984,17 @@ impl<'a> Emitting<'a> {
             | Op::Group { .. }
             | Op::Index { .. }
             | Op::Paste { .. }
-            | Op::List { .. } => Err(too_large()),
+            | Op::List { .. } => Err(Error::too_large()),
         }
     }
 
     fn emit_copy(&mut self, at: u32, len: u32) -> Result<()> {
-        let start = widen(at)?;
-        let end = start.checked_add(widen(len)?).ok_or_else(too_large)?;
+        let start = Program::widen(at)?;
+        let end = start
+            .checked_add(Program::widen(len)?)
+            .ok_or_else(Error::too_large)?;
         let Some(tokens) = self.prog.tokens.get(start..end) else {
-            return Err(too_large());
+            return Err(Error::too_large());
         };
         self.out.extend(tokens.iter().cloned());
         Ok(())
@@ -1190,24 +1225,4 @@ impl PasteBase for Ident {
     fn paste_base(&self) -> String {
         self.to_string().paste_base()
     }
-}
-
-fn fit(value: usize) -> Result<u32> {
-    u32::try_from(value).map_err(|_| too_large())
-}
-
-fn widen(value: u32) -> Result<usize> {
-    usize::try_from(value).map_err(|_| too_large())
-}
-
-fn checked_add(left: u32, right: u32) -> Result<u32> {
-    left.checked_add(right).ok_or_else(too_large)
-}
-
-fn rewind(len: usize, physical: u32) -> Result<usize> {
-    len.checked_sub(widen(physical)?).ok_or_else(too_large)
-}
-
-fn too_large() -> Error {
-    Error::new(Span::call_site(), ErrorKind::BodyTooLarge)
 }
