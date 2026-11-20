@@ -106,3 +106,84 @@ Cargo only forwards `-D` to Clippy when it comes after `--`.
 ## Cursor Cloud specific instructions
 
 `.cursor/install.sh` installs the toolchain from `rust-toolchain.toml`, including `rustfmt` and `clippy`. After that, the commands in "Build, lint, and test" are enough. No services or secrets are required.
+
+# Agent coding rules
+
+Rules an agent must follow when changing this workspace. Short form. Prefer these IDs in a review note.
+
+## Allocation
+
+### AG-01
+
+A hot loop does not allocate.
+
+#### Don't
+
+- `Vec::new`, `Box::new`, `to_vec`, `clone` of a buffer, or `collect` into a new heap value inside a per-row or per-tick hot walk.
+
+#### Do
+
+- Keep storage outside the loop. `clear` and reuse.
+
+### AG-02
+
+A known size is reserved once.
+
+#### Don't
+
+- Grow `String` / `Vec` by repeated push when the final length is known or bounded.
+
+#### Do
+
+- `with_capacity` / `reserve` from the bound. A table-bound length prefers a fixed array when the type already has one.
+
+### AG-03
+
+Capacity is kept across clears.
+
+#### Don't
+
+- `shrink_to_fit`, replace the buffer, or drop a `mem::take` after warm-up on a reused path.
+
+#### Do
+
+- `clear` keeps the allocation.
+
+## Domain
+
+### AG-04
+
+A number with meaning is a named constant or a typed wrapper.
+
+#### Don't
+
+- Bare literals that encode a rule (`8`, `12`, bit masks) scattered in bodies.
+
+#### Do
+
+- A `const` at the owner of the rule, or a newtype with methods.
+
+### AG-05
+
+A raw value does not travel as domain logic.
+
+#### Don't
+
+- Pass `u32` / `usize` through several functions that each reinterpret the same role (id, count, flag word).
+
+#### Do
+
+- A wrapper type for that role. Methods on the wrapper do the domain work. Crossing an id boundary uses a named constructor, not silent `From`.
+
+### AG-06
+
+Several yes/no choices of one thing are not a pile of `bool`s.
+
+#### Don't
+
+- Three or more `bool` fields or unexplained `bool` arguments for one concept.
+
+#### Do
+
+- One `enum` for a single choice. One bit set for several independent flags of one thing. A call that needs a side uses an enum argument.
+
