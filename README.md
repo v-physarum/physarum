@@ -36,4 +36,4 @@ There is no binary or service entry point yet. TODO: document how to run the pro
 
 ## License
 
-Licensed under the [MIT License](LICENSE).
+Licensed under the [GNU GPL v3 or later](LICENSE) (`GPL-3.0-or-later`).

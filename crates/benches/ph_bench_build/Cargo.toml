@@ -3,7 +3,7 @@ name = "ph_bench_build"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.100"
-license = "MIT"
+license = "GPL-3.0-or-later"
 repository = "https://github.com/v-physarum/physarum"
 description = "Hyperfine runner for cases selected by a directory layout."
 
