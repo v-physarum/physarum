@@ -6,103 +6,105 @@ use crate::assembly::{Assembly, Function};
 pub(crate) fn module_text(assembly: &Assembly) -> String {
     let mut functions: Vec<&Function> = assembly.functions().iter().collect();
     functions.sort_by(|left, right| left.name().cmp(right.name()));
-    functions
-        .into_iter()
-        .map(function_text)
-        .collect::<Vec<_>>()
-        .join("\n")
+    let mut cap = 0usize;
+    for function in &functions {
+        cap = cap.saturating_add(function.asm().len()).saturating_add(1);
+    }
+    let mut out = String::with_capacity(cap);
+    for (index, function) in functions.iter().enumerate() {
+        if index > 0 {
+            out.push('\n');
+        }
+        append_normalized(function.asm(), &mut out);
+    }
+    out
 }
 
 /// One function, local labels canonicalized.
 pub(crate) fn function_text(function: &Function) -> String {
-    normalize_asm(function.asm())
+    let mut out = String::with_capacity(function.asm().len());
+    append_normalized(function.asm(), &mut out);
+    out
 }
 
 /// Hot loop text for one function.
 pub(crate) fn loop_text(hot: &str) -> String {
-    normalize_asm(hot)
+    let mut out = String::with_capacity(hot.len());
+    append_normalized(hot, &mut out);
+    out
 }
 
-fn normalize_asm(asm: &str) -> String {
-    let mut lines = Vec::new();
+fn append_normalized(asm: &str, out: &mut String) {
+    let mut names: Vec<&str> = Vec::new();
+    let mut first = true;
     for line in asm.lines() {
         let trimmed = line.split('#').next().unwrap_or(line).trim();
         if trimmed.is_empty() || trimmed.starts_with('.') || trimmed.starts_with('#') {
             continue;
         }
-        lines.push(trimmed.to_owned());
+        if !first {
+            out.push('\n');
+        }
+        first = false;
+        write_canonical(trimmed, &mut names, out);
     }
-    canonicalize_local_labels(&lines.join("\n"))
 }
 
-fn canonicalize_local_labels(text: &str) -> String {
-    let bytes = text.as_bytes();
-    let mut names = Vec::new();
+fn write_canonical<'a>(line: &'a str, names: &mut Vec<&'a str>, out: &mut String) {
+    let bytes = line.as_bytes();
     let mut index = 0;
     while index < bytes.len() {
-        if text[index..].starts_with(".L") {
+        if is_local_label_at(bytes, index) {
             let start = index;
             index += 2;
             while index < bytes.len() && is_name_byte(bytes[index]) {
                 index += 1;
             }
-            let name = text[start..index].to_owned();
-            if name.len() > 2 && !names.contains(&name) {
-                names.push(name);
+            let name = &line[start..index];
+            if name.len() > 2 {
+                let ordinal = ordinal_of(names, name);
+                out.push('L');
+                push_usize(out, ordinal);
+                continue;
             }
-            continue;
+            index = start;
         }
-        index += 1;
+        let ch = line[index..].chars().next().expect("index is in range");
+        out.push(ch);
+        index += ch.len_utf8();
     }
-    replace_in_order(text, &names, "L")
 }
 
-fn replace_in_order(text: &str, names: &[String], prefix: &str) -> String {
-    let mut out = text.to_owned();
-    let order = longest_first(names);
-    for (ordinal, name) in &order {
-        out = replace_bounded(&out, name, &marker(*ordinal));
-    }
-    let mut finished = out;
-    for ordinal in 0..names.len() {
-        finished = finished.replace(&marker(ordinal), &format!("{prefix}{ordinal}"));
-    }
-    finished
+fn is_local_label_at(bytes: &[u8], index: usize) -> bool {
+    index + 2 <= bytes.len()
+        && bytes[index] == b'.'
+        && bytes[index + 1] == b'L'
+        && (index == 0 || !is_name_byte(bytes[index - 1]))
 }
 
-fn longest_first(names: &[String]) -> Vec<(usize, &String)> {
-    let mut order: Vec<(usize, &String)> = names.iter().enumerate().collect();
-    order.sort_by_key(|(_, name)| std::cmp::Reverse(name.len()));
-    order
-}
-
-fn marker(ordinal: usize) -> String {
-    format!("\u{E000}{ordinal}\u{E001}")
-}
-
-fn replace_bounded(text: &str, from: &str, to: &str) -> String {
-    let bytes = text.as_bytes();
-    let needle = from.as_bytes();
-    if needle.is_empty() {
-        return text.to_owned();
+fn ordinal_of<'a>(names: &mut Vec<&'a str>, name: &'a str) -> usize {
+    if let Some(ordinal) = names.iter().position(|existing| *existing == name) {
+        return ordinal;
     }
-    let mut out = String::new();
-    let mut index = 0;
-    while index < bytes.len() {
-        let matched =
-            index + needle.len() <= bytes.len() && &bytes[index..index + needle.len()] == needle;
-        let before_ok = index == 0 || !is_name_byte(bytes[index - 1]);
-        let after = index + needle.len();
-        let after_ok = after >= bytes.len() || !is_name_byte(bytes[after]);
-        if matched && before_ok && after_ok {
-            out.push_str(to);
-            index = after;
-            continue;
+    let ordinal = names.len();
+    names.push(name);
+    ordinal
+}
+
+fn push_usize(out: &mut String, value: usize) {
+    let mut buf = [0u8; 20];
+    let mut n = value;
+    let mut index = buf.len();
+    loop {
+        index -= 1;
+        buf[index] = b'0' + u8::try_from(n % 10).unwrap_or(0);
+        n /= 10;
+        if n == 0 {
+            break;
         }
-        out.push(char::from(bytes[index]));
-        index += 1;
     }
-    out
+    let digits = std::str::from_utf8(&buf[index..]).unwrap_or("0");
+    out.push_str(digits);
 }
 
 fn is_name_byte(byte: u8) -> bool {

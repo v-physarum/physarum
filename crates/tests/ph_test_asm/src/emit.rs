@@ -7,6 +7,7 @@
 
 use std::env;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -87,9 +88,14 @@ fn read_emit(dir: &Path, extension: &str, what: &'static str) -> Result<String> 
     if paths.is_empty() {
         return Err(ErrorKind::EmptyEmit { what }.into());
     }
-    let mut text = String::new();
+    let mut total = 0usize;
+    for path in &paths {
+        let len = usize::try_from(fs::metadata(path)?.len()).unwrap_or(usize::MAX);
+        total = total.saturating_add(len).saturating_add(1);
+    }
+    let mut text = String::with_capacity(total);
     for path in paths {
-        text.push_str(&fs::read_to_string(path)?);
+        fs::File::open(path)?.read_to_string(&mut text)?;
         text.push('\n');
     }
     Ok(text)

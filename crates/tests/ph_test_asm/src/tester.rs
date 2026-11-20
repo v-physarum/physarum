@@ -77,6 +77,8 @@ impl FunctionScope {
 pub struct Asserts {
     label: String,
     asm: String,
+    scope_start: usize,
+    scope_end: usize,
     signature: String,
     branch_allowance: u32,
     source: PathBuf,
@@ -274,62 +276,68 @@ impl Asserts {
         rules.apply(self);
     }
 
+    fn scope_text(&self) -> &str {
+        &self.asm[self.scope_start..self.scope_end]
+    }
+
     fn enforce(&self, rule: Rule) {
+        let asm = self.scope_text();
         match rule {
-            Rule::Simd => self.require(scan::has_simd(&self.asm), "simd", "no vector register"),
-            Rule::NoBounds => self.forbid(
-                scan::has_bounds(&self.asm),
-                "bounds check",
-                "bounds check is present",
-            ),
-            Rule::NoBranch => {
-                let count = scan::conditional_branches(&self.asm);
+            Rule::Simd => self.require(scan::has_simd(asm), "simd", "no vector register"),
+            Rule::NoBounds => {
                 self.forbid(
-                    count > widen(self.branch_allowance),
-                    "conditional branch",
-                    &format!(
-                        "{count} conditional branches, allowance is {}",
-                        self.branch_allowance
-                    ),
+                    scan::has_bounds(asm),
+                    "bounds check",
+                    "bounds check is present",
                 );
             }
-            Rule::NoVirtualCalls => self.forbid(
-                scan::has_indirect_call(&self.asm),
-                "virtual call",
-                "indirect call",
-            ),
+            Rule::NoBranch => {
+                let count = scan::conditional_branches(asm);
+                if count > widen(self.branch_allowance) {
+                    self.fail(
+                        "conditional branch",
+                        &format!(
+                            "{count} conditional branches, allowance is {}",
+                            self.branch_allowance
+                        ),
+                    );
+                }
+            }
+            Rule::NoVirtualCalls => {
+                self.forbid(
+                    scan::has_indirect_call(asm),
+                    "virtual call",
+                    "indirect call",
+                );
+            }
             Rule::NoSelect => {
                 self.forbid(
-                    scan::has_conditional_move(&self.asm),
+                    scan::has_conditional_move(asm),
                     "select",
                     "conditional move",
                 );
             }
-            Rule::NoDiv => self.forbid(scan::has_div(&self.asm), "division", "division"),
-            Rule::NoInvoke => self.forbid(scan::has_unwind(&self.asm), "invoke", "unwind resume"),
-            Rule::NoAlloc => {
-                self.forbid(scan::has_alloc(&self.asm), "allocation", "allocator call");
-            }
-            Rule::NoAtomic => {
-                self.forbid(scan::has_atomic(&self.asm), "atomic", "atomic operation");
-            }
+            Rule::NoDiv => self.forbid(scan::has_div(asm), "division", "division"),
+            Rule::NoInvoke => self.forbid(scan::has_unwind(asm), "invoke", "unwind resume"),
+            Rule::NoAlloc => self.forbid(scan::has_alloc(asm), "allocation", "allocator call"),
+            Rule::NoAtomic => self.forbid(scan::has_atomic(asm), "atomic", "atomic operation"),
             Rule::NoMemcpy => self.forbid(
-                scan::has_memcpy(&self.asm),
+                scan::has_memcpy(asm),
                 "memcpy",
                 "memcpy, memmove, or memset",
             ),
-            Rule::NoChecks => {
-                self.forbid(scan::has_panic(&self.asm), "panic check", "panic or assert");
+            Rule::NoChecks => self.forbid(scan::has_panic(asm), "panic check", "panic or assert"),
+            Rule::MaxLoads(max) => self.at_most(scan::count_loads(asm), max, "loads"),
+            Rule::MaxStores(max) => self.at_most(scan::count_stores(asm), max, "stores"),
+            Rule::CountedLoop => {
+                self.require(
+                    scan::is_counted_loop(asm),
+                    "counted loop",
+                    "no counted backedge",
+                );
             }
-            Rule::MaxLoads(max) => self.at_most(scan::count_loads(&self.asm), max, "loads"),
-            Rule::MaxStores(max) => self.at_most(scan::count_stores(&self.asm), max, "stores"),
-            Rule::CountedLoop => self.require(
-                scan::is_counted_loop(&self.asm),
-                "counted loop",
-                "no counted backedge",
-            ),
             Rule::NoAllocaInLoop => self.forbid(
-                scan::has_stack_address(&self.asm),
+                scan::has_stack_address(asm),
                 "alloca in loop",
                 "stack pointer inside the scope",
             ),
@@ -338,9 +346,9 @@ impl Asserts {
                 "noalias",
                 "pointer parameter is not noalias",
             ),
-            Rule::NoGather => self.forbid(scan::has_gather(&self.asm), "gather", "gather callee"),
-            Rule::NoLibm => self.forbid(scan::has_libm(&self.asm), "libm", "math call"),
-            Rule::NoFma => self.forbid(scan::has_fma(&self.asm), "fma", "fused multiply-add"),
+            Rule::NoGather => self.forbid(scan::has_gather(asm), "gather", "gather callee"),
+            Rule::NoLibm => self.forbid(scan::has_libm(asm), "libm", "math call"),
+            Rule::NoFma => self.forbid(scan::has_fma(asm), "fma", "fused multiply-add"),
         }
     }
 
@@ -366,12 +374,42 @@ impl Asserts {
     }
 
     fn fail(&self, expectation: &str, detail: &str) -> ! {
-        let snippet = self.asm.lines().take(40).collect::<Vec<_>>().join("\n");
+        let snippet = first_lines(self.scope_text(), SNIPPET_LINES);
         panic!(
             "assertion failed: {expectation}\nscope: {}\n{detail}\n{snippet}",
             self.label
         );
     }
+}
+
+const SNIPPET_LINES: usize = 40;
+
+fn first_lines(text: &str, max_lines: usize) -> String {
+    let mut len = 0usize;
+    let mut count = 0usize;
+    for line in text.lines() {
+        if count == max_lines {
+            break;
+        }
+        if count > 0 {
+            len += 1;
+        }
+        len += line.len();
+        count += 1;
+    }
+    let mut snippet = String::with_capacity(len);
+    count = 0;
+    for line in text.lines() {
+        if count == max_lines {
+            break;
+        }
+        if count > 0 {
+            snippet.push('\n');
+        }
+        snippet.push_str(line);
+        count += 1;
+    }
+    snippet
 }
 
 /// Assembly instruction limit for one target triple.
@@ -394,7 +432,7 @@ impl TargetAssert<'_> {
             self.asserts.kind,
             Some(self.triple),
         );
-        let count = scan::asm_instructions(&reloaded.asm);
+        let count = scan::asm_instructions(reloaded.scope_text());
         if count > widen(max) {
             reloaded.fail(
                 "instructions",
@@ -567,32 +605,46 @@ fn widen(value: u32) -> usize {
 fn load(source: &Path, name: &str, kind: ScopeKind, target: Option<&str>) -> Asserts {
     let assembly = emit::compile(source, target).unwrap_or_else(|error| panic!("{error}"));
     let function = assembly
-        .function(name)
+        .into_function(name)
         .unwrap_or_else(|error| panic!("{error}"));
-    let label_name = function.name().to_owned();
-    let signature = function.signature().to_owned();
-    let asm = match kind {
-        ScopeKind::Function => function.asm().to_owned(),
+    let (scope_start, scope_end) = match kind {
+        ScopeKind::Function => (0, function.asm().len()),
         ScopeKind::HotLoop => function
-            .hot_loop()
-            .unwrap_or_else(|error| panic!("{error}"))
-            .to_owned(),
-    };
-    let label = match kind {
-        ScopeKind::Function => format!("function `{label_name}`"),
-        ScopeKind::HotLoop => format!("hot loop of `{label_name}`"),
+            .hot_bounds()
+            .unwrap_or_else(|error| panic!("{error}")),
     };
     let branch_allowance = match kind {
         ScopeKind::Function => 0,
         ScopeKind::HotLoop => 1,
     };
+    let label = scope_label(kind, function.name());
+    let crate::assembly::Function {
+        name: function_name,
+        asm,
+        signature,
+        hot: _,
+    } = function;
     Asserts {
         label,
         asm,
+        scope_start,
+        scope_end,
         signature,
         branch_allowance,
         source: source.to_owned(),
-        function: name.to_owned(),
+        function: function_name,
         kind,
     }
+}
+
+fn scope_label(kind: ScopeKind, name: &str) -> String {
+    let prefix = match kind {
+        ScopeKind::Function => "function `",
+        ScopeKind::HotLoop => "hot loop of `",
+    };
+    let mut label = String::with_capacity(prefix.len() + name.len() + 1);
+    label.push_str(prefix);
+    label.push_str(name);
+    label.push('`');
+    label
 }

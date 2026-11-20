@@ -17,10 +17,11 @@ impl Assembly {
             .map(|(name, body)| {
                 let signature = signatures
                     .iter()
-                    .find(|(symbol, _)| symbol == &name)
-                    .map_or_default(|(_, text)| text.clone());
+                    .find(|(symbol, _)| *symbol == name)
+                    .map_or_default(|(_, text)| (*text).to_owned());
+                let hot = scan::hot_span(&body);
                 Function {
-                    hot: scan::hot_region(&body),
+                    hot,
                     name,
                     asm: body,
                     signature,
@@ -28,6 +29,25 @@ impl Assembly {
             })
             .collect();
         Self { functions }
+    }
+
+    /// Removes the symbol named `name` and returns it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the module has no such function.
+    pub(crate) fn into_function(mut self, name: &str) -> Result<Function> {
+        let Some(index) = self
+            .functions
+            .iter()
+            .position(|function| function.name == name)
+        else {
+            return Err(ErrorKind::MissingFunction {
+                name: name.to_owned(),
+            }
+            .into());
+        };
+        Ok(self.functions.swap_remove(index))
     }
 
     /// Defined functions, in module order.
@@ -57,10 +77,11 @@ impl Assembly {
 /// One assembled function.
 #[derive(Debug)]
 pub(crate) struct Function {
-    name: String,
-    asm: String,
-    signature: String,
-    hot: Option<String>,
+    pub(crate) name: String,
+    pub(crate) asm: String,
+    pub(crate) signature: String,
+    /// Byte span of the hot loop inside `asm`.
+    pub(crate) hot: Option<(usize, usize)>,
 }
 
 impl Function {
@@ -76,19 +97,22 @@ impl Function {
         &self.asm
     }
 
-    /// Parameter list from the LLVM IR `define`, inside the parentheses.
-    #[must_use]
-    pub(crate) fn signature(&self) -> &str {
-        &self.signature
-    }
-
     /// Backedge region with the most instructions.
     ///
     /// # Errors
     ///
     /// Returns an error when the function has no backedge.
     pub(crate) fn hot_loop(&self) -> Result<&str> {
-        self.hot.as_deref().ok_or_else(|| {
+        self.hot_bounds().map(|(start, end)| &self.asm[start..end])
+    }
+
+    /// Byte span of the hot loop inside [`Self::asm`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the function has no backedge.
+    pub(crate) fn hot_bounds(&self) -> Result<(usize, usize)> {
+        self.hot.ok_or_else(|| {
             ErrorKind::NoHotLoop {
                 name: self.name.clone(),
             }
@@ -98,86 +122,113 @@ impl Function {
 }
 
 fn asm_functions(asm: &str) -> Vec<(String, String)> {
-    let lines: Vec<&str> = asm.lines().collect();
     let mut symbols = Vec::new();
-    for (index, line) in lines.iter().enumerate() {
+    for (start, line) in scan::LineIter::new(asm) {
         if let Some(name) = function_type_symbol(line) {
-            symbols.push((name, index));
+            symbols.push((name, start));
         }
     }
-    let mut functions = Vec::new();
-    for (ordinal, (name, index)) in symbols.iter().enumerate() {
-        let Some(start) = lines
-            .iter()
-            .skip(index + 1)
-            .position(|line| line.trim() == format!("{name}:"))
-        else {
+    let mut functions = Vec::with_capacity(symbols.len());
+    for (ordinal, (name, type_at)) in symbols.iter().enumerate() {
+        let search_from = next_line_at(asm, *type_at);
+        let Some(label_at) = find_label(asm, search_from, name) else {
             continue;
         };
-        let start = index + 1 + start;
         let end = symbols
             .get(ordinal + 1)
-            .map_or(lines.len(), |(_, next)| *next);
-        let text = lines[start..end].join("\n");
-        functions.push((name.clone(), text));
+            .map_or(asm.len(), |(_, next)| *next);
+        let body = asm[label_at..end].trim_end_matches(['\n', '\r']).to_owned();
+        functions.push(((*name).to_owned(), body));
     }
     functions
 }
 
-fn signatures(ir: &str) -> Vec<(String, String)> {
-    let lines: Vec<&str> = ir.lines().collect();
+fn next_line_at(text: &str, line_start: usize) -> usize {
+    match text[line_start..].find('\n') {
+        Some(at) => line_start + at + 1,
+        None => text.len(),
+    }
+}
+
+fn find_label(asm: &str, from: usize, name: &str) -> Option<usize> {
+    for (start, line) in scan::LineIter::new(&asm[from..]) {
+        if is_label(line, name) {
+            return Some(from + start);
+        }
+    }
+    None
+}
+
+fn is_label(line: &str, name: &str) -> bool {
+    let trimmed = line.trim();
+    trimmed.len() == name.len() + 1 && trimmed.starts_with(name) && trimmed.ends_with(':')
+}
+
+fn signatures(ir: &str) -> Vec<(&str, &str)> {
     let mut found = Vec::new();
     let mut index = 0;
-    while index < lines.len() {
-        if lines[index].trim_start().starts_with(';') || !lines[index].starts_with("define ") {
-            index += 1;
+    while index < ir.len() {
+        let (line, next) = one_line(ir, index);
+        if !line.trim_start().starts_with(';') && line.starts_with("define ") {
+            let (header, after) = take_header(ir, index);
+            if let Some(name) = symbol_name(header) {
+                found.push((name, signature_text(header)));
+            }
+            index = after;
             continue;
-        }
-        let (header, next) = take_header(&lines, index);
-        if let Some(name) = symbol_name(&header) {
-            found.push((name, signature_text(&header)));
         }
         index = next;
     }
     found
 }
 
-fn take_header(lines: &[&str], start: usize) -> (String, usize) {
-    let mut header = String::new();
-    let mut index = start;
-    while index < lines.len() {
-        if !header.is_empty() {
-            header.push('\n');
+fn one_line(text: &str, start: usize) -> (&str, usize) {
+    let rest = &text[start..];
+    if let Some(at) = rest.find('\n') {
+        let mut end = at;
+        if end > 0 && rest.as_bytes()[end - 1] == b'\r' {
+            end -= 1;
         }
-        header.push_str(lines[index]);
-        let opens = lines[index].contains('{');
-        index += 1;
-        if opens {
+        (&rest[..end], start + at + 1)
+    } else {
+        (rest, text.len())
+    }
+}
+
+fn take_header(ir: &str, start: usize) -> (&str, usize) {
+    let mut index = start;
+    let mut end;
+    loop {
+        let (line, next) = one_line(ir, index);
+        end = index + line.len();
+        let opens = line.contains('{');
+        index = next;
+        if opens || index >= ir.len() {
             break;
         }
     }
-    (header, index)
+    (&ir[start..end], index)
 }
 
-fn symbol_name(header: &str) -> Option<String> {
+fn symbol_name(header: &str) -> Option<&str> {
     let at = header.find('@')?;
     let rest = &header[at + 1..];
     if let Some(quoted) = rest.strip_prefix('"') {
         let end = quoted.find('"')?;
-        return Some(quoted[..end].to_owned());
+        return Some(&quoted[..end]);
     }
     let end = rest
         .find(|ch: char| !is_name_char(ch))
         .unwrap_or(rest.len());
-    Some(rest[..end].to_owned())
+    Some(&rest[..end])
 }
 
-fn signature_text(header: &str) -> String {
+fn signature_text(header: &str) -> &str {
     let Some(at) = header.find('@') else {
-        return String::new();
+        return "";
     };
     let Some(relative) = header[at..].find('(') else {
-        return String::new();
+        return "";
     };
     let start = at + relative;
     let mut depth = 0i32;
@@ -187,26 +238,26 @@ fn signature_text(header: &str) -> String {
             ')' => {
                 depth -= 1;
                 if depth == 0 {
-                    return header[start + 1..start + offset].to_owned();
+                    return &header[start + 1..start + offset];
                 }
             }
             _ => {}
         }
     }
-    String::new()
+    ""
 }
 
 fn is_name_char(ch: char) -> bool {
     ch.is_ascii_alphanumeric() || ch == '_' || ch == '.' || ch == '$'
 }
 
-fn function_type_symbol(line: &str) -> Option<String> {
-    let compact: String = line.chars().filter(|ch| !ch.is_whitespace()).collect();
-    let rest = compact.strip_prefix(".type")?;
-    let name = rest.strip_suffix(",@function")?;
-    if name.is_empty() {
-        None
-    } else {
-        Some(name.to_owned())
+fn function_type_symbol(line: &str) -> Option<&str> {
+    let rest = line.trim_start().strip_prefix(".type")?.trim_start();
+    let (name, after) = rest.split_once(',')?;
+    let name = name.trim();
+    if name.is_empty() || name.chars().any(char::is_whitespace) {
+        return None;
     }
+    let after = after.split('#').next().unwrap_or(after).trim();
+    (after == "@function").then_some(name)
 }

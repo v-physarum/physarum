@@ -5,33 +5,60 @@ const LIBM: &[&str] = &[
     "exp10", "log", "log2", "log10", "pow", "fmod", "cbrt", "hypot", "sqrt",
 ];
 
-pub(crate) fn hot_region(asm: &str) -> Option<String> {
-    let lines: Vec<&str> = asm.lines().collect();
-    let mut labels = Vec::new();
-    for (index, line) in lines.iter().enumerate() {
-        if let Some(name) = label_name(strip_comment(line).trim()) {
-            labels.push((name, index));
-        }
-    }
+/// Byte span of the backedge region with the most instructions.
+///
+/// The span is into `asm`. Nothing is allocated.
+pub(crate) fn hot_span(asm: &str) -> Option<(usize, usize)> {
     let mut best: Option<(usize, usize, usize)> = None;
-    for (index, line) in lines.iter().enumerate() {
+    for (start, line) in LineIter::new(asm) {
         let Some(target) = branch_target(line) else {
             continue;
         };
-        let Some((_, label_at)) = labels.iter().find(|(name, _)| name == &target) else {
+        let Some(label_at) = label_before(asm, start, target) else {
             continue;
         };
-        if *label_at >= index {
-            continue;
-        }
-        let region = lines[*label_at..=index].join("\n");
-        let weight = region.lines().filter(|line| is_instruction(line)).count();
-        let replace = best.is_none_or(|(_, _, best_weight)| weight > best_weight);
-        if replace {
-            best = Some((*label_at, index, weight));
+        let end = start + line.len();
+        let weight = asm_instructions(&asm[label_at..end]);
+        if best.is_none_or(|(_, _, best_weight)| weight > best_weight) {
+            best = Some((label_at, end, weight));
         }
     }
-    best.map(|(start, end, _)| lines[start..=end].join("\n"))
+    best.map(|(start, end, _)| (start, end))
+}
+
+/// Lines of `text` with the byte offset of each line.
+pub(crate) struct LineIter<'a> {
+    text: &'a str,
+    offset: usize,
+}
+
+impl<'a> LineIter<'a> {
+    pub(crate) fn new(text: &'a str) -> Self {
+        Self { text, offset: 0 }
+    }
+}
+
+impl<'a> Iterator for LineIter<'a> {
+    type Item = (usize, &'a str);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.offset >= self.text.len() {
+            return None;
+        }
+        let rest = &self.text[self.offset..];
+        let (line, next) = if let Some(at) = rest.find('\n') {
+            let mut end = at;
+            if end > 0 && rest.as_bytes()[end - 1] == b'\r' {
+                end -= 1;
+            }
+            (&rest[..end], self.offset + at + 1)
+        } else {
+            (rest, self.text.len())
+        };
+        let start = self.offset;
+        self.offset = next;
+        Some((start, line))
+    }
 }
 
 pub(crate) fn has_simd(asm: &str) -> bool {
@@ -132,11 +159,11 @@ pub(crate) fn has_stack_address(asm: &str) -> bool {
 }
 
 pub(crate) fn has_gather(asm: &str) -> bool {
-    instructions(asm).any(|line| line.to_ascii_lowercase().contains("gather"))
+    instructions(asm).any(|line| contains_ascii_ignore_case(line, "gather"))
 }
 
 pub(crate) fn has_libm(asm: &str) -> bool {
-    instructions(asm).any(|line| LIBM.iter().any(|name| line.contains(&format!("{name}@"))))
+    instructions(asm).any(|line| LIBM.iter().any(|name| contains_symbol_at(line, name)))
 }
 
 pub(crate) fn has_fma(asm: &str) -> bool {
@@ -155,13 +182,13 @@ pub(crate) fn asm_instructions(asm: &str) -> usize {
 ///
 /// A signature with no pointer parameter passes.
 pub(crate) fn params_are_noalias(signature: &str) -> bool {
-    parameters(signature)
-        .iter()
-        .all(|param| !has_type_word(param, "ptr") || has_type_word(param, "noalias"))
+    every_parameter(signature, |param| {
+        !has_type_word(param, "ptr") || has_type_word(param, "noalias")
+    })
 }
 
 fn has_backedge(asm: &str) -> bool {
-    hot_region(asm).is_some()
+    hot_span(asm).is_some()
 }
 
 struct MemoryOp {
@@ -180,17 +207,7 @@ fn memory_ops(asm: &str) -> impl Iterator<Item = MemoryOp> + '_ {
             return None;
         }
         let operands = line[line.find(name)? + name.len()..].trim();
-        let parts = split_operands(operands);
-        if parts.is_empty() {
-            return None;
-        }
-        let store = parts.last().is_some_and(|part| part.contains('('));
-        let load = parts[..parts.len() - 1]
-            .iter()
-            .any(|part| part.contains('('));
-        if !load && !store {
-            return None;
-        }
+        let (load, store) = memory_operands(operands)?;
         Some(MemoryOp { load, store })
     })
 }
@@ -224,15 +241,27 @@ pub(crate) fn is_instruction(line: &str) -> bool {
         && !trimmed.starts_with('#')
 }
 
-fn label_name(trimmed: &str) -> Option<String> {
+fn label_before(asm: &str, before: usize, name: &str) -> Option<usize> {
+    for (start, line) in LineIter::new(asm) {
+        if start >= before {
+            break;
+        }
+        if label_name(strip_comment(line).trim()) == Some(name) {
+            return Some(start);
+        }
+    }
+    None
+}
+
+fn label_name(trimmed: &str) -> Option<&str> {
     let name = trimmed.strip_suffix(':')?;
     if name.is_empty() || name.contains(char::is_whitespace) {
         return None;
     }
-    Some(name.to_owned())
+    Some(name)
 }
 
-fn branch_target(line: &str) -> Option<String> {
+fn branch_target(line: &str) -> Option<&str> {
     if !is_instruction(line) {
         return None;
     }
@@ -242,32 +271,30 @@ fn branch_target(line: &str) -> Option<String> {
         || token.starts_with('_')
         || token.starts_with(|ch: char| ch.is_ascii_alphabetic())
     {
-        Some(token.to_owned())
+        Some(token)
     } else {
         None
     }
 }
 
-fn parameters(signature: &str) -> Vec<&str> {
+fn every_parameter(signature: &str, mut accept: impl FnMut(&str) -> bool) -> bool {
     let mut depth = 0i32;
     let mut start = 0usize;
-    let mut params = Vec::new();
     for (index, ch) in signature.char_indices() {
         match ch {
             '(' | '[' | '<' | '{' => depth += 1,
             ')' | ']' | '>' | '}' => depth -= 1,
             ',' if depth == 0 => {
-                params.push(signature[start..index].trim());
+                if !accept(signature[start..index].trim()) {
+                    return false;
+                }
                 start = index + 1;
             }
             _ => {}
         }
     }
     let last = signature[start..].trim();
-    if !last.is_empty() {
-        params.push(last);
-    }
-    params
+    last.is_empty() || accept(last)
 }
 
 fn has_type_word(text: &str, word: &str) -> bool {
@@ -300,24 +327,69 @@ fn strip_comment(line: &str) -> &str {
     line.split('#').next().unwrap_or(line)
 }
 
-fn split_operands(text: &str) -> Vec<&str> {
+fn memory_operands(text: &str) -> Option<(bool, bool)> {
     let mut depth = 0i32;
     let mut start = 0usize;
-    let mut parts = Vec::new();
+    let mut saw = false;
+    let mut earlier_load = false;
+    let mut last_memory = false;
     for (index, ch) in text.char_indices() {
         match ch {
             '(' => depth += 1,
             ')' => depth -= 1,
             ',' if depth == 0 => {
-                parts.push(text[start..index].trim());
+                note_operand(
+                    text[start..index].trim(),
+                    &mut saw,
+                    &mut earlier_load,
+                    &mut last_memory,
+                );
                 start = index + 1;
             }
             _ => {}
         }
     }
-    let last = text[start..].trim();
-    if !last.is_empty() {
-        parts.push(last);
+    note_operand(
+        text[start..].trim(),
+        &mut saw,
+        &mut earlier_load,
+        &mut last_memory,
+    );
+    if !saw || (!earlier_load && !last_memory) {
+        return None;
     }
-    parts
+    Some((earlier_load, last_memory))
+}
+
+fn note_operand(part: &str, saw: &mut bool, earlier_load: &mut bool, last_memory: &mut bool) {
+    if part.is_empty() {
+        return;
+    }
+    if *saw {
+        *earlier_load |= *last_memory;
+    }
+    *saw = true;
+    *last_memory = part.contains('(');
+}
+
+fn contains_ascii_ignore_case(haystack: &str, needle: &str) -> bool {
+    let haystack = haystack.as_bytes();
+    let needle = needle.as_bytes();
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return false;
+    }
+    haystack
+        .windows(needle.len())
+        .any(|window| window.eq_ignore_ascii_case(needle))
+}
+
+fn contains_symbol_at(line: &str, name: &str) -> bool {
+    let bytes = line.as_bytes();
+    let name = name.as_bytes();
+    if name.is_empty() || bytes.len() <= name.len() {
+        return false;
+    }
+    bytes
+        .windows(name.len() + 1)
+        .any(|window| window[..name.len()] == *name && window[name.len()] == b'@')
 }

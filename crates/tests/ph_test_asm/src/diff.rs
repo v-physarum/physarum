@@ -18,7 +18,16 @@ pub(crate) fn unified(
     let left: Vec<&str> = left_text.lines().collect();
     let right: Vec<&str> = right_text.lines().collect();
     let edits = edits(&left, &right);
-    let mut out = format!("--- {left_name}\n+++ {right_name}\n");
+    let mut out = String::with_capacity(
+        left_name
+            .len()
+            .saturating_add(right_name.len())
+            .saturating_add(left_text.len())
+            .saturating_add(right_text.len())
+            .saturating_add(32),
+    );
+    let _ = writeln!(out, "--- {left_name}");
+    let _ = writeln!(out, "+++ {right_name}");
     for hunk in hunks(&edits) {
         let left_count = hunk
             .lines
@@ -101,17 +110,25 @@ fn fallback<'a>(left: &'a [&str], right: &'a [&str]) -> Vec<Edit<'a>> {
     result
 }
 
+fn prefixed(edit: &Edit<'_>) -> String {
+    let (mark, line) = match edit {
+        Edit::Same(line) => (" ", *line),
+        Edit::Delete(line) => ("-", *line),
+        Edit::Insert(line) => ("+", *line),
+    };
+    let mut text = String::with_capacity(line.len() + 1);
+    text.push_str(mark);
+    text.push_str(line);
+    text
+}
+
 fn hunks(edits: &[Edit<'_>]) -> Vec<Hunk> {
     const CONTEXT: usize = 3;
     let mut rendered = Vec::new();
     let mut left_line = 1usize;
     let mut right_line = 1usize;
     for edit in edits {
-        let text = match edit {
-            Edit::Same(line) => format!(" {line}"),
-            Edit::Delete(line) => format!("-{line}"),
-            Edit::Insert(line) => format!("+{line}"),
-        };
+        let text = prefixed(edit);
         rendered.push((text, left_line, right_line, matches!(edit, Edit::Same(_))));
         match edit {
             Edit::Same(_) => {
@@ -148,8 +165,8 @@ fn hunks(edits: &[Edit<'_>]) -> Vec<Hunk> {
         let left_start = rendered[start].1;
         let right_start = rendered[start].2;
         let lines = rendered[start..stop]
-            .iter()
-            .map(|item| item.0.clone())
+            .iter_mut()
+            .map(|item| std::mem::take(&mut item.0))
             .collect();
         groups.push(Hunk {
             left_start,
