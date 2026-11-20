@@ -7,7 +7,7 @@ use std::ops::{Range, RangeInclusive};
 
 use proc_macro::{Literal, Punct, Spacing, Span, TokenTree};
 
-use crate::error::{Error, Result};
+use crate::error::{Error, ErrorKind, Result};
 
 /// How a bound is read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -241,10 +241,10 @@ impl EvalCtx<'_> {
         let value = match step.bound {
             Bound::Int(value) => value,
             Bound::Here { offset } => add_offset(self.index, offset, step.span)?,
-            Bound::LastIndex => return Err(Error::StepLastIndex(step.span)),
+            Bound::LastIndex => return Err(Error::new(step.span, ErrorKind::StepLastIndex)),
         };
         if value <= 0 {
-            return Err(Error::StepNotPositive(step.span));
+            return Err(Error::new(step.span, ErrorKind::StepNotPositive));
         }
         Ok(value)
     }
@@ -284,7 +284,7 @@ impl OuterRange {
 /// Parses `tokens` as one range. `style` decides what `-1` and `#` mean.
 pub(crate) fn parse_range(tokens: &[TokenTree], style: BoundStyle) -> Result<RangeExpr> {
     if tokens.is_empty() {
-        return Err(Error::ExpectedRange(Span::call_site()));
+        return Err(Error::new(Span::call_site(), ErrorKind::ExpectedRange));
     }
     RangeParse::open(tokens, style).parse_closed()
 }
@@ -325,7 +325,10 @@ impl<'a> RangeParse<'a> {
     fn parse_closed(mut self) -> Result<RangeExpr> {
         let start = self.cursor.maybe_bound(self.style)?;
         if start.is_some() && !self.cursor.starts_with_range_op() {
-            return Err(Error::ExpectedDots(self.cursor.error_span()));
+            return Err(Error::new(
+                self.cursor.error_span(),
+                ErrorKind::ExpectedDots,
+            ));
         }
         self.with_start(start).finish()
     }
@@ -377,9 +380,9 @@ impl<'a> RangeParse<'a> {
         }
         let span = self.cursor.error_span();
         Err(if self.style == BoundStyle::Pattern {
-            Error::OnePattern(span)
+            Error::new(span, ErrorKind::OnePattern)
         } else {
-            Error::UnexpectedInRange(span)
+            Error::new(span, ErrorKind::UnexpectedInRange)
         })
     }
 }
@@ -387,7 +390,7 @@ impl<'a> RangeParse<'a> {
 /// Indices selected by a finite outer range.
 pub(crate) fn compile_outer(range: &RangeExpr) -> Result<OuterRange> {
     let (Some(start_bound), Some(end_bound)) = (range.start, range.end) else {
-        return Err(Error::OpenOuter(range.span));
+        return Err(Error::new(range.span, ErrorKind::OpenOuter));
     };
     let start = expect_outer_int(start_bound)?;
     let end = expect_outer_int(end_bound)?;
@@ -402,7 +405,7 @@ pub(crate) fn compile_outer(range: &RangeExpr) -> Result<OuterRange> {
     };
     window.reject_inverted(range.span)?;
     let Some(count) = window.step_count(gap) else {
-        return Err(Error::RangeTooLarge(range.span));
+        return Err(Error::new(range.span, ErrorKind::RangeTooLarge));
     };
     if count == 0 {
         return Ok(OuterRange {
@@ -413,13 +416,13 @@ pub(crate) fn compile_outer(range: &RangeExpr) -> Result<OuterRange> {
         });
     }
     let Ok(steps) = i128::try_from(count - 1) else {
-        return Err(Error::RangeTooLarge(range.span));
+        return Err(Error::new(range.span, ErrorKind::RangeTooLarge));
     };
     let Some(hi) = steps
         .checked_mul(gap)
         .and_then(|offset| start.checked_add(offset))
     else {
-        return Err(Error::RangeTooLarge(range.span));
+        return Err(Error::new(range.span, ErrorKind::RangeTooLarge));
     };
     Ok(OuterRange {
         lo: start,
@@ -471,26 +474,28 @@ pub(crate) fn visit_range(
 }
 
 fn outside(span: Span, value: i128, domain: &Domain) -> Error {
-    Error::OutsideDomain {
+    Error::new(
         span,
-        value,
-        lo: domain.lo,
-        hi: domain.hi,
-    }
+        ErrorKind::OutsideDomain {
+            value,
+            lo: domain.lo,
+            hi: domain.hi,
+        },
+    )
 }
 
 fn expect_outer_int(bound: SpannedBound) -> Result<i128> {
     match bound.bound {
         Bound::Int(value) => Ok(value),
-        Bound::Here { .. } | Bound::LastIndex => Err(Error::OuterHash(bound.span)),
+        Bound::Here { .. } | Bound::LastIndex => Err(Error::new(bound.span, ErrorKind::OuterHash)),
     }
 }
 
 fn expect_positive_int_step(bound: SpannedBound) -> Result<i128> {
     match bound.bound {
         Bound::Int(value) if value > 0 => Ok(value),
-        Bound::Int(_) => Err(Error::StepNotPositive(bound.span)),
-        Bound::Here { .. } | Bound::LastIndex => Err(Error::OuterHash(bound.span)),
+        Bound::Int(_) => Err(Error::new(bound.span, ErrorKind::StepNotPositive)),
+        Bound::Here { .. } | Bound::LastIndex => Err(Error::new(bound.span, ErrorKind::OuterHash)),
     }
 }
 
@@ -503,7 +508,9 @@ fn eval_pattern_bound(bound: SpannedBound, ctx: &EvalCtx<'_>) -> Result<i128> {
 }
 
 fn add_offset(index: i128, offset: i128, span: Span) -> Result<i128> {
-    index.checked_add(offset).ok_or(Error::IndexOverflow(span))
+    index
+        .checked_add(offset)
+        .ok_or(Error::new(span, ErrorKind::IndexOverflow))
 }
 
 /// `start..end` or `start..=end`. The step stays beside the range.
@@ -543,12 +550,14 @@ impl Window {
 
     fn reject_inverted(&self, span: Span) -> Result<()> {
         if self.start() > self.end() {
-            return Err(Error::InvalidRange {
+            return Err(Error::new(
                 span,
-                start: self.start(),
-                end: self.end(),
-                inclusive: self.is_inclusive(),
-            });
+                ErrorKind::InvalidRange {
+                    start: self.start(),
+                    end: self.end(),
+                    inclusive: self.is_inclusive(),
+                },
+            ));
         }
         Ok(())
     }
@@ -756,7 +765,7 @@ impl From<Error> for BoundError {
 impl From<BoundError> for Error {
     fn from(error: BoundError) -> Self {
         match error {
-            BoundError::Absent(span) => Self::ExpectedBound(span),
+            BoundError::Absent(span) => Self::new(span, ErrorKind::ExpectedBound),
             BoundError::Invalid(error) => error,
         }
     }
@@ -816,18 +825,18 @@ impl<'a> Cursor<'a> {
 
     fn parse_range_op(&mut self) -> Result<bool> {
         let Some(first) = self.punct(0) else {
-            return Err(Error::ExpectedDots(self.error_span()));
+            return Err(Error::new(self.error_span(), ErrorKind::ExpectedDots));
         };
         if first.as_char() != '.' || first.spacing() != Spacing::Joint {
-            return Err(Error::ExpectedDots(first.span()));
+            return Err(Error::new(first.span(), ErrorKind::ExpectedDots));
         }
         let start_span = first.span();
         self.bump();
         let Some(second) = self.punct(0) else {
-            return Err(Error::ExpectedDots(start_span));
+            return Err(Error::new(start_span, ErrorKind::ExpectedDots));
         };
         if second.as_char() != '.' {
-            return Err(Error::ExpectedDots(second.span()));
+            return Err(Error::new(second.span(), ErrorKind::ExpectedDots));
         }
         self.bump();
         // `..#` and `..::S` keep the second `.` joint because `#` and `:` are
@@ -837,14 +846,14 @@ impl<'a> Cursor<'a> {
             return Ok(true);
         }
         if self.punct(0).is_some_and(|punct| punct.as_char() == '.') {
-            return Err(Error::ExpectedDots(start_span));
+            return Err(Error::new(start_span, ErrorKind::ExpectedDots));
         }
         Ok(false)
     }
 
     fn parse_pathsep(&mut self) -> Result<()> {
         if !self.starts_with_pathsep() {
-            return Err(Error::ExpectedPathSep(self.error_span()));
+            return Err(Error::new(self.error_span(), ErrorKind::ExpectedPathSep));
         }
         self.bump();
         self.bump();
@@ -862,7 +871,7 @@ impl<'a> Cursor<'a> {
     fn require_step(&mut self) -> Result<SpannedBound> {
         self.parse_bound(BoundStyle::Step)
             .map_err(|error| match error {
-                BoundError::Absent(span) => Error::ExpectedStep(span),
+                BoundError::Absent(span) => Error::new(span, ErrorKind::ExpectedStep),
                 BoundError::Invalid(error) => error,
             })
     }
@@ -891,7 +900,7 @@ impl<'a> Cursor<'a> {
             }
             let signed = magnitude
                 .checked_neg()
-                .ok_or(Error::LiteralOverflow(span))?;
+                .ok_or(Error::new(span, ErrorKind::LiteralOverflow))?;
             return Ok(SpannedBound::int(signed, span));
         }
         let parsed = if let Some(TokenTree::Literal(literal)) = self.tokens.get(self.index) {
@@ -917,21 +926,21 @@ impl<'a> Cursor<'a> {
             _ => return Ok(0),
         };
         let Some(sign_punct) = self.punct(0) else {
-            return Err(Error::MissingAfterSign(Span::call_site()));
+            return Err(Error::new(Span::call_site(), ErrorKind::MissingAfterSign));
         };
         let sign_span = sign_punct.span();
         self.bump();
         let magnitude = if let Some(TokenTree::Literal(literal)) = self.tokens.get(self.index) {
             parse_unsuffixed_int(literal)?
         } else {
-            return Err(Error::MissingAfterSign(sign_span));
+            return Err(Error::new(sign_span, ErrorKind::MissingAfterSign));
         };
         self.bump();
         let offset = match sign {
             1 => magnitude,
             _ => magnitude
                 .checked_neg()
-                .ok_or(Error::LiteralOverflow(sign_span))?,
+                .ok_or(Error::new(sign_span, ErrorKind::LiteralOverflow))?,
         };
         Ok(offset)
     }
@@ -961,9 +970,9 @@ fn parse_unsuffixed_int(literal: &Literal) -> Result<i128> {
 fn parse_int_digits(text: &str, span: Span) -> Result<i128> {
     let (radix, digits) = split_radix(text);
     if digits.is_empty() || !digits.bytes().all(|byte| is_radix_digit(byte, radix)) {
-        return Err(Error::UnsuffixedLiteral(span));
+        return Err(Error::new(span, ErrorKind::UnsuffixedLiteral));
     }
-    i128::from_str_radix(digits, radix).map_err(|_| Error::LiteralOverflow(span))
+    i128::from_str_radix(digits, radix).map_err(|_| Error::new(span, ErrorKind::LiteralOverflow))
 }
 
 fn split_radix(text: &str) -> (u32, &str) {

@@ -8,109 +8,85 @@ use thiserror::Error;
 
 pub(crate) type Result<T> = std::result::Result<T, Error>;
 
+/// A span plus the reason it failed.
 #[derive(Debug, Error)]
-pub(crate) enum Error {
+#[error("{kind}")]
+pub(crate) struct Error {
+    span: Span,
+    kind: ErrorKind,
+}
+
+/// Why a compile failed. The span lives on [`Error`].
+#[derive(Debug, Error)]
+pub(crate) enum ErrorKind {
     #[error("expected a range")]
-    ExpectedRange(Span),
+    ExpectedRange,
     #[error("expected `..` or `..=`")]
-    ExpectedDots(Span),
+    ExpectedDots,
     #[error("expected a step after `::`")]
-    ExpectedStep(Span),
+    ExpectedStep,
     #[error("expected a bound")]
-    ExpectedBound(Span),
+    ExpectedBound,
     #[error("expected `::`")]
-    ExpectedPathSep(Span),
+    ExpectedPathSep,
     #[error("expected exactly one range pattern inside `[]`")]
-    OnePattern(Span),
+    OnePattern,
     #[error("unexpected token in range")]
-    UnexpectedInRange(Span),
+    UnexpectedInRange,
     #[error("open outer range is unbounded; write `A..B` or `A..=B`, optionally with a `::S` step")]
-    OpenOuter(Span),
+    OpenOuter,
     #[error("range is too large")]
-    RangeTooLarge(Span),
+    RangeTooLarge,
     #[error("bound {value} is outside the domain {lo}..={hi}")]
-    OutsideDomain {
-        span: Span,
-        value: i128,
-        lo: i128,
-        hi: i128,
-    },
+    OutsideDomain { value: i128, lo: i128, hi: i128 },
     #[error("outer range cannot use `#`")]
-    OuterHash(Span),
+    OuterHash,
     #[error("step must be a positive integer")]
-    StepNotPositive(Span),
+    StepNotPositive,
     #[error("step must be a positive integer literal or `#±N`")]
-    StepLastIndex(Span),
+    StepLastIndex,
     #[error("index overflow computing a `#` bound")]
-    IndexOverflow(Span),
+    IndexOverflow,
     #[error(
         "invalid range {start}{sep}{end}",
         sep = if *inclusive { "..=" } else { ".." }
     )]
     InvalidRange {
-        span: Span,
         start: i128,
         end: i128,
         inclusive: bool,
     },
     #[error("expected an unsuffixed integer literal")]
-    UnsuffixedLiteral(Span),
+    UnsuffixedLiteral,
     #[error("integer literal overflows `i128`")]
-    LiteralOverflow(Span),
+    LiteralOverflow,
     #[error("expected an integer literal after `#` `+` or `#` `-`")]
-    MissingAfterSign(Span),
+    MissingAfterSign,
     #[error("fan mode domain `0..=index` is empty because the index is negative")]
-    FanEmpty(Span),
+    FanEmpty,
     #[error("write `impl_foreach!(range = .., body = {{ .. }})`")]
-    CallForm(Span),
+    CallForm,
     #[error("expected a `{{ ... }}` body after the range")]
-    ExpectedBody(Span),
+    ExpectedBody,
     #[error("unexpected token after the body")]
-    UnexpectedAfterBody(Span),
+    UnexpectedAfterBody,
     #[error("write `+` to concatenate; `X Name[..]` is not concatenation")]
-    NotConcat(Span),
+    NotConcat,
     #[error("cannot paste a negative index into an identifier")]
-    NegativePaste(Span),
+    NegativePaste,
     #[error("write `Name + #` to paste an index; `Name #` is not a paste")]
-    SpacedPaste(Span),
+    SpacedPaste,
     #[error("body is too large")]
-    BodyTooLarge(Span),
+    BodyTooLarge,
 }
 
 impl Error {
-    pub(crate) fn span(&self) -> Span {
-        match *self {
-            Self::OutsideDomain { span, .. }
-            | Self::InvalidRange { span, .. }
-            | Self::ExpectedRange(span)
-            | Self::ExpectedDots(span)
-            | Self::ExpectedStep(span)
-            | Self::ExpectedBound(span)
-            | Self::ExpectedPathSep(span)
-            | Self::OnePattern(span)
-            | Self::UnexpectedInRange(span)
-            | Self::OpenOuter(span)
-            | Self::RangeTooLarge(span)
-            | Self::OuterHash(span)
-            | Self::StepNotPositive(span)
-            | Self::StepLastIndex(span)
-            | Self::IndexOverflow(span)
-            | Self::UnsuffixedLiteral(span)
-            | Self::LiteralOverflow(span)
-            | Self::MissingAfterSign(span)
-            | Self::FanEmpty(span)
-            | Self::CallForm(span)
-            | Self::ExpectedBody(span)
-            | Self::UnexpectedAfterBody(span)
-            | Self::NotConcat(span)
-            | Self::NegativePaste(span)
-            | Self::SpacedPaste(span)
-            | Self::BodyTooLarge(span) => span,
-        }
+    pub(crate) fn new(span: Span, kind: ErrorKind) -> Self {
+        Self { span, kind }
     }
 
     pub(crate) fn to_compile_error(&self) -> TokenStream {
-        let span = self.span();
+        let span = self.span;
         let message = self.to_string();
         let ident = Ident::new("compile_error", span);
         let mut bang = Punct::new('!', Spacing::Alone);

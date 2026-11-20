@@ -10,7 +10,7 @@
 
 use proc_macro::{Delimiter, Group, Ident, Literal, Punct, Spacing, Span, TokenStream, TokenTree};
 
-use crate::error::{Error, Result};
+use crate::error::{Error, ErrorKind, Result};
 use crate::range::{
     BoundStyle, Domain, EvalCtx, OuterRange, Pattern, compile_outer, parse_pattern, parse_range,
     visit_range,
@@ -29,7 +29,7 @@ pub(crate) fn expand(input: TokenStream) -> Result<TokenStream> {
     let mut output = TokenStream::new();
     if stat.fan {
         if outer.first() < 0 {
-            return Err(Error::FanEmpty(range.span));
+            return Err(Error::new(range.span, ErrorKind::FanEmpty));
         }
         each_index(outer, |index| {
             let domain = Domain::prefix(index);
@@ -80,10 +80,11 @@ fn split_input(input: TokenStream) -> Result<(Vec<TokenTree>, Vec<TokenTree>)> {
         if tokens.iter().any(|token| {
             matches!(token, TokenTree::Group(group) if group.delimiter() == Delimiter::Brace)
         }) {
-            return Err(Error::CallForm(span));
+            return Err(Error::new(span, ErrorKind::CallForm));
         }
-        return Err(Error::ExpectedBody(
+        return Err(Error::new(
             tokens.last().map_or(span, TokenTree::span),
+            ErrorKind::ExpectedBody,
         ));
     };
     let (left_name, left_value) = named_value(&tokens[..comma_at], span)?;
@@ -92,10 +93,10 @@ fn split_input(input: TokenStream) -> Result<(Vec<TokenTree>, Vec<TokenTree>)> {
     let (range, body) = match (left_name.as_str(), right_name.as_str()) {
         ("range", "body") => (left_value, right_value),
         ("body", "range") => (right_value, left_value),
-        _ => return Err(Error::CallForm(span)),
+        _ => return Err(Error::new(span, ErrorKind::CallForm)),
     };
     if range.is_empty() {
-        return Err(Error::ExpectedRange(span));
+        return Err(Error::new(span, ErrorKind::ExpectedRange));
     }
     Ok((range, brace_body(&body, span)?))
 }
@@ -106,10 +107,10 @@ fn is_comma(token: &TokenTree) -> bool {
 
 fn named_value(tokens: &[TokenTree], span: Span) -> Result<(String, Vec<TokenTree>)> {
     let Some(TokenTree::Ident(name)) = tokens.first() else {
-        return Err(Error::CallForm(span));
+        return Err(Error::new(span, ErrorKind::CallForm));
     };
     if !matches!(tokens.get(1), Some(TokenTree::Punct(punct)) if punct.as_char() == '=') {
-        return Err(Error::CallForm(name.span()));
+        return Err(Error::new(name.span(), ErrorKind::CallForm));
     }
     Ok((name.to_string(), tokens[2..].to_vec()))
 }
@@ -120,10 +121,11 @@ fn brace_body(tokens: &[TokenTree], span: Span) -> Result<Vec<TokenTree>> {
             Ok(group.stream().into_iter().collect())
         }
         [TokenTree::Group(group), extra, ..] if group.delimiter() == Delimiter::Brace => {
-            Err(Error::UnexpectedAfterBody(extra.span()))
+            Err(Error::new(extra.span(), ErrorKind::UnexpectedAfterBody))
         }
-        _ => Err(Error::ExpectedBody(
+        _ => Err(Error::new(
             tokens.first().map_or(span, TokenTree::span),
+            ErrorKind::ExpectedBody,
         )),
     }
 }
@@ -367,7 +369,7 @@ fn reject_ident_before_sequence(
     after_name: usize,
 ) -> Result<Option<usize>> {
     if is_sequence_start(prog, source_at, source_len, after_name)? {
-        return Err(Error::NotConcat(ident.span()));
+        return Err(Error::new(ident.span(), ErrorKind::NotConcat));
     }
     Ok(None)
 }
@@ -1050,7 +1052,7 @@ const PASTE_CAP: usize = 128;
 
 fn emit_pasted(base: &str, index: i128, span: Span, out: &mut TokenStream) -> Result<()> {
     let Ok(value) = u128::try_from(index) else {
-        return Err(Error::NegativePaste(span));
+        return Err(Error::new(span, ErrorKind::NegativePaste));
     };
     let mut stack = [0u8; PASTE_CAP];
     if let Some(text) = write_paste(&mut stack, base, value) {
@@ -1138,7 +1140,10 @@ fn reject_spaced_ident_hash(
     if !matches!(tokens.get(index), Some(TokenTree::Ident(_))) || !is_bare_hash(tokens, index + 1) {
         return Ok(());
     }
-    Err(Error::SpacedPaste(hash_span(tokens, index + 1)))
+    Err(Error::new(
+        hash_span(tokens, index + 1),
+        ErrorKind::SpacedPaste,
+    ))
 }
 
 fn is_bare_hash(tokens: &[TokenTree], index: usize) -> bool {
@@ -1201,5 +1206,5 @@ fn rewind(len: usize, physical: u32) -> Result<usize> {
 }
 
 fn too_large() -> Error {
-    Error::BodyTooLarge(Span::call_site())
+    Error::new(Span::call_site(), ErrorKind::BodyTooLarge)
 }
