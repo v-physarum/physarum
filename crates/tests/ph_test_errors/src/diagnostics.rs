@@ -77,6 +77,14 @@ impl Diagnostic {
             && self.message.contains(description)
     }
 
+    /// This error has no code and its message contains `description`.
+    ///
+    /// `compile_error!` diagnostics arrive with no code. The comparison reads
+    /// the stored message and does not allocate.
+    pub(crate) fn matches_without_code(&self, description: &str) -> bool {
+        self.code.is_none() && self.message.contains(description)
+    }
+
     /// Bytes of the failure text: each line is code, `": "`, message, with a
     /// newline between lines. An empty list prints `(none)`.
     pub(crate) fn arrived_len(messages: &[Self]) -> usize {
