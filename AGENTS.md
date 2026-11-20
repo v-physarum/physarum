@@ -10,7 +10,7 @@ TODO: the owner has not defined the project purpose (library, CLI, or service). 
 - `docs/adr/` — architecture decision records. See `docs/adr/README.md`.
 - `.github/` — CI workflow and issue and pull request templates.
 - `rust-toolchain.toml`, `rustfmt.toml` — pinned stable toolchain and formatting.
-- `.cursor/` — Cursor cloud-agent install and a pointer rule. The rules live in this file.
+- `.cursor/` — Cursor cloud-agent install and pointer rules. The rules live in this file.
 - `AGENTS.md` — this file.
 
 ## Code style and conventions
@@ -22,6 +22,36 @@ TODO: the owner has not defined the project purpose (library, CLI, or service). 
 - Public items need rustdoc. The crate-level purpose stays a TODO until the owner writes it.
 - Comments, docs, issues, and commit messages are in English.
 - Keep diffs small. Do not add a domain, product story, or sample use case.
+
+## Macro design rules
+
+Numbered rules for macros in this repository. This section states rule 1. Later rules use the next integer and do not renumber rule 1.
+
+### 1. Pass arguments by name
+
+Macro arguments are always passed by name, for example `name = value`.
+
+Exception: if the macro (function) has exactly one argument, that argument is passed without a name.
+
+## Test and benchmark rules
+
+Numbered rules for tests and benchmarks in this repository. Numbering continues after rule 1. This section states rules 2 through 5. Later rules use the next integer and do not renumber these rules.
+
+### 2. Repository root
+
+Tests and benchmarks live at the repository root: `/tests` and `/benches`.
+
+### 3. Per-crate layout
+
+Per-crate layout: `/tests/crates/{crate_name}/` and `/benches/crates/{crate_name}/`.
+
+### 4. Public API
+
+Tests and benchmarks use only the public API of crates.
+
+### 5. Benchmark measurements
+
+Benchmarks measure: build time in debug and in release; incremental builds only in debug; runtime performance only in release.
 
 ## Build, lint, and test
 
