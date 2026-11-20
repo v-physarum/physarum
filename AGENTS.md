@@ -33,6 +33,8 @@ Macro arguments are always passed by name, for example `name = value`.
 
 Exception: if the macro (function) has exactly one argument, that argument is passed without a name.
 
+Exception: if the last parameter is a block `{ ... }`, no name is required before that block. For example, `impl_foreach!(0..10, {})` instead of `impl_foreach!(0..10, body = {})`.
+
 ## Test and benchmark rules
 
 Numbered rules for tests and benchmarks in this repository. Numbering continues after rule 1. This section states rules 2 through 5. Later rules use the next integer and do not renumber these rules.
