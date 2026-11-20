@@ -7,6 +7,7 @@ TODO: the owner has not defined the project purpose (library, CLI, or service). 
 ## Repository layout
 
 - `Cargo.toml`, `src/` — the `physarum` package and the workspace root.
+- `crates/benches/ph_bench_build/` — hyperfine runner. A bench selects scenarios and runs them.
 - `crates/util/ph_util_foreach/` — procedural macro `impl_foreach`.
 - `tests/crates/ph_util_foreach/` — tests of that macro. See the test rules below.
 - `benches/crates/ph_util_foreach/` — benchmarks of that macro. See the benchmark rules below.
@@ -24,6 +25,7 @@ TODO: the owner has not defined the project purpose (library, CLI, or service). 
 - `unsafe` is forbidden.
 - Public items need rustdoc. The crate-level purpose stays a TODO until the owner writes it.
 - Comments, docs, issues, and commit messages are in English.
+- JSON is read and written with `serde` and `serde_json`. Do not assemble JSON text by hand.
 - Keep diffs small. Do not add a domain, product story, or sample use case.
 
 ## Macro design rules
@@ -35,6 +37,8 @@ Numbered rules for macros in this repository. This section states rule 1. Later 
 Macro arguments are always passed by name, for example `name = value`.
 
 Exception: if the macro (function) has exactly one argument, that argument is passed without a name.
+
+Exception: if the last parameter is a block `{ ... }`, no name is required before that block. For example, `impl_foreach!(0..10, {})` instead of `impl_foreach!(0..10, body = {})`.
 
 ## Test and benchmark rules
 
@@ -56,14 +60,38 @@ Tests and benchmarks use only the public API of crates.
 
 Benchmarks measure: build time in debug and in release; incremental builds only in debug; runtime performance only in release.
 
+## Script and benchmark tool rules
+
+Numbering continues after rule 5. This section states rules 6 and 7. Later rules use the next integer and do not renumber these rules.
+
+### 6. Rust scripts
+
+Scripts are written in Rust, not shell.
+
+### 7. Hyperfine
+
+Benchmarks use hyperfine.
+
+## Pull request rules
+
+Numbering continues after rule 7. This section states rules 8 and 9. Later rules use the next integer and do not renumber these rules.
+
+### 8. Own pull request
+
+AGENTS.md may be edited only in its own pull request. Do not mix AGENTS.md edits with other changes.
+
+### 9. One crate
+
+Each pull request works on its own crate and does not touch other crates.
+
 ## Build, lint, and test
 
 From the repository root, with the pinned toolchain:
 
 ```bash
 cargo fmt --check
-cargo clippy -- -D warnings
-cargo test
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
 ```
 
 Cargo only forwards `-D` to Clippy when it comes after `--`.

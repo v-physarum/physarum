@@ -65,4 +65,4 @@ path = "benches/crates/ph_util_foreach/runtime.rs"
 
 [workspace]
 resolver = "3"
-members = ["crates/util/ph_util_foreach"]
+members = ["crates/benches/ph_bench_build", "crates/util/ph_util_foreach"]
