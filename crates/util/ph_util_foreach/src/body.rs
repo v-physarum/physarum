@@ -1,17 +1,17 @@
 //! Placeholder substitution for one `impl_foreach` invocation.
 //!
-//! Flat mode repeats the body once per outer index and clips patterns to that
-//! full index set. Fan mode is selected when a bracket pattern mentions `#`
-//! (including `Name[#]` and `Off[#]`). Each fan copy still uses one outer
-//! index, but the domain is the prefix `0..=index`.
+//! The body is compiled once. Each index then only substitutes values. Pasted
+//! identifiers are written into a stack buffer. Flat mode repeats the body once
+//! per outer index and clips patterns to that full index set. Fan mode is
+//! selected when a bracket pattern mentions `#` (including `Name[#]` and
+//! `Off[#]`). Each fan copy still uses one outer index, but the domain is the
+//! prefix `0..=index`.
 
 use proc_macro::{Delimiter, Group, Ident, Literal, Punct, Spacing, Span, TokenStream, TokenTree};
 
 use crate::error::{Error, Result};
-
 use crate::range::{
-    BoundStyle, Domain, EvalCtx, Pattern, compile_outer, parse_range, resolve_range,
-    starts_like_range,
+    BoundStyle, Domain, EvalCtx, Pattern, compile_outer, parse_pattern, parse_range, visit_range,
 };
 
 pub(crate) fn expand(input: TokenStream) -> Result<TokenStream> {
@@ -21,35 +21,34 @@ pub(crate) fn expand(input: TokenStream) -> Result<TokenStream> {
     if outer.indices.is_empty() {
         return Ok(TokenStream::new());
     }
-    let mode = if uses_fan(&body)? {
-        Mode::Fan
-    } else {
-        Mode::Flat(Domain::from_indices(&outer.indices, outer.gap)?)
-    };
+    let compiled = compile_tokens(&body)?;
     let mut output = TokenStream::new();
-    for index in outer.indices {
-        match &mode {
-            Mode::Fan => {
-                let domain = Domain::fan(index, range.span)?;
-                output.extend(expand_tokens(
-                    &body,
-                    &EvalCtx {
-                        index,
-                        domain: &domain,
-                    },
-                )?);
-            }
-            Mode::Flat(domain) => {
-                output.extend(expand_tokens(&body, &EvalCtx { index, domain })?);
-            }
+    if compiled.fan {
+        for index in outer.indices {
+            let domain = Domain::fan(index, range.span)?;
+            emit(
+                &compiled.nodes,
+                &EvalCtx {
+                    index,
+                    domain: &domain,
+                },
+                &mut output,
+            )?;
+        }
+    } else {
+        let domain = Domain::from_indices(outer.indices, outer.gap)?;
+        for position in 0..domain.index_count() {
+            emit(
+                &compiled.nodes,
+                &EvalCtx {
+                    index: domain.index_at(position),
+                    domain: &domain,
+                },
+                &mut output,
+            )?;
         }
     }
     Ok(output)
-}
-
-enum Mode {
-    Flat(Domain),
-    Fan,
 }
 
 fn split_input(input: TokenStream) -> Result<(Vec<TokenTree>, Vec<TokenTree>)> {
@@ -90,49 +89,207 @@ fn split_input(input: TokenStream) -> Result<(Vec<TokenTree>, Vec<TokenTree>)> {
     ))
 }
 
-fn uses_fan(tokens: &[TokenTree]) -> Result<bool> {
+struct Compiled {
+    nodes: Vec<Node>,
+    expands: bool,
+    fan: bool,
+}
+
+enum Node {
+    Copy(Vec<TokenTree>),
+    Group {
+        delimiter: Delimiter,
+        span: Span,
+        children: Vec<Node>,
+    },
+    Index {
+        span: Span,
+    },
+    Paste {
+        base: String,
+        span: Span,
+    },
+    List(Vec<Piece>),
+}
+
+enum Piece {
+    Ident(Ident),
+    Off(Ident),
+    Named {
+        base: String,
+        span: Span,
+        pattern: Pattern,
+    },
+    Rows {
+        template: Vec<Node>,
+        pattern: Pattern,
+        span: Span,
+    },
+}
+
+struct Compiler {
+    nodes: Vec<Node>,
+    verbatim: Vec<TokenTree>,
+    expands: bool,
+    fan: bool,
+}
+
+impl Compiler {
+    fn new() -> Self {
+        Self {
+            nodes: Vec::new(),
+            verbatim: Vec::new(),
+            expands: false,
+            fan: false,
+        }
+    }
+
+    fn flush(&mut self) {
+        if self.verbatim.is_empty() {
+            return;
+        }
+        self.nodes
+            .push(Node::Copy(std::mem::take(&mut self.verbatim)));
+    }
+
+    fn finish(mut self) -> Compiled {
+        self.flush();
+        Compiled {
+            nodes: self.nodes,
+            expands: self.expands,
+            fan: self.fan,
+        }
+    }
+}
+
+fn compile_tokens(tokens: &[TokenTree]) -> Result<Compiled> {
+    let mut compiler = Compiler::new();
     let mut index = 0;
     while index < tokens.len() {
-        if let Some(found) = classified_at(tokens, index)? {
-            if found.pattern.uses_index() {
-                return Ok(true);
-            }
-            if let Some(template) = found.template
-                && uses_fan(&template)?
-            {
-                return Ok(true);
-            }
-            index = found.next;
+        if let Some((pieces, next, fan)) = compile_list(tokens, index)? {
+            compiler.flush();
+            compiler.expands = true;
+            compiler.fan |= fan;
+            compiler.nodes.push(Node::List(pieces));
+            index = next;
             continue;
         }
-        if let TokenTree::Group(group) = &tokens[index] {
-            let inner: Vec<TokenTree> = group.stream().into_iter().collect();
-            if uses_fan(&inner)? {
-                return Ok(true);
+        if let Some(paste) = compile_paste(tokens, index) {
+            compiler.flush();
+            compiler.expands = true;
+            compiler.nodes.push(paste);
+            index += 3;
+            continue;
+        }
+        reject_spaced_paste(tokens, index)?;
+        if let Some((pieces, next, fan)) = compile_prefixed(tokens, index)? {
+            compiler.flush();
+            compiler.expands = true;
+            compiler.fan |= fan;
+            compiler.nodes.push(Node::List(pieces));
+            index = next;
+            continue;
+        }
+        if is_bare_hash(tokens, index) {
+            compiler.flush();
+            compiler.expands = true;
+            compiler.nodes.push(Node::Index {
+                span: hash_span(tokens, index),
+            });
+            index += 1;
+            continue;
+        }
+        match &tokens[index] {
+            TokenTree::Group(group) => {
+                let inner: Vec<TokenTree> = group.stream().into_iter().collect();
+                let nested = compile_tokens(&inner)?;
+                if nested.expands {
+                    compiler.flush();
+                    compiler.expands = true;
+                    compiler.fan |= nested.fan;
+                    compiler.nodes.push(Node::Group {
+                        delimiter: group.delimiter(),
+                        span: group.span(),
+                        children: nested.nodes,
+                    });
+                } else {
+                    compiler.verbatim.push(tokens[index].clone());
+                }
             }
+            other => compiler.verbatim.push(other.clone()),
         }
         index += 1;
     }
-    Ok(false)
+    Ok(compiler.finish())
 }
 
-struct Found {
-    pattern: Pattern,
+struct CompiledPiece {
+    piece: Piece,
     next: usize,
-    template: Option<Vec<TokenTree>>,
+    fan: bool,
 }
 
-fn classified_at(tokens: &[TokenTree], index: usize) -> Result<Option<Found>> {
+fn compile_list(tokens: &[TokenTree], start: usize) -> Result<Option<(Vec<Piece>, usize, bool)>> {
+    let Some(first) = compile_piece(tokens, start)? else {
+        return Ok(None);
+    };
+    let mut pieces = vec![first.piece];
+    let mut fan = first.fan;
+    let mut next = first.next;
+    while is_plus(tokens, next) {
+        let Some(more) = compile_piece(tokens, next + 1)? else {
+            break;
+        };
+        fan |= more.fan;
+        pieces.push(more.piece);
+        next = more.next;
+    }
+    Ok(Some((pieces, next, fan)))
+}
+
+fn compile_prefixed(
+    tokens: &[TokenTree],
+    start: usize,
+) -> Result<Option<(Vec<Piece>, usize, bool)>> {
+    let Some(TokenTree::Ident(name)) = tokens.get(start) else {
+        return Ok(None);
+    };
+    if is_plus(tokens, start + 1)
+        && let Some(first) = compile_piece(tokens, start + 2)?
+    {
+        let mut pieces = vec![Piece::Ident(name.clone()), first.piece];
+        let mut fan = first.fan;
+        let mut next = first.next;
+        while is_plus(tokens, next) {
+            let Some(more) = compile_piece(tokens, next + 1)? else {
+                break;
+            };
+            fan |= more.fan;
+            pieces.push(more.piece);
+            next = more.next;
+        }
+        return Ok(Some((pieces, next, fan)));
+    }
+    if is_sequence_start(tokens, start + 1)? {
+        return Err(Error::new(
+            name.span(),
+            "write `+` to concatenate; `X Name[..]` is not concatenation",
+        ));
+    }
+    Ok(None)
+}
+
+fn compile_piece(tokens: &[TokenTree], index: usize) -> Result<Option<CompiledPiece>> {
     match (tokens.get(index), tokens.get(index + 1)) {
-        (Some(TokenTree::Ident(_)), Some(TokenTree::Group(brackets)))
+        (Some(TokenTree::Ident(name)), Some(TokenTree::Group(brackets)))
             if brackets.delimiter() == Delimiter::Bracket =>
         {
             match classify(brackets)? {
                 Class::Pass => Ok(None),
-                Class::Pattern(pattern) => Ok(Some(Found {
-                    pattern,
+                Class::Pattern(pattern) => Ok(Some(CompiledPiece {
+                    fan: pattern.uses_index(),
+                    piece: name_piece(name, pattern),
                     next: index + 2,
-                    template: None,
                 })),
             }
         }
@@ -142,15 +299,207 @@ fn classified_at(tokens: &[TokenTree], index: usize) -> Result<Option<Found>> {
         {
             match classify(brackets)? {
                 Class::Pass => Ok(None),
-                Class::Pattern(pattern) => Ok(Some(Found {
-                    pattern,
-                    next: index + 2,
-                    template: Some(paren.stream().into_iter().collect()),
-                })),
+                Class::Pattern(pattern) => {
+                    let inner: Vec<TokenTree> = paren.stream().into_iter().collect();
+                    let compiled = compile_tokens(&inner)?;
+                    Ok(Some(CompiledPiece {
+                        fan: pattern.uses_index() || compiled.fan,
+                        piece: Piece::Rows {
+                            template: compiled.nodes,
+                            pattern,
+                            span: paren.span(),
+                        },
+                        next: index + 2,
+                    }))
+                }
             }
         }
         _ => Ok(None),
     }
+}
+
+fn name_piece(name: &Ident, pattern: Pattern) -> Piece {
+    if matches!(pattern, Pattern::Shorthand { .. }) && name.to_string() == "Off" {
+        return Piece::Off(Ident::new("Off", name.span()));
+    }
+    Piece::Named {
+        base: ident_base(name),
+        span: name.span(),
+        pattern,
+    }
+}
+
+fn compile_paste(tokens: &[TokenTree], index: usize) -> Option<Node> {
+    let TokenTree::Ident(name) = tokens.get(index)? else {
+        return None;
+    };
+    if !is_plus(tokens, index + 1) || !is_bare_hash(tokens, index + 2) {
+        return None;
+    }
+    Some(Node::Paste {
+        base: ident_base(name),
+        span: name.span(),
+    })
+}
+
+fn ident_base(name: &Ident) -> String {
+    let raw = name.to_string();
+    match raw.strip_prefix("r#") {
+        Some(base) => base.to_string(),
+        None => raw,
+    }
+}
+
+fn emit(nodes: &[Node], ctx: &EvalCtx<'_>, out: &mut TokenStream) -> Result<()> {
+    for node in nodes {
+        match node {
+            Node::Copy(tokens) => out.extend(tokens.iter().cloned()),
+            Node::Group {
+                delimiter,
+                span,
+                children,
+            } => {
+                let mut inner = TokenStream::new();
+                emit(children, ctx, &mut inner)?;
+                let mut group = Group::new(*delimiter, inner);
+                group.set_span(*span);
+                out.extend([TokenTree::Group(group)]);
+            }
+            Node::Index { span } => {
+                out.extend([TokenTree::Literal(index_literal(ctx.index, *span))]);
+            }
+            Node::Paste { base, span } => emit_pasted(base, ctx.index, *span, out)?,
+            Node::List(pieces) => emit_list(pieces, ctx, out)?,
+        }
+    }
+    Ok(())
+}
+
+fn emit_list(pieces: &[Piece], ctx: &EvalCtx<'_>, out: &mut TokenStream) -> Result<()> {
+    let mut emitted = false;
+    for piece in pieces {
+        match piece {
+            Piece::Ident(ident) | Piece::Off(ident) => {
+                push_comma(&mut emitted, out);
+                out.extend([TokenTree::Ident(ident.clone())]);
+            }
+            Piece::Named {
+                base,
+                span,
+                pattern,
+            } => {
+                let range = pattern.to_range();
+                visit_range(&range, ctx, |index| {
+                    push_comma(&mut emitted, out);
+                    emit_pasted(base, index, *span, out)
+                })?;
+            }
+            Piece::Rows {
+                template,
+                pattern,
+                span,
+            } => {
+                let range = pattern.to_range();
+                let domain = ctx.domain;
+                visit_range(&range, ctx, |index| {
+                    let mut inner = TokenStream::new();
+                    emit(template, &EvalCtx { index, domain }, &mut inner)?;
+                    push_comma(&mut emitted, out);
+                    let mut group = Group::new(Delimiter::Parenthesis, inner);
+                    group.set_span(*span);
+                    out.extend([TokenTree::Group(group)]);
+                    Ok(())
+                })?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn push_comma(emitted: &mut bool, out: &mut TokenStream) {
+    if *emitted {
+        out.extend([TokenTree::Punct(Punct::new(',', Spacing::Alone))]);
+    }
+    *emitted = true;
+}
+
+const PASTE_CAP: usize = 128;
+
+fn emit_pasted(base: &str, index: i128, span: Span, out: &mut TokenStream) -> Result<()> {
+    let Ok(value) = u128::try_from(index) else {
+        return Err(Error::new(
+            span,
+            "cannot paste a negative index into an identifier",
+        ));
+    };
+    let mut stack = [0u8; PASTE_CAP];
+    if let Some(text) = write_paste(&mut stack, base, value) {
+        out.extend([TokenTree::Ident(Ident::new(text, span))]);
+        return Ok(());
+    }
+    let mut heap = String::with_capacity(base.len().saturating_add(decimal_len(value)));
+    heap.push_str(base);
+    push_decimal(&mut heap, value);
+    out.extend([TokenTree::Ident(Ident::new(&heap, span))]);
+    Ok(())
+}
+
+fn write_paste<'a>(buf: &'a mut [u8], base: &str, value: u128) -> Option<&'a str> {
+    let digits = decimal_len(value);
+    let len = base.len().checked_add(digits)?;
+    if len > buf.len() {
+        return None;
+    }
+    buf[..base.len()].copy_from_slice(base.as_bytes());
+    write_decimal(&mut buf[base.len()..len], value);
+    std::str::from_utf8(&buf[..len]).ok()
+}
+
+fn decimal_len(value: u128) -> usize {
+    if value == 0 {
+        return 1;
+    }
+    match usize::try_from(value.ilog10()) {
+        Ok(width) => width + 1,
+        Err(_) => 39,
+    }
+}
+
+fn write_decimal(slot: &mut [u8], mut value: u128) {
+    if slot.is_empty() {
+        return;
+    }
+    if value == 0 {
+        slot[0] = b'0';
+        return;
+    }
+    for byte in slot.iter_mut().rev() {
+        *byte = digit_byte(value);
+        value /= 10;
+    }
+}
+
+fn push_decimal(out: &mut String, mut value: u128) {
+    if value == 0 {
+        out.push('0');
+        return;
+    }
+    let mut digits = [0u8; 39];
+    let mut count = 0;
+    while value > 0 {
+        digits[count] = digit_byte(value);
+        value /= 10;
+        count += 1;
+    }
+    for index in (0..count).rev() {
+        out.push(char::from(digits[index]));
+    }
+}
+
+fn digit_byte(value: u128) -> u8 {
+    const DIGITS: &[u8; 10] = b"0123456789";
+    let index = usize::try_from(value % 10).unwrap_or(0);
+    DIGITS[index]
 }
 
 enum Class {
@@ -163,12 +512,13 @@ fn classify(group: &Group) -> Result<Class> {
     if is_exactly_hash(&tokens) {
         return Ok(Class::Pattern(Pattern::Shorthand { span: group.span() }));
     }
-    if !starts_like_range(&tokens)? {
-        return Ok(Class::Pass);
+    match parse_pattern(&tokens)? {
+        Some(mut range) => {
+            range.span = group.span();
+            Ok(Class::Pattern(Pattern::Range(range)))
+        }
+        None => Ok(Class::Pass),
     }
-    let mut range = parse_range(&tokens, BoundStyle::Pattern)?;
-    range.span = group.span();
-    Ok(Class::Pattern(Pattern::Range(range)))
 }
 
 fn is_exactly_hash(tokens: &[TokenTree]) -> bool {
@@ -176,86 +526,6 @@ fn is_exactly_hash(tokens: &[TokenTree]) -> bool {
         [TokenTree::Punct(punct)] => punct.as_char() == '#',
         _ => false,
     }
-}
-
-fn expand_tokens(tokens: &[TokenTree], ctx: &EvalCtx<'_>) -> Result<TokenStream> {
-    let mut output = TokenStream::new();
-    let mut index = 0;
-    while index < tokens.len() {
-        if let Some((stream, next)) = try_chain(tokens, index, ctx)? {
-            output.extend(stream);
-            index = next;
-            continue;
-        }
-        if let Some(ident) = try_paste(tokens, index, ctx)? {
-            output.extend([TokenTree::Ident(ident)]);
-            index += 3;
-            continue;
-        }
-        reject_spaced_paste(tokens, index)?;
-        if let Some((stream, next)) = try_prefixed(tokens, index, ctx)? {
-            output.extend(stream);
-            index = next;
-            continue;
-        }
-        if is_bare_hash(tokens, index) {
-            output.extend([TokenTree::Literal(index_literal(
-                ctx.index,
-                hash_span(tokens, index),
-            ))]);
-            index += 1;
-            continue;
-        }
-        match &tokens[index] {
-            TokenTree::Group(group) => {
-                let inner: Vec<TokenTree> = group.stream().into_iter().collect();
-                let expanded = expand_tokens(&inner, ctx)?;
-                let mut rebuilt = Group::new(group.delimiter(), expanded);
-                rebuilt.set_span(group.span());
-                output.extend([TokenTree::Group(rebuilt)]);
-            }
-            other => output.extend([other.clone()]),
-        }
-        index += 1;
-    }
-    Ok(output)
-}
-
-fn try_prefixed(
-    tokens: &[TokenTree],
-    start: usize,
-    ctx: &EvalCtx<'_>,
-) -> Result<Option<(TokenStream, usize)>> {
-    let Some(TokenTree::Ident(name)) = tokens.get(start) else {
-        return Ok(None);
-    };
-    if is_sequence_start(tokens, start)? {
-        return Ok(None);
-    }
-    if is_plus(tokens, start + 1) && is_sequence_start(tokens, start + 2)? {
-        let mut elements = vec![TokenStream::from(TokenTree::Ident(name.clone()))];
-        let mut next = start + 2;
-        loop {
-            let Some(part) = try_one(tokens, next, ctx)? else {
-                break;
-            };
-            elements.extend(part.elements);
-            next = part.next;
-            if is_plus(tokens, next) && is_sequence_start(tokens, next + 1)? {
-                next += 1;
-                continue;
-            }
-            break;
-        }
-        return Ok(Some((join_elements(&elements), next)));
-    }
-    if is_sequence_start(tokens, start + 1)? {
-        return Err(Error::new(
-            name.span(),
-            "write `+` to concatenate; `X Name[..]` is not concatenation",
-        ));
-    }
-    Ok(None)
 }
 
 fn is_sequence_start(tokens: &[TokenTree], index: usize) -> Result<bool> {
@@ -275,118 +545,6 @@ fn is_sequence_start(tokens: &[TokenTree], index: usize) -> Result<bool> {
     }
 }
 
-fn try_chain(
-    tokens: &[TokenTree],
-    start: usize,
-    ctx: &EvalCtx<'_>,
-) -> Result<Option<(TokenStream, usize)>> {
-    let Some(mut part) = try_one(tokens, start, ctx)? else {
-        return Ok(None);
-    };
-    while is_plus(tokens, part.next) {
-        match try_one(tokens, part.next + 1, ctx)? {
-            Some(more) => {
-                part.elements.extend(more.elements);
-                part.next = more.next;
-            }
-            None => break,
-        }
-    }
-    Ok(Some((join_elements(&part.elements), part.next)))
-}
-
-struct Expanded {
-    elements: Vec<TokenStream>,
-    next: usize,
-}
-
-fn try_one(tokens: &[TokenTree], index: usize, ctx: &EvalCtx<'_>) -> Result<Option<Expanded>> {
-    match (tokens.get(index), tokens.get(index + 1)) {
-        (Some(TokenTree::Ident(name)), Some(TokenTree::Group(brackets)))
-            if brackets.delimiter() == Delimiter::Bracket =>
-        {
-            match classify(brackets)? {
-                Class::Pass => Ok(None),
-                Class::Pattern(pattern) => Ok(Some(Expanded {
-                    elements: expand_named(name, pattern, ctx)?,
-                    next: index + 2,
-                })),
-            }
-        }
-        (Some(TokenTree::Group(paren)), Some(TokenTree::Group(brackets)))
-            if paren.delimiter() == Delimiter::Parenthesis
-                && brackets.delimiter() == Delimiter::Bracket =>
-        {
-            match classify(brackets)? {
-                Class::Pass => Ok(None),
-                Class::Pattern(pattern) => Ok(Some(Expanded {
-                    elements: expand_rows(paren, pattern, ctx)?,
-                    next: index + 2,
-                })),
-            }
-        }
-        _ => Ok(None),
-    }
-}
-
-fn expand_named(name: &Ident, pattern: Pattern, ctx: &EvalCtx<'_>) -> Result<Vec<TokenStream>> {
-    if matches!(pattern, Pattern::Shorthand { .. }) && name.to_string() == "Off" {
-        return Ok(vec![TokenStream::from(TokenTree::Ident(Ident::new(
-            "Off",
-            name.span(),
-        )))]);
-    }
-    let indices = resolve_range(&pattern.to_range(), ctx)?;
-    let mut elements = Vec::with_capacity(indices.len());
-    for index in indices {
-        elements.push(TokenStream::from(TokenTree::Ident(paste_ident(
-            name, index,
-        )?)));
-    }
-    Ok(elements)
-}
-
-fn expand_rows(template: &Group, pattern: Pattern, ctx: &EvalCtx<'_>) -> Result<Vec<TokenStream>> {
-    let indices = resolve_range(&pattern.to_range(), ctx)?;
-    let inner: Vec<TokenTree> = template.stream().into_iter().collect();
-    let mut elements = Vec::with_capacity(indices.len());
-    for index in indices {
-        let row = EvalCtx {
-            index,
-            domain: ctx.domain,
-        };
-        let expanded = expand_tokens(&inner, &row)?;
-        let mut group = Group::new(Delimiter::Parenthesis, expanded);
-        group.set_span(template.span());
-        elements.push(TokenStream::from(TokenTree::Group(group)));
-    }
-    Ok(elements)
-}
-
-fn join_elements(elements: &[TokenStream]) -> TokenStream {
-    let mut output = TokenStream::new();
-    for (index, element) in elements.iter().enumerate() {
-        if index > 0 {
-            output.extend(TokenStream::from(TokenTree::Punct(Punct::new(
-                ',',
-                Spacing::Alone,
-            ))));
-        }
-        output.extend(element.clone());
-    }
-    output
-}
-
-fn try_paste(tokens: &[TokenTree], index: usize, ctx: &EvalCtx<'_>) -> Result<Option<Ident>> {
-    let Some(TokenTree::Ident(name)) = tokens.get(index) else {
-        return Ok(None);
-    };
-    if !is_plus(tokens, index + 1) || !is_bare_hash(tokens, index + 2) {
-        return Ok(None);
-    }
-    Ok(Some(paste_ident(name, ctx.index)?))
-}
-
 fn reject_spaced_paste(tokens: &[TokenTree], index: usize) -> Result<()> {
     if !matches!(tokens.get(index), Some(TokenTree::Ident(_))) || !is_bare_hash(tokens, index + 1) {
         return Ok(());
@@ -395,21 +553,6 @@ fn reject_spaced_paste(tokens: &[TokenTree], index: usize) -> Result<()> {
         hash_span(tokens, index + 1),
         "write `Name + #` to paste an index; `Name #` is not a paste",
     ))
-}
-
-fn paste_ident(name: &Ident, index: i128) -> Result<Ident> {
-    if index < 0 {
-        return Err(Error::new(
-            name.span(),
-            "cannot paste a negative index into an identifier",
-        ));
-    }
-    let raw = name.to_string();
-    let base = raw.strip_prefix("r#").unwrap_or(&raw);
-    let pasted = format!("{base}{index}");
-    // The base is already an identifier, and a decimal suffix cannot make it a
-    // keyword or an invalid identifier.
-    Ok(Ident::new(&pasted, name.span()))
 }
 
 fn is_bare_hash(tokens: &[TokenTree], index: usize) -> bool {
@@ -442,4 +585,21 @@ fn index_literal(index: i128, span: Span) -> Literal {
 
 fn is_plus(tokens: &[TokenTree], index: usize) -> bool {
     matches!(tokens.get(index), Some(TokenTree::Punct(punct)) if punct.as_char() == '+')
+}
+
+#[cfg(test)]
+mod paste_buffer {
+    use super::{decimal_len, write_paste};
+
+    #[test]
+    fn stack_buffer_holds_the_suffix() {
+        let mut buf = [0u8; 8];
+        assert_eq!(write_paste(&mut buf, "Ix", 0), Some("Ix0"));
+        assert_eq!(write_paste(&mut buf, "Ix", 42), Some("Ix42"));
+        assert_eq!(write_paste(&mut buf, "N", 1000), Some("N1000"));
+        assert_eq!(decimal_len(0), 1);
+        assert_eq!(decimal_len(9), 1);
+        assert_eq!(decimal_len(10), 2);
+        assert_eq!(write_paste(&mut buf, "abcdefgh", 1), None);
+    }
 }

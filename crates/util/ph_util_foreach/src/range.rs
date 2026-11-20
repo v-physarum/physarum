@@ -111,7 +111,8 @@ pub(crate) struct Domain {
     gap: i128,
     /// `true` when every integer from `lo` through `hi` is in the domain.
     dense: bool,
-    /// Present when the domain is an arithmetic subset of `lo..=hi`.
+    /// Flat domains own the outer index list. Fan prefixes leave this empty and
+    /// use `lo` and `hi` instead, so a fan iteration does not allocate.
     indices: Vec<i128>,
 }
 
@@ -133,22 +134,32 @@ impl Domain {
         })
     }
 
-    /// Domain of a flat iteration: the outer index set.
-    pub(crate) fn from_indices(indices: &[i128], gap: i128) -> Result<Self> {
+    /// Domain of a flat iteration. Takes ownership of the outer index list.
+    pub(crate) fn from_indices(indices: Vec<i128>, gap: i128) -> Result<Self> {
         let (Some(&lo), Some(&hi)) = (indices.first(), indices.last()) else {
             return Err(Error::new(
                 Span::call_site(),
                 "internal error: empty domain",
             ));
         };
-        let dense = gap == 1 && is_contiguous(indices, lo, hi);
+        let dense = gap == 1 && is_contiguous(&indices, lo, hi);
         Ok(Self {
             lo,
             hi,
             gap,
             dense,
-            indices: if dense { Vec::new() } else { indices.to_vec() },
+            indices,
         })
+    }
+
+    /// Number of indices in a flat domain.
+    pub(crate) fn index_count(&self) -> usize {
+        self.indices.len()
+    }
+
+    /// Index at `position` in a flat domain.
+    pub(crate) fn index_at(&self, position: usize) -> i128 {
+        self.indices[position]
     }
 
     fn contains(&self, value: i128) -> bool {
@@ -206,6 +217,35 @@ pub(crate) fn parse_range(tokens: &[TokenTree], style: BoundStyle) -> Result<Ran
     if start.is_some() && !cursor.starts_with_range_op() {
         return Err(Error::new(cursor.error_span(), "expected `..` or `..=`"));
     }
+    finish_range(&mut cursor, start, style, tokens)
+}
+
+/// Parses a bracket pattern in one pass.
+///
+/// `None` means the brackets do not open with a range, so they stay ordinary
+/// Rust. A broken bound such as `#+` is an error.
+pub(crate) fn parse_pattern(tokens: &[TokenTree]) -> Result<Option<RangeExpr>> {
+    if tokens.is_empty() {
+        return Ok(None);
+    }
+    let mut cursor = Cursor::new(tokens);
+    let start = if cursor.starts_with_range_op() {
+        None
+    } else {
+        match cursor.try_bound(BoundStyle::Pattern)? {
+            Some(bound) if cursor.starts_with_range_op() => Some(bound),
+            Some(_) | None => return Ok(None),
+        }
+    };
+    finish_range(&mut cursor, start, BoundStyle::Pattern, tokens).map(Some)
+}
+
+fn finish_range(
+    cursor: &mut Cursor<'_>,
+    start: Option<SpannedBound>,
+    style: BoundStyle,
+    tokens: &[TokenTree],
+) -> Result<RangeExpr> {
     let end_inclusive = cursor.parse_range_op()?;
     let end = if cursor.starts_with_pathsep() {
         None
@@ -243,24 +283,6 @@ pub(crate) fn parse_range(tokens: &[TokenTree], style: BoundStyle) -> Result<Ran
     })
 }
 
-/// `true` when `tokens` open with a range (`..`, `..=`, or a bound plus `..`).
-///
-/// A broken bound such as `#+` is an error. A bracket that does not open with
-/// a range is ordinary Rust and is left alone.
-pub(crate) fn starts_like_range(tokens: &[TokenTree]) -> Result<bool> {
-    if tokens.is_empty() {
-        return Ok(false);
-    }
-    let mut cursor = Cursor::new(tokens);
-    if cursor.starts_with_range_op() {
-        return Ok(true);
-    }
-    match cursor.try_bound(BoundStyle::Pattern)? {
-        Some(_) => Ok(cursor.starts_with_range_op()),
-        None => Ok(false),
-    }
-}
-
 /// Indices selected by a finite outer range.
 pub(crate) fn compile_outer(range: &RangeExpr) -> Result<OuterRange> {
     let (Some(start_bound), Some(end_bound)) = (range.start, range.end) else {
@@ -280,8 +302,14 @@ pub(crate) fn compile_outer(range: &RangeExpr) -> Result<OuterRange> {
     Ok(OuterRange { indices, gap })
 }
 
-/// Indices selected by `range` inside `ctx.domain`.
-pub(crate) fn resolve_range(range: &RangeExpr, ctx: &EvalCtx<'_>) -> Result<Vec<i128>> {
+/// Calls `visit` for each index `range` selects inside `ctx.domain`.
+///
+/// The walk does not allocate. An empty hole-edge window visits nothing.
+pub(crate) fn visit_range(
+    range: &RangeExpr,
+    ctx: &EvalCtx<'_>,
+    mut visit: impl FnMut(i128) -> Result<()>,
+) -> Result<()> {
     let step = eval_step(range.step, ctx)?;
     let start = match range.start {
         Some(bound) => eval_pattern_bound(bound, ctx)?,
@@ -294,7 +322,7 @@ pub(crate) fn resolve_range(range: &RangeExpr, ctx: &EvalCtx<'_>) -> Result<Vec<
     // `T[#+1..=#]` when `#` is the last index: the window is empty and the
     // start sits one past the domain. That hole edge is allowed.
     if is_high_hole_edge(start, end, end_inclusive, ctx.domain) {
-        return Ok(Vec::new());
+        return Ok(());
     }
     reject_inverted(start, end, end_inclusive, range.span)?;
     if !ctx.domain.inclusive_ok(start) {
@@ -307,7 +335,14 @@ pub(crate) fn resolve_range(range: &RangeExpr, ctx: &EvalCtx<'_>) -> Result<Vec<
     } else if !ctx.domain.exclusive_ok(end) {
         return Err(outside(range.span, end, ctx.domain));
     }
-    Ok(generate(start, end, end_inclusive, step, Some(ctx.domain)))
+    walk(
+        start,
+        end,
+        end_inclusive,
+        step,
+        Some(ctx.domain),
+        &mut visit,
+    )
 }
 
 fn is_high_hole_edge(start: i128, end: i128, end_inclusive: bool, domain: &Domain) -> bool {
@@ -399,27 +434,80 @@ fn generate(
     step: i128,
     domain: Option<&Domain>,
 ) -> Vec<i128> {
-    let mut out = Vec::new();
+    let mut out = Vec::with_capacity(step_len(start, end, end_inclusive, step));
     let mut current = start;
     loop {
-        let past_end = if end_inclusive {
-            current > end
-        } else {
-            current >= end
-        };
-        if past_end {
+        if past_end(current, end, end_inclusive) {
             break;
         }
-        let inside = domain.is_none_or(|domain| domain.contains(current));
-        if inside {
+        if domain.is_none_or(|domain| domain.contains(current)) {
             out.push(current);
         }
-        match current.checked_add(step) {
-            Some(next) if next > current => current = next,
-            _ => break,
-        }
+        let Some(next) = advance(current, step) else {
+            break;
+        };
+        current = next;
     }
     out
+}
+
+fn walk(
+    start: i128,
+    end: i128,
+    end_inclusive: bool,
+    step: i128,
+    domain: Option<&Domain>,
+    visit: &mut impl FnMut(i128) -> Result<()>,
+) -> Result<()> {
+    let mut current = start;
+    loop {
+        if past_end(current, end, end_inclusive) {
+            break;
+        }
+        if domain.is_none_or(|domain| domain.contains(current)) {
+            visit(current)?;
+        }
+        let Some(next) = advance(current, step) else {
+            break;
+        };
+        current = next;
+    }
+    Ok(())
+}
+
+fn past_end(current: i128, end: i128, end_inclusive: bool) -> bool {
+    if end_inclusive {
+        current > end
+    } else {
+        current >= end
+    }
+}
+
+fn advance(current: i128, step: i128) -> Option<i128> {
+    match current.checked_add(step) {
+        Some(next) if next > current => Some(next),
+        _ => None,
+    }
+}
+
+/// How many indices `start`, `start + step`, ... yields before `end`.
+fn step_len(start: i128, end: i128, end_inclusive: bool, step: i128) -> usize {
+    if step <= 0 {
+        return 0;
+    }
+    let Some(span) = (if end_inclusive {
+        end.checked_sub(start)
+    } else {
+        end.checked_sub(start)
+            .and_then(|width| width.checked_sub(1))
+    }) else {
+        return 0;
+    };
+    if span < 0 {
+        return 0;
+    }
+    let steps = span / step;
+    usize::try_from(steps.saturating_add(1)).unwrap_or(0)
 }
 
 struct Cursor<'a> {
@@ -522,15 +610,15 @@ impl<'a> Cursor<'a> {
             }));
         }
         if self.punct(0).is_some_and(|punct| punct.as_char() == '-') {
-            let Some(TokenTree::Literal(literal)) = self.tokens.get(self.index + 1) else {
+            let parsed = match (self.punct(0), self.tokens.get(self.index + 1)) {
+                (Some(minus), Some(TokenTree::Literal(literal))) => {
+                    Some((minus.span(), parse_unsuffixed_int(literal)?))
+                }
+                _ => None,
+            };
+            let Some((span, magnitude)) = parsed else {
                 return Ok(None);
             };
-            let Some(minus) = self.punct(0) else {
-                return Ok(None);
-            };
-            let span = minus.span();
-            let literal = literal.clone();
-            let magnitude = parse_unsuffixed_int(&literal)?;
             self.bump();
             self.bump();
             let bound = if style == BoundStyle::Pattern && magnitude == 1 {
@@ -543,10 +631,12 @@ impl<'a> Cursor<'a> {
             };
             return Ok(Some(SpannedBound { bound, span }));
         }
-        if let Some(TokenTree::Literal(literal)) = self.tokens.get(self.index) {
-            let literal = literal.clone();
-            let value = parse_unsuffixed_int(&literal)?;
-            let span = literal.span();
+        let parsed = if let Some(TokenTree::Literal(literal)) = self.tokens.get(self.index) {
+            Some((parse_unsuffixed_int(literal)?, literal.span()))
+        } else {
+            None
+        };
+        if let Some((value, span)) = parsed {
             self.bump();
             return Ok(Some(SpannedBound {
                 bound: Bound::Int(value),
@@ -570,14 +660,14 @@ impl<'a> Cursor<'a> {
         };
         let sign_span = sign_punct.span();
         self.bump();
-        let Some(TokenTree::Literal(literal)) = self.tokens.get(self.index) else {
+        let magnitude = if let Some(TokenTree::Literal(literal)) = self.tokens.get(self.index) {
+            parse_unsuffixed_int(literal)?
+        } else {
             return Err(Error::new(
                 sign_span,
                 "expected an integer literal after `#` `+` or `#` `-`",
             ));
         };
-        let literal = literal.clone();
-        let magnitude = parse_unsuffixed_int(&literal)?;
         self.bump();
         let offset = match sign {
             1 => magnitude,
@@ -596,15 +686,23 @@ fn strip_radix_prefix<'a>(text: &'a str, prefixes: &[&str]) -> Option<&'a str> {
 fn parse_unsuffixed_int(literal: &Literal) -> Result<i128> {
     let text = literal.to_string();
     let span = literal.span();
-    let stripped: String = text.chars().filter(|character| *character != '_').collect();
-    let (radix, digits) = if let Some(rest) = strip_radix_prefix(&stripped, &["0x", "0X"]) {
+    if text.as_bytes().contains(&b'_') {
+        let stripped: String = text.chars().filter(|character| *character != '_').collect();
+        parse_int_digits(&stripped, span)
+    } else {
+        parse_int_digits(&text, span)
+    }
+}
+
+fn parse_int_digits(text: &str, span: Span) -> Result<i128> {
+    let (radix, digits) = if let Some(rest) = strip_radix_prefix(text, &["0x", "0X"]) {
         (16, rest)
-    } else if let Some(rest) = strip_radix_prefix(&stripped, &["0o", "0O"]) {
+    } else if let Some(rest) = strip_radix_prefix(text, &["0o", "0O"]) {
         (8, rest)
-    } else if let Some(rest) = strip_radix_prefix(&stripped, &["0b", "0B"]) {
+    } else if let Some(rest) = strip_radix_prefix(text, &["0b", "0B"]) {
         (2, rest)
     } else {
-        (10, stripped.as_str())
+        (10, text)
     };
     if digits.is_empty() || !digits.chars().all(|character| character.is_digit(radix)) {
         return Err(Error::new(span, "expected an unsuffixed integer literal"));
