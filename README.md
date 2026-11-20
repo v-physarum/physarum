@@ -25,6 +25,10 @@ cargo clippy -- -D warnings
 
 Cargo only forwards `-D` to Clippy when it comes after `--`.
 
+## Metrics
+
+Release and debug metrics are listed in [AGENTS.md](AGENTS.md). TODO: the owner fills in how they are measured.
+
 ## Run
 
 There is no binary or service entry point yet. TODO: document how to run the project after the owner decides whether it is a library, a CLI, or a service.
