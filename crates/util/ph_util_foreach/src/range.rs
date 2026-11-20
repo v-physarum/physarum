@@ -439,13 +439,12 @@ pub(crate) fn compile_outer(range: &RangeExpr) -> Result<OuterRange> {
         Some(step) => expect_positive_int_step(step)?,
     };
     let window = if range.end_inclusive {
-        IntRange::from(start..=end)
+        Window::Inclusive(start..=end)
     } else {
-        IntRange::from(start..end)
-    }
-    .with_step(gap);
+        Window::Exclusive(start..end)
+    };
     window.reject_inverted(range.span)?;
-    let Some(count) = window.step_count() else {
+    let Some(count) = window.step_count(gap) else {
         return Err(Error::new(range.span, "range is too large"));
     };
     if count == 0 {
@@ -491,28 +490,27 @@ pub(crate) fn visit_range(
         None => (ctx.domain.hi, true),
     };
     let window = if end_inclusive {
-        IntRange::from(start..=end)
+        Window::Inclusive(start..=end)
     } else {
-        IntRange::from(start..end)
-    }
-    .with_step(step);
+        Window::Exclusive(start..end)
+    };
     // `T[#+1..=#]` when `#` is the last index: the window is empty and the
     // start sits one past the domain. That hole edge is allowed.
     if window.is_high_hole(ctx.domain) {
         return Ok(());
     }
     window.reject_inverted(range.span)?;
-    if !ctx.domain.inclusive_ok(window.start) {
-        return Err(outside(range.span, window.start, ctx.domain));
+    if !ctx.domain.inclusive_ok(window.start()) {
+        return Err(outside(range.span, window.start(), ctx.domain));
     }
-    if window.end_inclusive {
-        if !ctx.domain.inclusive_ok(window.end) {
-            return Err(outside(range.span, window.end, ctx.domain));
+    if window.is_inclusive() {
+        if !ctx.domain.inclusive_ok(window.end()) {
+            return Err(outside(range.span, window.end(), ctx.domain));
         }
-    } else if !ctx.domain.exclusive_ok(window.end) {
-        return Err(outside(range.span, window.end, ctx.domain));
+    } else if !ctx.domain.exclusive_ok(window.end()) {
+        return Err(outside(range.span, window.end(), ctx.domain));
     }
-    window.walk(Some(ctx.domain), &mut visit)
+    window.walk(step, Some(ctx.domain), &mut visit)
 }
 
 fn outside(span: Span, value: i128, domain: &Domain) -> Error {
@@ -558,56 +556,47 @@ fn add_offset(index: i128, offset: i128, span: Span) -> Result<i128> {
         .ok_or_else(|| Error::new(span, "index overflow computing a `#` bound"))
 }
 
-#[derive(Clone, Copy)]
-struct IntRange {
-    start: i128,
-    end: i128,
-    end_inclusive: bool,
-    step: i128,
+/// `start..end` or `start..=end`. The step stays beside the range.
+enum Window {
+    Exclusive(Range<i128>),
+    Inclusive(RangeInclusive<i128>),
 }
 
-impl From<Range<i128>> for IntRange {
-    fn from(range: Range<i128>) -> Self {
-        Self {
-            start: range.start,
-            end: range.end,
-            end_inclusive: false,
-            step: 1,
+impl Window {
+    fn start(&self) -> i128 {
+        match self {
+            Self::Exclusive(range) => range.start,
+            Self::Inclusive(range) => *range.start(),
         }
     }
-}
 
-impl From<RangeInclusive<i128>> for IntRange {
-    fn from(range: RangeInclusive<i128>) -> Self {
-        let (start, end) = range.into_inner();
-        Self {
-            start,
-            end,
-            end_inclusive: true,
-            step: 1,
+    fn end(&self) -> i128 {
+        match self {
+            Self::Exclusive(range) => range.end,
+            Self::Inclusive(range) => *range.end(),
         }
     }
-}
 
-impl IntRange {
-    fn with_step(mut self, step: i128) -> Self {
-        self.step = step;
-        self
+    fn is_inclusive(&self) -> bool {
+        matches!(self, Self::Inclusive(_))
     }
 
-    fn is_high_hole(self, domain: &Domain) -> bool {
+    fn is_high_hole(&self, domain: &Domain) -> bool {
+        let Self::Inclusive(range) = self else {
+            return false;
+        };
         let Some(just_past) = domain.hi.checked_add(1) else {
             return false;
         };
-        self.end_inclusive && self.end == domain.hi && self.start == just_past
+        *range.end() == domain.hi && *range.start() == just_past
     }
 
-    fn reject_inverted(self, span: Span) -> Result<()> {
-        if self.start > self.end {
-            let rendered = if self.end_inclusive {
-                format!("{}..={}", self.start, self.end)
+    fn reject_inverted(&self, span: Span) -> Result<()> {
+        if self.start() > self.end() {
+            let rendered = if self.is_inclusive() {
+                format!("{}..={}", self.start(), self.end())
             } else {
-                format!("{}..{}", self.start, self.end)
+                format!("{}..{}", self.start(), self.end())
             };
             return Err(Error::new(span, format!("invalid range {rendered}")));
         }
@@ -615,11 +604,12 @@ impl IntRange {
     }
 
     fn walk(
-        self,
+        &self,
+        step: i128,
         domain: Option<&Domain>,
         visit: &mut impl FnMut(i128) -> Result<()>,
     ) -> Result<()> {
-        let mut current = self.start;
+        let mut current = self.start();
         loop {
             if self.past_end(current) {
                 break;
@@ -627,7 +617,7 @@ impl IntRange {
             if domain.is_none_or(|domain| domain.contains(current)) {
                 visit(current)?;
             }
-            let Some(next) = self.advance(current) else {
+            let Some(next) = advance(current, step) else {
                 break;
             };
             current = next;
@@ -635,36 +625,36 @@ impl IntRange {
         Ok(())
     }
 
-    fn past_end(self, current: i128) -> bool {
-        if self.end_inclusive {
-            current > self.end
+    fn past_end(&self, current: i128) -> bool {
+        if self.is_inclusive() {
+            current > self.end()
         } else {
-            current >= self.end
+            current >= self.end()
         }
     }
 
-    fn advance(self, current: i128) -> Option<i128> {
-        match current.checked_add(self.step) {
-            Some(next) if next > current => Some(next),
-            _ => None,
-        }
-    }
-
-    /// How many indices this window yields. `None` means the count does not fit in `usize`.
-    fn step_count(self) -> Option<usize> {
-        if self.step <= 0 {
+    /// How many indices this window yields at `step`. `None` means the count does not fit in `usize`.
+    fn step_count(&self, step: i128) -> Option<usize> {
+        if step <= 0 {
             return Some(0);
         }
-        let span = if self.end_inclusive {
-            self.end.checked_sub(self.start)?
+        let span = if self.is_inclusive() {
+            self.end().checked_sub(self.start())?
         } else {
-            self.end.checked_sub(self.start)?.checked_sub(1)?
+            self.end().checked_sub(self.start())?.checked_sub(1)?
         };
         if span < 0 {
             return Some(0);
         }
-        let steps = span / self.step;
+        let steps = span / step;
         usize::try_from(steps.checked_add(1)?).ok()
+    }
+}
+
+fn advance(current: i128, step: i128) -> Option<i128> {
+    match current.checked_add(step) {
+        Some(next) if next > current => Some(next),
+        _ => None,
     }
 }
 
