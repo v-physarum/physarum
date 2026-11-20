@@ -311,7 +311,7 @@ impl<'a> RangeParse<'a> {
     }
 
     fn parse_closed(mut self) -> Result<RangeExpr> {
-        let start = self.cursor.try_bound(self.style)?;
+        let start = self.cursor.maybe_bound(self.style)?;
         if start.is_some() && !self.cursor.starts_with_range_op() {
             return Err(Error::new(
                 self.cursor.error_span(),
@@ -325,7 +325,7 @@ impl<'a> RangeParse<'a> {
         let start = if self.cursor.starts_with_range_op() {
             None
         } else {
-            match self.cursor.try_bound(self.style)? {
+            match self.cursor.maybe_bound(self.style)? {
                 Some(bound) if self.cursor.starts_with_range_op() => Some(bound),
                 Some(_) | None => return Ok(None),
             }
@@ -350,7 +350,7 @@ impl<'a> RangeParse<'a> {
         if self.cursor.starts_with_pathsep() {
             Ok(None)
         } else {
-            self.cursor.try_bound(self.style)
+            self.cursor.maybe_bound(self.style)
         }
     }
 
@@ -359,13 +359,9 @@ impl<'a> RangeParse<'a> {
             return Ok(None);
         }
         self.cursor.parse_pathsep()?;
-        match self.cursor.try_bound(BoundStyle::Step)? {
-            Some(bound) => Ok(Some(bound)),
-            None => Err(Error::new(
-                self.cursor.error_span(),
-                "expected a step after `::`",
-            )),
-        }
+        self.cursor
+            .require_bound(BoundStyle::Step, "expected a step after `::`")
+            .map(Some)
     }
 
     fn reject_trailing(&self) -> Result<()> {
@@ -645,6 +641,36 @@ impl IntRange {
     }
 }
 
+/// A bound that was missing or invalid.
+enum BoundError {
+    Absent { span: Span, message: &'static str },
+    Invalid(Error),
+}
+
+impl BoundError {
+    fn absent_message(self, message: &'static str) -> Self {
+        match self {
+            Self::Absent { span, .. } => Self::Absent { span, message },
+            Self::Invalid(error) => Self::Invalid(error),
+        }
+    }
+}
+
+impl From<Error> for BoundError {
+    fn from(error: Error) -> Self {
+        Self::Invalid(error)
+    }
+}
+
+impl From<BoundError> for Error {
+    fn from(error: BoundError) -> Self {
+        match error {
+            BoundError::Absent { span, message } => Error::new(span, message),
+            BoundError::Invalid(error) => error,
+        }
+    }
+}
+
 struct Cursor<'a> {
     tokens: &'a [TokenTree],
     index: usize,
@@ -734,12 +760,25 @@ impl<'a> Cursor<'a> {
         Ok(())
     }
 
-    fn try_bound(&mut self, style: BoundStyle) -> Result<Option<SpannedBound>> {
+    fn maybe_bound(&mut self, style: BoundStyle) -> Result<Option<SpannedBound>> {
+        match self.parse_bound(style) {
+            Ok(bound) => Ok(Some(bound)),
+            Err(BoundError::Absent { .. }) => Ok(None),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    fn require_bound(&mut self, style: BoundStyle, message: &'static str) -> Result<SpannedBound> {
+        self.parse_bound(style)
+            .map_err(|error| error.absent_message(message).into())
+    }
+
+    fn parse_bound(&mut self, style: BoundStyle) -> std::result::Result<SpannedBound, BoundError> {
         if let Some(hash) = self.punct(0).filter(|punct| punct.as_char() == '#') {
             let span = hash.span();
             self.bump();
             let offset = self.parse_hash_offset()?;
-            return Ok(Some(SpannedBound::here(offset, span)));
+            return Ok(SpannedBound::here(offset, span));
         }
         if self.punct(0).is_some_and(|punct| punct.as_char() == '-') {
             let parsed = match (self.punct(0), self.tokens.get(self.index + 1)) {
@@ -749,17 +788,17 @@ impl<'a> Cursor<'a> {
                 _ => None,
             };
             let Some((span, magnitude)) = parsed else {
-                return Ok(None);
+                return Err(self.absent());
             };
             self.bump();
             self.bump();
             if style == BoundStyle::Pattern && magnitude == 1 {
-                return Ok(Some(SpannedBound::last_index(span)));
+                return Ok(SpannedBound::last_index(span));
             }
             let signed = magnitude
                 .checked_neg()
                 .ok_or_else(|| Error::new(span, "integer literal overflows `i128`"))?;
-            return Ok(Some(SpannedBound::int(signed, span)));
+            return Ok(SpannedBound::int(signed, span));
         }
         let parsed = if let Some(TokenTree::Literal(literal)) = self.tokens.get(self.index) {
             Some((parse_unsuffixed_int(literal)?, literal.span()))
@@ -768,9 +807,16 @@ impl<'a> Cursor<'a> {
         };
         if let Some((value, span)) = parsed {
             self.bump();
-            return Ok(Some(SpannedBound::int(value, span)));
+            return Ok(SpannedBound::int(value, span));
         }
-        Ok(None)
+        Err(self.absent())
+    }
+
+    fn absent(&self) -> BoundError {
+        BoundError::Absent {
+            span: self.error_span(),
+            message: "expected a bound",
+        }
     }
 
     fn parse_hash_offset(&mut self) -> Result<i128> {
