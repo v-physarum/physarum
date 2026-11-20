@@ -786,6 +786,8 @@ impl From<BoundError> for Error {
     }
 }
 
+type BoundResult = std::result::Result<SpannedBound, BoundError>;
+
 struct Cursor<'a> {
     tokens: &'a [TokenTree],
     index: usize,
@@ -891,7 +893,7 @@ impl<'a> Cursor<'a> {
             })
     }
 
-    fn parse_bound(&mut self, style: BoundStyle) -> std::result::Result<SpannedBound, BoundError> {
+    fn parse_bound(&mut self, style: BoundStyle) -> BoundResult {
         if let Some(hash) = self.punct(0).filter(|punct| punct.as_char() == '#') {
             let span = hash.span();
             self.bump();
