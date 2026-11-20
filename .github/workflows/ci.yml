@@ -59,7 +59,7 @@ jobs:
           sudo install -m 755 /tmp/hyperfine-v2.0.0-x86_64-unknown-linux-gnu/hyperfine /usr/local/bin/hyperfine
 
       - name: Measure impl_foreach in a user crate
-        run: ./benches/crates/ph_util_foreach/measure.sh
+        run: cargo bench --bench ph_util_foreach_measure --offline
 
       - name: Upload expand-time report
         uses: actions/upload-artifact@v7.0.2

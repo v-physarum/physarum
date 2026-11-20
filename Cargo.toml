@@ -47,6 +47,11 @@ name = "ph_util_foreach_tokens"
 path = "tests/crates/ph_util_foreach/tokens.rs"
 
 [[bench]]
+name = "ph_util_foreach_measure"
+harness = false
+path = "benches/crates/ph_util_foreach/measure.rs"
+
+[[bench]]
 name = "ph_util_foreach_runtime"
 harness = false
 path = "benches/crates/ph_util_foreach/runtime.rs"
