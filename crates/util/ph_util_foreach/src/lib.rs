@@ -12,18 +12,15 @@ mod range;
 /// ```
 /// use ph_util_foreach::impl_foreach;
 ///
-/// impl_foreach! {
-///     (0..3) {
-///         pub struct Ix + #;
-///     }
-/// }
+/// impl_foreach!(0..3, {
+///     pub struct Ix + #;
+/// });
 ///
 /// let _ = (Ix0, Ix1, Ix2);
 /// ```
 ///
-/// Rust parses a macro as one delimiter, so the call is `impl_foreach! { ... }`.
-/// Inside it, the range is a parenthesis group and the body is the following
-/// brace group: `impl_foreach! { (0..=10) { /* body */ } }`.
+/// The call is `impl_foreach!(range, { body })`. The range and the `{ ... }`
+/// body are both inside the parentheses, separated by a comma.
 /// `#` is the current index. `Name + #` appends that index's decimal digits
 /// (`Ix + #` expands to `Ix0`). An identifier immediately followed by `#`
 /// is a compile error.

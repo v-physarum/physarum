@@ -121,19 +121,19 @@ fn assert_err(input: &str, needle: &str) {
 #[test]
 fn spaced_paste_and_negative_index_are_errors() {
     assert_err(
-        "impl_foreach! { (-1..0) { struct Ix + #; } }",
+        "impl_foreach!(-1..0, { struct Ix + #; });",
         "cannot paste a negative index",
     );
     assert_err(
-        "impl_foreach! { (-1..0) { Name[#]; } }",
+        "impl_foreach!(-1..0, { Name[#]; });",
         "fan mode domain `0..=index` is empty",
     );
-    assert_err("impl_foreach! { (0..1) { struct Ix #; } }", "Name + #");
-    assert_err("impl_foreach! { (0..1) { struct Ix#; } }", "Name + #");
-    assert_err("impl_foreach! { (0..2) { (T #)[0..1]; } }", "Name + #");
-    assert_err("impl_foreach! { (0..1) { fn at #() {} } }", "Name + #");
+    assert_err("impl_foreach!(0..1, { struct Ix #; });", "Name + #");
+    assert_err("impl_foreach!(0..1, { struct Ix#; });", "Name + #");
+    assert_err("impl_foreach!(0..2, { (T #)[0..1]; });", "Name + #");
+    assert_err("impl_foreach!(0..1, { fn at #() {} });", "Name + #");
     assert_err(
-        "impl_foreach! { (0..2) { X Name[0..1]; } }",
+        "impl_foreach!(0..2, { X Name[0..1]; });",
         "not concatenation",
     );
 }
@@ -141,91 +141,82 @@ fn spaced_paste_and_negative_index_are_errors() {
 #[test]
 fn outer_range_errors() {
     for input in [
-        "impl_foreach! { (0..) { K; } }",
-        "impl_foreach! { (..4) { K; } }",
-        "impl_foreach! { (..=4) { K; } }",
-        "impl_foreach! { (..) { K; } }",
-        "impl_foreach! { (0..::2) { K; } }",
-        "impl_foreach! { (..4::2) { K; } }",
-        "impl_foreach! { (..=4::2) { K; } }",
-        "impl_foreach! { (..::2) { K; } }",
+        "impl_foreach!(0.., { K; });",
+        "impl_foreach!(..4, { K; });",
+        "impl_foreach!(..=4, { K; });",
+        "impl_foreach!(.., { K; });",
+        "impl_foreach!(0..::2, { K; });",
+        "impl_foreach!(..4::2, { K; });",
+        "impl_foreach!(..=4::2, { K; });",
+        "impl_foreach!(..::2, { K; });",
     ] {
         assert_err(input, "open outer range");
     }
-    assert_err("impl_foreach! { (5..3) { K; } }", "invalid range");
-    assert_err("impl_foreach! { (5..=3) { K; } }", "invalid range");
-    assert_err("impl_foreach! { (5..4) { K; } }", "invalid range");
+    assert_err("impl_foreach!(5..3, { K; });", "invalid range");
+    assert_err("impl_foreach!(5..=3, { K; });", "invalid range");
+    assert_err("impl_foreach!(5..4, { K; });", "invalid range");
     assert_err(
-        "impl_foreach! { (0..4::0) { K; } }",
+        "impl_foreach!(0..4::0, { K; });",
         "step must be a positive integer",
     );
     assert_err(
-        "impl_foreach! { (0..4::-1) { K; } }",
+        "impl_foreach!(0..4::-1, { K; });",
         "step must be a positive integer",
     );
+    assert_err("impl_foreach!(0..#, { K; });", "outer range cannot use `#`");
     assert_err(
-        "impl_foreach! { (0..#) { K; } }",
+        "impl_foreach!(0..4::#, { K; });",
         "outer range cannot use `#`",
     );
+    assert_err("impl_foreach!(, { K; });", "expected a range");
     assert_err(
-        "impl_foreach! { (0..4::#) { K; } }",
-        "outer range cannot use `#`",
-    );
-    assert_err("impl_foreach! { () { K; } }", "expected a range");
-    assert_err(
-        "impl_foreach! { (0..4) }",
+        "impl_foreach!(0..4);",
         "expected a `{ ... }` body after the range",
     );
     assert_err(
-        "impl_foreach! { (0..2) { K; } extra }",
+        "impl_foreach!(0..2, { K; } extra);",
         "unexpected token after the body",
     );
     assert_err(
         "impl_foreach!(0..2 { K; });",
-        "write `impl_foreach! { (range) { body } }`",
+        "write `impl_foreach!(range, { body })`",
     );
 }
 
 #[test]
 fn pattern_errors() {
     assert_err(
-        "impl_foreach! { (0..4) { Name[0..10]; } }",
+        "impl_foreach!(0..4, { Name[0..10]; });",
         "outside the domain",
     );
     assert_err(
-        "impl_foreach! { (0..10::2) { Name[0..12]; } }",
+        "impl_foreach!(0..10::2, { Name[0..12]; });",
         "outside the domain",
     );
+    assert_err("impl_foreach!(0..=10, { Name[4..=3]; });", "invalid range");
     assert_err(
-        "impl_foreach! { (0..=10) { Name[4..=3]; } }",
-        "invalid range",
-    );
-    assert_err(
-        "impl_foreach! { (0..4) { A[0..#, Off]; } }",
+        "impl_foreach!(0..4, { A[0..#, Off]; });",
         "exactly one range pattern",
     );
     assert_err(
-        "impl_foreach! { (0..4) { Name[0..1..2]; } }",
+        "impl_foreach!(0..4, { Name[0..1..2]; });",
         "exactly one range pattern",
     );
+    assert_err("impl_foreach!(0..4, { Name[0..2::]; });", "expected a step");
     assert_err(
-        "impl_foreach! { (0..4) { Name[0..2::]; } }",
-        "expected a step",
-    );
-    assert_err(
-        "impl_foreach! { (0..4) { Name[0..4::0]; } }",
+        "impl_foreach!(0..4, { Name[0..4::0]; });",
         "step must be a positive integer",
     );
     assert_err(
-        "impl_foreach! { (1..2) { Name[0..=#::#-1]; } }",
+        "impl_foreach!(1..2, { Name[0..=#::#-1]; });",
         "step must be a positive integer",
     );
     assert_err(
-        "impl_foreach! { (0..2) { Name[#-1..=#]; } }",
+        "impl_foreach!(0..2, { Name[#-1..=#]; });",
         "outside the domain",
     );
     assert_err(
-        "impl_foreach! { (0..4) { Name[#+]; } }",
+        "impl_foreach!(0..4, { Name[#+]; });",
         "expected an integer literal",
     );
 }

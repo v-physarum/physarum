@@ -55,28 +55,39 @@ enum Mode {
 fn split_input(input: TokenStream) -> Result<(Vec<TokenTree>, Vec<TokenTree>)> {
     let tokens: Vec<TokenTree> = input.into_iter().collect();
     let span = tokens.first().map_or_else(Span::call_site, TokenTree::span);
-    match tokens.as_slice() {
-        [TokenTree::Group(range), TokenTree::Group(body)]
-            if range.delimiter() == Delimiter::Parenthesis
-                && body.delimiter() == Delimiter::Brace =>
-        {
-            let range_tokens: Vec<TokenTree> = range.stream().into_iter().collect();
-            if range_tokens.is_empty() {
-                return Err(Error::new(range.span(), "expected a range"));
-            }
-            Ok((range_tokens, body.stream().into_iter().collect()))
-        }
-        [TokenTree::Group(range)] if range.delimiter() == Delimiter::Parenthesis => Err(
-            Error::new(range.span(), "expected a `{ ... }` body after the range"),
-        ),
-        [TokenTree::Group(range), _, extra, ..] if range.delimiter() == Delimiter::Parenthesis => {
-            Err(Error::new(extra.span(), "unexpected token after the body"))
-        }
-        _ => Err(Error::new(
-            span,
-            "write `impl_foreach! { (range) { body } }`",
-        )),
+    let body_at = tokens.iter().position(
+        |token| matches!(token, TokenTree::Group(group) if group.delimiter() == Delimiter::Brace),
+    );
+    let Some(body_at) = body_at else {
+        return Err(Error::new(
+            tokens.last().map_or(span, TokenTree::span),
+            "expected a `{ ... }` body after the range",
+        ));
+    };
+    if body_at + 1 != tokens.len() {
+        return Err(Error::new(
+            tokens[body_at + 1].span(),
+            "unexpected token after the body",
+        ));
     }
+    if body_at == 0
+        || !matches!(&tokens[body_at - 1], TokenTree::Punct(punct) if punct.as_char() == ',')
+    {
+        return Err(Error::new(span, "write `impl_foreach!(range, { body })`"));
+    }
+    if body_at == 1 {
+        return Err(Error::new(span, "expected a range"));
+    }
+    let TokenTree::Group(body) = &tokens[body_at] else {
+        return Err(Error::new(
+            span,
+            "expected a `{ ... }` body after the range",
+        ));
+    };
+    Ok((
+        tokens[..body_at - 1].to_vec(),
+        body.stream().into_iter().collect(),
+    ))
 }
 
 fn uses_fan(tokens: &[TokenTree]) -> Result<bool> {
