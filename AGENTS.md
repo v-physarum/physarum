@@ -37,14 +37,6 @@ Cargo only forwards `-D` to Clippy when it comes after `--`.
 
 `cargo build` compiles the crate. There is no binary to run yet.
 
-## Metrics
-
-Record these metrics. TODO: the owner fills in how each one is measured.
-
-- On release: performance.
-- On release: a small asm bundle.
-- On debug: maximally fast build time, and fast incremental compilation.
-
 ## How agents should work
 
 - Open small pull requests against `main`. Do not merge unless the owner asks.
