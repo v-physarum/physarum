@@ -36,6 +36,29 @@ pub(crate) struct SpannedBound {
     pub(crate) span: Span,
 }
 
+impl SpannedBound {
+    fn int(value: i128, span: Span) -> Self {
+        Self {
+            bound: Bound::Int(value),
+            span,
+        }
+    }
+
+    fn here(offset: i128, span: Span) -> Self {
+        Self {
+            bound: Bound::Here { offset },
+            span,
+        }
+    }
+
+    fn last_index(span: Span) -> Self {
+        Self {
+            bound: Bound::LastIndex,
+            span,
+        }
+    }
+}
+
 /// One range, including an optional step.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct RangeExpr {
@@ -44,6 +67,60 @@ pub(crate) struct RangeExpr {
     pub(crate) end_inclusive: bool,
     pub(crate) step: Option<SpannedBound>,
     pub(crate) span: Span,
+}
+
+impl RangeExpr {
+    fn builder(span: Span) -> RangeExprBuilder {
+        RangeExprBuilder {
+            start: None,
+            end: None,
+            end_inclusive: false,
+            step: None,
+            span,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+#[must_use]
+struct RangeExprBuilder {
+    start: Option<SpannedBound>,
+    end: Option<SpannedBound>,
+    end_inclusive: bool,
+    step: Option<SpannedBound>,
+    span: Span,
+}
+
+impl RangeExprBuilder {
+    fn start(mut self, start: Option<SpannedBound>) -> Self {
+        self.start = start;
+        self
+    }
+
+    fn end(mut self, end: Option<SpannedBound>) -> Self {
+        self.end = end;
+        self
+    }
+
+    fn end_inclusive(mut self, end_inclusive: bool) -> Self {
+        self.end_inclusive = end_inclusive;
+        self
+    }
+
+    fn step(mut self, step: Option<SpannedBound>) -> Self {
+        self.step = step;
+        self
+    }
+
+    fn build(self) -> RangeExpr {
+        RangeExpr {
+            start: self.start,
+            end: self.end,
+            end_inclusive: self.end_inclusive,
+            step: self.step,
+            span: self.span,
+        }
+    }
 }
 
 /// A bracket pattern.
@@ -77,19 +154,11 @@ impl Pattern {
 }
 
 fn shorthand_range(span: Span) -> RangeExpr {
-    RangeExpr {
-        start: Some(SpannedBound {
-            bound: Bound::Int(0),
-            span,
-        }),
-        end: Some(SpannedBound {
-            bound: Bound::Here { offset: 0 },
-            span,
-        }),
-        end_inclusive: true,
-        step: None,
-        span,
-    }
+    RangeExpr::builder(span)
+        .start(Some(SpannedBound::int(0, span)))
+        .end(Some(SpannedBound::here(0, span)))
+        .end_inclusive(true)
+        .build()
 }
 
 fn bound_uses_index(bound: Option<SpannedBound>) -> bool {
@@ -203,12 +272,7 @@ pub(crate) fn parse_range(tokens: &[TokenTree], style: BoundStyle) -> Result<Ran
     if tokens.is_empty() {
         return Err(Error::new(Span::call_site(), "expected a range"));
     }
-    let mut cursor = Cursor::new(tokens);
-    let start = cursor.try_bound(style)?;
-    if start.is_some() && !cursor.starts_with_range_op() {
-        return Err(Error::new(cursor.error_span(), "expected `..` or `..=`"));
-    }
-    finish_range(&mut cursor, start, style, tokens)
+    RangeParse::open(tokens, style).parse_closed()
 }
 
 /// Parses a bracket pattern in one pass.
@@ -219,59 +283,100 @@ pub(crate) fn parse_pattern(tokens: &[TokenTree]) -> Result<Option<RangeExpr>> {
     if tokens.is_empty() {
         return Ok(None);
     }
-    let mut cursor = Cursor::new(tokens);
-    let start = if cursor.starts_with_range_op() {
-        None
-    } else {
-        match cursor.try_bound(BoundStyle::Pattern)? {
-            Some(bound) if cursor.starts_with_range_op() => Some(bound),
-            Some(_) | None => return Ok(None),
-        }
-    };
-    finish_range(&mut cursor, start, BoundStyle::Pattern, tokens).map(Some)
+    RangeParse::open(tokens, BoundStyle::Pattern).parse_optional()
 }
 
-fn finish_range(
-    cursor: &mut Cursor<'_>,
-    start: Option<SpannedBound>,
+struct RangeParse<'a> {
+    cursor: Cursor<'a>,
     style: BoundStyle,
-    tokens: &[TokenTree],
-) -> Result<RangeExpr> {
-    let end_inclusive = cursor.parse_range_op()?;
-    let end = if cursor.starts_with_pathsep() {
-        None
-    } else {
-        cursor.try_bound(style)?
-    };
-    let step = if cursor.starts_with_pathsep() {
-        cursor.parse_pathsep()?;
-        match cursor.try_bound(BoundStyle::Step)? {
-            Some(bound) => Some(bound),
-            None => {
-                return Err(Error::new(
-                    cursor.error_span(),
-                    "expected a step after `::`",
-                ));
-            }
+    span: Span,
+    start: Option<SpannedBound>,
+}
+
+impl<'a> RangeParse<'a> {
+    fn open(tokens: &'a [TokenTree], style: BoundStyle) -> Self {
+        Self {
+            span: tokens.first().map_or_else(Span::call_site, TokenTree::span),
+            cursor: Cursor::new(tokens),
+            style,
+            start: None,
         }
-    } else {
-        None
-    };
-    if !cursor.is_empty() {
-        let message = if style == BoundStyle::Pattern {
+    }
+
+    fn with_start(mut self, start: Option<SpannedBound>) -> Self {
+        self.start = start;
+        self
+    }
+
+    fn parse_closed(mut self) -> Result<RangeExpr> {
+        let start = self.cursor.try_bound(self.style)?;
+        if start.is_some() && !self.cursor.starts_with_range_op() {
+            return Err(Error::new(
+                self.cursor.error_span(),
+                "expected `..` or `..=`",
+            ));
+        }
+        self.with_start(start).finish()
+    }
+
+    fn parse_optional(mut self) -> Result<Option<RangeExpr>> {
+        let start = if self.cursor.starts_with_range_op() {
+            None
+        } else {
+            match self.cursor.try_bound(self.style)? {
+                Some(bound) if self.cursor.starts_with_range_op() => Some(bound),
+                Some(_) | None => return Ok(None),
+            }
+        };
+        self.with_start(start).finish().map(Some)
+    }
+
+    fn finish(mut self) -> Result<RangeExpr> {
+        let end_inclusive = self.cursor.parse_range_op()?;
+        let end = self.parse_end()?;
+        let step = self.parse_step()?;
+        self.reject_trailing()?;
+        Ok(RangeExpr::builder(self.span)
+            .start(self.start)
+            .end(end)
+            .end_inclusive(end_inclusive)
+            .step(step)
+            .build())
+    }
+
+    fn parse_end(&mut self) -> Result<Option<SpannedBound>> {
+        if self.cursor.starts_with_pathsep() {
+            Ok(None)
+        } else {
+            self.cursor.try_bound(self.style)
+        }
+    }
+
+    fn parse_step(&mut self) -> Result<Option<SpannedBound>> {
+        if !self.cursor.starts_with_pathsep() {
+            return Ok(None);
+        }
+        self.cursor.parse_pathsep()?;
+        match self.cursor.try_bound(BoundStyle::Step)? {
+            Some(bound) => Ok(Some(bound)),
+            None => Err(Error::new(
+                self.cursor.error_span(),
+                "expected a step after `::`",
+            )),
+        }
+    }
+
+    fn reject_trailing(&self) -> Result<()> {
+        if self.cursor.is_empty() {
+            return Ok(());
+        }
+        let message = if self.style == BoundStyle::Pattern {
             "expected exactly one range pattern inside `[]`"
         } else {
             "unexpected token in range"
         };
-        return Err(Error::new(cursor.error_span(), message));
+        Err(Error::new(self.cursor.error_span(), message))
     }
-    Ok(RangeExpr {
-        start,
-        end,
-        end_inclusive,
-        step,
-        span: tokens[0].span(),
-    })
 }
 
 /// Indices selected by a finite outer range.
@@ -288,8 +393,14 @@ pub(crate) fn compile_outer(range: &RangeExpr) -> Result<OuterRange> {
         None => 1,
         Some(step) => expect_positive_int_step(step)?,
     };
-    reject_inverted(start, end, range.end_inclusive, range.span)?;
-    let Some(count) = step_len(start, end, range.end_inclusive, gap) else {
+    let window = IntRange::builder()
+        .start(start)
+        .end(end)
+        .end_inclusive(range.end_inclusive)
+        .step(gap)
+        .build();
+    window.reject_inverted(range.span)?;
+    let Some(count) = window.step_count() else {
         return Err(Error::new(range.span, "range is too large"));
     };
     if count == 0 {
@@ -334,49 +445,29 @@ pub(crate) fn visit_range(
         Some(bound) => (eval_pattern_bound(bound, ctx)?, range.end_inclusive),
         None => (ctx.domain.hi, true),
     };
+    let window = IntRange::builder()
+        .start(start)
+        .end(end)
+        .end_inclusive(end_inclusive)
+        .step(step)
+        .build();
     // `T[#+1..=#]` when `#` is the last index: the window is empty and the
     // start sits one past the domain. That hole edge is allowed.
-    if is_high_hole_edge(start, end, end_inclusive, ctx.domain) {
+    if window.is_high_hole(ctx.domain) {
         return Ok(());
     }
-    reject_inverted(start, end, end_inclusive, range.span)?;
-    if !ctx.domain.inclusive_ok(start) {
-        return Err(outside(range.span, start, ctx.domain));
+    window.reject_inverted(range.span)?;
+    if !ctx.domain.inclusive_ok(window.start) {
+        return Err(outside(range.span, window.start, ctx.domain));
     }
-    if end_inclusive {
-        if !ctx.domain.inclusive_ok(end) {
-            return Err(outside(range.span, end, ctx.domain));
+    if window.end_inclusive {
+        if !ctx.domain.inclusive_ok(window.end) {
+            return Err(outside(range.span, window.end, ctx.domain));
         }
-    } else if !ctx.domain.exclusive_ok(end) {
-        return Err(outside(range.span, end, ctx.domain));
+    } else if !ctx.domain.exclusive_ok(window.end) {
+        return Err(outside(range.span, window.end, ctx.domain));
     }
-    walk(
-        start,
-        end,
-        end_inclusive,
-        step,
-        Some(ctx.domain),
-        &mut visit,
-    )
-}
-
-fn is_high_hole_edge(start: i128, end: i128, end_inclusive: bool, domain: &Domain) -> bool {
-    let Some(just_past) = domain.hi.checked_add(1) else {
-        return false;
-    };
-    end_inclusive && end == domain.hi && start == just_past
-}
-
-fn reject_inverted(start: i128, end: i128, end_inclusive: bool, span: Span) -> Result<()> {
-    if start > end {
-        let rendered = if end_inclusive {
-            format!("{start}..={end}")
-        } else {
-            format!("{start}..{end}")
-        };
-        return Err(Error::new(span, format!("invalid range {rendered}")));
-    }
-    Ok(())
+    window.walk(Some(ctx.domain), &mut visit)
 }
 
 fn outside(span: Span, value: i128, domain: &Domain) -> Error {
@@ -442,62 +533,141 @@ fn add_offset(index: i128, offset: i128, span: Span) -> Result<i128> {
         .ok_or_else(|| Error::new(span, "index overflow computing a `#` bound"))
 }
 
-fn walk(
+#[derive(Clone, Copy)]
+struct IntRange {
     start: i128,
     end: i128,
     end_inclusive: bool,
     step: i128,
-    domain: Option<&Domain>,
-    visit: &mut impl FnMut(i128) -> Result<()>,
-) -> Result<()> {
-    let mut current = start;
-    loop {
-        if past_end(current, end, end_inclusive) {
-            break;
-        }
-        if domain.is_none_or(|domain| domain.contains(current)) {
-            visit(current)?;
-        }
-        let Some(next) = advance(current, step) else {
-            break;
+}
+
+impl IntRange {
+    fn builder() -> IntRangeBuilder {
+        IntRangeBuilder::default()
+    }
+
+    fn is_high_hole(self, domain: &Domain) -> bool {
+        let Some(just_past) = domain.hi.checked_add(1) else {
+            return false;
         };
-        current = next;
+        self.end_inclusive && self.end == domain.hi && self.start == just_past
     }
-    Ok(())
+
+    fn reject_inverted(self, span: Span) -> Result<()> {
+        if self.start > self.end {
+            let rendered = if self.end_inclusive {
+                format!("{}..={}", self.start, self.end)
+            } else {
+                format!("{}..{}", self.start, self.end)
+            };
+            return Err(Error::new(span, format!("invalid range {rendered}")));
+        }
+        Ok(())
+    }
+
+    fn walk(
+        self,
+        domain: Option<&Domain>,
+        visit: &mut impl FnMut(i128) -> Result<()>,
+    ) -> Result<()> {
+        let mut current = self.start;
+        loop {
+            if self.past_end(current) {
+                break;
+            }
+            if domain.is_none_or(|domain| domain.contains(current)) {
+                visit(current)?;
+            }
+            let Some(next) = self.advance(current) else {
+                break;
+            };
+            current = next;
+        }
+        Ok(())
+    }
+
+    fn past_end(self, current: i128) -> bool {
+        if self.end_inclusive {
+            current > self.end
+        } else {
+            current >= self.end
+        }
+    }
+
+    fn advance(self, current: i128) -> Option<i128> {
+        match current.checked_add(self.step) {
+            Some(next) if next > current => Some(next),
+            _ => None,
+        }
+    }
+
+    /// How many indices this window yields. `None` means the count does not fit in `usize`.
+    fn step_count(self) -> Option<usize> {
+        if self.step <= 0 {
+            return Some(0);
+        }
+        let span = if self.end_inclusive {
+            self.end.checked_sub(self.start)?
+        } else {
+            self.end.checked_sub(self.start)?.checked_sub(1)?
+        };
+        if span < 0 {
+            return Some(0);
+        }
+        let steps = span / self.step;
+        usize::try_from(steps.checked_add(1)?).ok()
+    }
 }
 
-fn past_end(current: i128, end: i128, end_inclusive: bool) -> bool {
-    if end_inclusive {
-        current > end
-    } else {
-        current >= end
+#[derive(Clone, Copy)]
+#[must_use]
+struct IntRangeBuilder {
+    start: i128,
+    end: i128,
+    end_inclusive: bool,
+    step: i128,
+}
+
+impl Default for IntRangeBuilder {
+    fn default() -> Self {
+        Self {
+            start: 0,
+            end: 0,
+            end_inclusive: false,
+            step: 1,
+        }
     }
 }
 
-fn advance(current: i128, step: i128) -> Option<i128> {
-    match current.checked_add(step) {
-        Some(next) if next > current => Some(next),
-        _ => None,
+impl IntRangeBuilder {
+    fn start(mut self, start: i128) -> Self {
+        self.start = start;
+        self
     }
-}
 
-/// How many indices `start`, `start + step`, ... yields before `end`.
-///
-/// `None` means the count does not fit in `usize`.
-fn step_len(start: i128, end: i128, end_inclusive: bool, step: i128) -> Option<usize> {
-    if step <= 0 {
-        return Some(0);
+    fn end(mut self, end: i128) -> Self {
+        self.end = end;
+        self
     }
-    let span = if end_inclusive {
-        end.checked_sub(start)?
-    } else {
-        end.checked_sub(start)?.checked_sub(1)?
-    };
-    if span < 0 {
-        return Some(0);
+
+    fn end_inclusive(mut self, end_inclusive: bool) -> Self {
+        self.end_inclusive = end_inclusive;
+        self
     }
-    let steps = span / step;
-    usize::try_from(steps.checked_add(1)?).ok()
+
+    fn step(mut self, step: i128) -> Self {
+        self.step = step;
+        self
+    }
+
+    fn build(self) -> IntRange {
+        IntRange {
+            start: self.start,
+            end: self.end,
+            end_inclusive: self.end_inclusive,
+            step: self.step,
+        }
+    }
 }
 
 struct Cursor<'a> {
@@ -594,10 +764,7 @@ impl<'a> Cursor<'a> {
             let span = hash.span();
             self.bump();
             let offset = self.parse_hash_offset()?;
-            return Ok(Some(SpannedBound {
-                bound: Bound::Here { offset },
-                span,
-            }));
+            return Ok(Some(SpannedBound::here(offset, span)));
         }
         if self.punct(0).is_some_and(|punct| punct.as_char() == '-') {
             let parsed = match (self.punct(0), self.tokens.get(self.index + 1)) {
@@ -611,15 +778,13 @@ impl<'a> Cursor<'a> {
             };
             self.bump();
             self.bump();
-            let bound = if style == BoundStyle::Pattern && magnitude == 1 {
-                Bound::LastIndex
-            } else {
-                let signed = magnitude
-                    .checked_neg()
-                    .ok_or_else(|| Error::new(span, "integer literal overflows `i128`"))?;
-                Bound::Int(signed)
-            };
-            return Ok(Some(SpannedBound { bound, span }));
+            if style == BoundStyle::Pattern && magnitude == 1 {
+                return Ok(Some(SpannedBound::last_index(span)));
+            }
+            let signed = magnitude
+                .checked_neg()
+                .ok_or_else(|| Error::new(span, "integer literal overflows `i128`"))?;
+            return Ok(Some(SpannedBound::int(signed, span)));
         }
         let parsed = if let Some(TokenTree::Literal(literal)) = self.tokens.get(self.index) {
             Some((parse_unsuffixed_int(literal)?, literal.span()))
@@ -628,10 +793,7 @@ impl<'a> Cursor<'a> {
         };
         if let Some((value, span)) = parsed {
             self.bump();
-            return Ok(Some(SpannedBound {
-                bound: Bound::Int(value),
-                span,
-            }));
+            return Ok(Some(SpannedBound::int(value, span)));
         }
         Ok(None)
     }
