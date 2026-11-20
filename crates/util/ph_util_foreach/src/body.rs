@@ -12,7 +12,8 @@ use proc_macro::{Delimiter, Group, Ident, Literal, Punct, Spacing, Span, TokenSt
 
 use crate::error::{Error, Result};
 use crate::range::{
-    BoundStyle, Domain, EvalCtx, Pattern, compile_outer, parse_pattern, parse_range, visit_range,
+    BoundStyle, Domain, EvalCtx, OuterRange, Pattern, compile_outer, parse_pattern, parse_range,
+    visit_range,
 };
 
 pub(crate) fn expand(input: TokenStream) -> Result<TokenStream> {
@@ -27,9 +28,14 @@ pub(crate) fn expand(input: TokenStream) -> Result<TokenStream> {
     let stat = compile_seq(&mut program, 0, root)?;
     let mut output = TokenStream::new();
     if stat.fan {
-        for position in 0..outer.count() {
-            let index = outer.index_at(position);
-            let domain = Domain::fan(index, range.span)?;
+        if outer.first() < 0 {
+            return Err(Error::new(
+                range.span,
+                "fan mode domain `0..=index` is empty because the index is negative",
+            ));
+        }
+        each_index(outer, |index| {
+            let domain = Domain::prefix(index);
             emit_seq(
                 &program,
                 0,
@@ -39,24 +45,35 @@ pub(crate) fn expand(input: TokenStream) -> Result<TokenStream> {
                     domain: &domain,
                 },
                 &mut output,
-            )?;
-        }
+            )
+        })?;
     } else {
         let domain = Domain::flat(&outer);
-        for position in 0..outer.count() {
+        each_index(outer, |index| {
             emit_seq(
                 &program,
                 0,
                 stat.logical,
                 &EvalCtx {
-                    index: outer.index_at(position),
+                    index,
                     domain: &domain,
                 },
                 &mut output,
-            )?;
-        }
+            )
+        })?;
     }
     Ok(output)
+}
+
+fn each_index(outer: OuterRange, mut visit: impl FnMut(i128) -> Result<()>) -> Result<()> {
+    let mut index = outer.first();
+    for position in 0..outer.count() {
+        if position != 0 {
+            index = outer.next_after(index);
+        }
+        visit(index)?;
+    }
+    Ok(())
 }
 
 const CALL_FORM: &str = "write `impl_foreach!(range = .., body = { .. })`";
@@ -1114,8 +1131,7 @@ fn push_decimal(out: &mut String, mut value: u128) {
 
 fn digit_byte(value: u128) -> u8 {
     const DIGITS: &[u8; 10] = b"0123456789";
-    let index = usize::try_from(value % 10).unwrap_or(0);
-    DIGITS[index]
+    DIGITS[(value % 10) as usize]
 }
 
 fn is_exactly_hash(tokens: &[TokenTree]) -> bool {

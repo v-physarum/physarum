@@ -187,18 +187,14 @@ pub(crate) struct Domain {
 
 impl Domain {
     /// Domain of a fan iteration: the prefix `0..=outer`.
-    pub(crate) fn fan(outer: i128, span: Span) -> Result<Self> {
-        if outer < 0 {
-            return Err(Error::new(
-                span,
-                "fan mode domain `0..=index` is empty because the index is negative",
-            ));
-        }
-        Ok(Self {
+    ///
+    /// `outer` is already known to be non-negative. The caller checks that once.
+    pub(crate) fn prefix(outer: i128) -> Self {
+        Self {
             lo: 0,
             hi: outer,
             gap: 1,
-        })
+        }
     }
 
     /// Domain of a flat iteration: the outer progression.
@@ -304,15 +300,14 @@ impl OuterRange {
         self.count
     }
 
-    /// Index `position` of `lo + position * gap`.
-    pub(crate) fn index_at(self, position: usize) -> i128 {
-        let Ok(pos) = i128::try_from(position) else {
-            return self.lo;
-        };
-        let Some(offset) = pos.checked_mul(self.gap) else {
-            return self.lo;
-        };
-        self.lo.checked_add(offset).unwrap_or(self.lo)
+    /// The first selected index.
+    pub(crate) fn first(self) -> i128 {
+        self.lo
+    }
+
+    /// The index one step after `index`. The progression already fits, so this stays on it.
+    pub(crate) fn next_after(self, index: i128) -> i128 {
+        index.checked_add(self.gap).unwrap_or(index)
     }
 }
 
@@ -510,7 +505,7 @@ pub(crate) fn visit_range(
     } else if !ctx.domain.exclusive_ok(window.end()) {
         return Err(outside(range.span, window.end(), ctx.domain));
     }
-    window.walk(step, Some(ctx.domain), &mut visit)
+    window.walk(step, ctx.domain, &mut visit)
 }
 
 fn outside(span: Span, value: i128, domain: &Domain) -> Error {
@@ -606,7 +601,37 @@ impl Window {
     fn walk(
         &self,
         step: i128,
-        domain: Option<&Domain>,
+        domain: &Domain,
+        visit: &mut impl FnMut(i128) -> Result<()>,
+    ) -> Result<()> {
+        match self.clip(step, domain) {
+            Clip::Empty => Ok(()),
+            Clip::Ready {
+                mut current,
+                stride,
+                last,
+            } => {
+                loop {
+                    if current > last {
+                        break;
+                    }
+                    visit(current)?;
+                    let Some(next) = current.checked_add(stride) else {
+                        break;
+                    };
+                    current = next;
+                }
+                Ok(())
+            }
+            Clip::Filtered => self.walk_filtered(step, domain, visit),
+        }
+    }
+
+    /// The domain filter, used only when the clipped progression does not fit in `i128`.
+    fn walk_filtered(
+        &self,
+        step: i128,
+        domain: &Domain,
         visit: &mut impl FnMut(i128) -> Result<()>,
     ) -> Result<()> {
         let mut current = self.start();
@@ -614,15 +639,71 @@ impl Window {
             if self.past_end(current) {
                 break;
             }
-            if domain.is_none_or(|domain| domain.contains(current)) {
+            if domain.contains(current) {
                 visit(current)?;
             }
-            let Some(next) = advance(current, step) else {
+            let Some(next) = current.checked_add(step) else {
                 break;
             };
+            if next <= current {
+                break;
+            }
             current = next;
         }
         Ok(())
+    }
+
+    /// Where this window meets `domain`. The ready plan needs no per-index test.
+    fn clip(&self, step: i128, domain: &Domain) -> Clip {
+        if step <= 0 || domain.gap <= 0 {
+            return Clip::Empty;
+        }
+        let Some(end) = self.last_index() else {
+            return Clip::Empty;
+        };
+        let start = self.start();
+        let last = end.min(domain.hi);
+        if start > last {
+            return Clip::Empty;
+        }
+        let gap = domain.gap;
+        let g = gcd(step, gap);
+        let Some(offset) = start.checked_sub(domain.lo) else {
+            return Clip::Filtered;
+        };
+        if offset.rem_euclid(g) != 0 {
+            return Clip::Empty;
+        }
+        let Some(k) = steps_until_aligned(step, gap, offset) else {
+            return Clip::Filtered;
+        };
+        let Some(stride) = (step / g).checked_mul(gap) else {
+            return Clip::Filtered;
+        };
+        let Some(first) = k
+            .checked_mul(step)
+            .and_then(|shift| start.checked_add(shift))
+        else {
+            return Clip::Filtered;
+        };
+        if first > last {
+            Clip::Empty
+        } else {
+            Clip::Ready {
+                current: first,
+                stride,
+                last,
+            }
+        }
+    }
+
+    fn last_index(&self) -> Option<i128> {
+        let end = self.end();
+        if self.is_inclusive() {
+            Some(end)
+        } else {
+            end.checked_sub(1)
+        }
     }
 
     fn past_end(&self, current: i128) -> bool {
@@ -651,10 +732,57 @@ impl Window {
     }
 }
 
-fn advance(current: i128, step: i128) -> Option<i128> {
-    match current.checked_add(step) {
-        Some(next) if next > current => Some(next),
-        _ => None,
+enum Clip {
+    Empty,
+    Ready {
+        current: i128,
+        stride: i128,
+        last: i128,
+    },
+    Filtered,
+}
+
+fn gcd(mut a: i128, mut b: i128) -> i128 {
+    while b != 0 {
+        let next = a % b;
+        a = b;
+        b = next;
+    }
+    a.abs()
+}
+
+/// Smallest `k >= 0` such that `offset + k * step` is divisible by `gap`.
+fn steps_until_aligned(step: i128, gap: i128, offset: i128) -> Option<i128> {
+    let need = (-offset).rem_euclid(gap);
+    if need == 0 {
+        return Some(0);
+    }
+    let (g, coefficient) = egcd(step % gap, gap)?;
+    if need % g != 0 {
+        return None;
+    }
+    let period = gap / g;
+    let factor = (need / g).rem_euclid(period);
+    let k = coefficient.rem_euclid(period).checked_mul(factor)?;
+    Some(k.rem_euclid(period))
+}
+
+/// `(g, x)` with `a * x + b * y = g` and `g > 0`.
+fn egcd(mut a: i128, mut b: i128) -> Option<(i128, i128)> {
+    let (mut x0, mut x1) = (1i128, 0i128);
+    while b != 0 {
+        let q = a.checked_div(b)?;
+        let r = a.checked_rem(b)?;
+        a = b;
+        b = r;
+        let next_x = x0.checked_sub(q.checked_mul(x1)?)?;
+        x0 = x1;
+        x1 = next_x;
+    }
+    if a < 0 {
+        Some((a.checked_neg()?, x0.checked_neg()?))
+    } else {
+        Some((a, x0))
     }
 }
 
