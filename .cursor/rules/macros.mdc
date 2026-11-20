@@ -1,0 +1,6 @@
+---
+description: Pointer to the macro design rules in AGENTS.md
+alwaysApply: true
+---
+
+Follow the "Macro design rules" section in `AGENTS.md`. That section is the source of truth. Do not copy the rules into this file.
