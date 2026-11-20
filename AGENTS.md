@@ -33,6 +33,26 @@ Macro arguments are always passed by name, for example `name = value`.
 
 Exception: if the macro (function) has exactly one argument, that argument is passed without a name.
 
+## Test and benchmark rules
+
+Numbered rules for tests and benchmarks in this repository. Numbering continues after rule 1. This section states rules 2 through 5. Later rules use the next integer and do not renumber these rules.
+
+### 2. Repository root
+
+Tests and benchmarks live at the repository root: `/tests` and `/benches`.
+
+### 3. Per-crate layout
+
+Per-crate layout: `/tests/crates/{crate_name}/` and `/benches/crates/{crate_name}/`.
+
+### 4. Public API
+
+Tests and benchmarks use only the public API of crates.
+
+### 5. Benchmark measurements
+
+Benchmarks measure: build time in debug and in release; incremental builds only in debug; runtime performance only in release.
+
 ## Build, lint, and test
 
 From the repository root, with the pinned toolchain:
