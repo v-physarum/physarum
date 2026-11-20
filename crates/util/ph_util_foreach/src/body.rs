@@ -843,6 +843,55 @@ fn emit_list(
     Ok(())
 }
 
+struct ListEmit<'a> {
+    prog: &'a Program,
+    ctx: &'a EvalCtx<'a>,
+    emitted: &'a mut bool,
+    out: &'a mut TokenStream,
+}
+
+impl ListEmit<'_> {
+    fn ident(&mut self, ident: Ident) {
+        push_comma(self.emitted, self.out);
+        self.out.extend([TokenTree::Ident(ident)]);
+    }
+
+    fn named(&mut self, base_at: u32, len: u32, span: Span, pattern: Pattern) -> Result<()> {
+        let range = pattern.to_range();
+        let ListEmit {
+            prog,
+            ctx,
+            emitted,
+            out,
+        } = self;
+        visit_range(&range, ctx, |index| {
+            push_comma(emitted, out);
+            emit_pasted(prog.text(base_at, len)?, index, span, out)
+        })
+    }
+
+    fn rows(&mut self, at: usize, span: Span, pattern: Pattern, body: u32) -> Result<()> {
+        let range = pattern.to_range();
+        let domain = self.ctx.domain;
+        let body_at = at.checked_add(1).ok_or_else(too_large)?;
+        let ListEmit {
+            prog,
+            ctx,
+            emitted,
+            out,
+        } = self;
+        visit_range(&range, ctx, |index| {
+            let mut inner = TokenStream::new();
+            emit_seq(prog, body_at, body, &EvalCtx { index, domain }, &mut inner)?;
+            push_comma(emitted, out);
+            let mut group = Group::new(Delimiter::Parenthesis, inner);
+            group.set_span(span);
+            out.extend([TokenTree::Group(group)]);
+            Ok(())
+        })
+    }
+}
+
 fn emit_piece(
     prog: &Program,
     at: usize,
@@ -851,50 +900,34 @@ fn emit_piece(
     out: &mut TokenStream,
 ) -> Result<()> {
     let op = prog.ops.get(at).cloned().ok_or_else(too_large)?.op;
+    let mut emit = ListEmit {
+        prog,
+        ctx,
+        emitted,
+        out,
+    };
     match op {
         Op::Ident(ident) | Op::Off(ident) => {
-            push_comma(emitted, out);
-            out.extend([TokenTree::Ident(ident)]);
+            emit.ident(ident);
+            Ok(())
         }
         Op::Named {
             at: base_at,
             len,
             span,
             pattern,
-        } => {
-            let range = pattern.to_range();
-            visit_range(&range, ctx, |index| {
-                push_comma(emitted, out);
-                emit_pasted(prog.text(base_at, len)?, index, span, out)
-            })?;
-        }
+        } => emit.named(base_at, len, span, pattern),
         Op::Rows {
             span,
             pattern,
             body,
-        } => {
-            let range = pattern.to_range();
-            let domain = ctx.domain;
-            let body_at = at.checked_add(1).ok_or_else(too_large)?;
-            visit_range(&range, ctx, |index| {
-                let mut inner = TokenStream::new();
-                emit_seq(prog, body_at, body, &EvalCtx { index, domain }, &mut inner)?;
-                push_comma(emitted, out);
-                let mut group = Group::new(Delimiter::Parenthesis, inner);
-                group.set_span(span);
-                out.extend([TokenTree::Group(group)]);
-                Ok(())
-            })?;
-        }
+        } => emit.rows(at, span, pattern, body),
         Op::Copy { .. }
         | Op::Group { .. }
         | Op::Index { .. }
         | Op::Paste { .. }
-        | Op::List { .. } => {
-            return Err(too_large());
-        }
+        | Op::List { .. } => Err(too_large()),
     }
-    Ok(())
 }
 
 fn emit_copy(prog: &Program, at: u32, len: u32, out: &mut TokenStream) -> Result<()> {
