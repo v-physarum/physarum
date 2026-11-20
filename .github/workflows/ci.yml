@@ -36,3 +36,41 @@ jobs:
 
       - name: Test
         run: cargo test --workspace
+
+  expand-time:
+    name: user compile time
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: Install pinned Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v2.0.1
+        with:
+          build-warnings: ""
+
+      - name: Install hyperfine
+        run: |
+          curl -fsSL -o /tmp/hyperfine.tar.gz https://github.com/sharkdp/hyperfine/releases/download/v2.0.0/hyperfine-v2.0.0-x86_64-unknown-linux-gnu.tar.gz
+          tar -xzf /tmp/hyperfine.tar.gz -C /tmp
+          sudo install -m 755 /tmp/hyperfine-v2.0.0-x86_64-unknown-linux-gnu/hyperfine /usr/local/bin/hyperfine
+
+      # The bench and the measured builds run offline. Fetch first so a cold
+      # registry cache still has the bench crates.
+      - name: Fetch dependencies
+        run: cargo fetch
+
+      - name: Measure impl_foreach in a user crate
+        run: cargo bench --bench ph_util_foreach_measure --offline
+
+      - name: Upload expand-time report
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: ph-util-foreach-expand-time
+          if-no-files-found: error
+          path: |
+            target/ph-util-foreach-expand/report.json
+            target/ph-util-foreach-expand/logs
