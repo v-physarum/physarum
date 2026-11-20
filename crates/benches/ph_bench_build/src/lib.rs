@@ -15,7 +15,7 @@ pub use source::{CaseName, Fill, Repeat};
 use std::path::{Path, PathBuf};
 
 /// Builds the downstream `src/lib.rs` for one case name.
-pub(crate) type RenderCase = Box<dyn Fn(&str) -> Result<String>>;
+pub(crate) type RenderCase = fn(&str) -> Result<String>;
 
 /// Path dependency written into the downstream crate.
 pub(crate) struct Dependency {
@@ -99,11 +99,8 @@ impl Bench {
     }
 
     /// Renders one case name into the downstream `src/lib.rs`.
-    pub fn render<F>(mut self, render: F) -> Self
-    where
-        F: Fn(&str) -> Result<String> + 'static,
-    {
-        self.render = Some(Box::new(render));
+    pub fn render(mut self, render: fn(&str) -> Result<String>) -> Self {
+        self.render = Some(render);
         self
     }
 
