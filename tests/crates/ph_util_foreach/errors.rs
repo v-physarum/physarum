@@ -4,6 +4,15 @@ use std::path::{Path, PathBuf};
 
 use ph_test_errors::ErrorTester;
 
+#[cfg(windows)]
+const LIBRARY_EXTENSION: &str = "dll";
+#[cfg(target_os = "macos")]
+const LIBRARY_EXTENSION: &str = "dylib";
+#[cfg(not(any(windows, target_os = "macos")))]
+const LIBRARY_EXTENSION: &str = "so";
+
+const LIBRARY_PREFIX: &str = "libph_util_foreach";
+
 fn proc_macro_library() -> PathBuf {
     let mut roots = Vec::new();
     if let Some(target) = std::env::var_os("CARGO_TARGET_DIR") {
@@ -25,16 +34,19 @@ fn proc_macro_library() -> PathBuf {
         roots.push(ancestor.join("target"));
     }
     let found = roots.iter().filter_map(|root| find_dylib(root)).collect();
-    newest_path(found)
-        .unwrap_or_else(|| panic!("could not find libph_util_foreach.so; looked in {roots:?}"))
+    newest_path(found).unwrap_or_else(|| {
+        panic!("could not find {LIBRARY_PREFIX}.{LIBRARY_EXTENSION}; looked in {roots:?}")
+    })
+}
+
+fn library_file() -> String {
+    format!("{LIBRARY_PREFIX}.{LIBRARY_EXTENSION}")
 }
 
 fn find_dylib(dir: &Path) -> Option<PathBuf> {
+    let file = library_file();
     let mut found = Vec::new();
-    for candidate in [
-        dir.join("libph_util_foreach.so"),
-        dir.join("debug/libph_util_foreach.so"),
-    ] {
+    for candidate in [dir.join(&file), dir.join("debug").join(&file)] {
         if candidate.is_file() {
             found.push(candidate);
         }
@@ -67,8 +79,8 @@ fn newest_library(dir: &Path) -> Option<PathBuf> {
         let name = path.file_name()?.to_str()?;
         let is_shared = path
             .extension()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("so"));
-        if name.starts_with("libph_util_foreach") && is_shared {
+            .is_some_and(|ext| ext.eq_ignore_ascii_case(LIBRARY_EXTENSION));
+        if name.starts_with(LIBRARY_PREFIX) && is_shared {
             Some(path)
         } else {
             None

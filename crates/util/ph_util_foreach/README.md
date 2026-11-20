@@ -150,18 +150,9 @@ The macro emits `compile_error!` when:
 
 An empty hole-edge slice expands to no tokens.
 
-## User compile time
+## Runtime bench
 
-Downstream compile time is a tracked metric. `cargo bench --bench ph_util_foreach_measure` times a crate that calls `impl_foreach!` with hyperfine (median and standard deviation of three runs). The Rust sources for those crates are files under `benches/crates/ph_util_foreach/cases`. It records a full debug build, a full release build, an incremental debug build, and release runtime. CI job `user compile time` installs hyperfine 2.0.0, repeats this, and uploads the `ph-util-foreach-expand-time` artifact.
-
-| Case | User source |
-| --- | --- |
-| `flat_structs_N` | one call, `pub struct Ix + #` for `0..N` |
-| `hand_structs_N` | the same `N` structs written out in the crate |
-| `one_call_256` | one call that emits 256 structs |
-| `many_calls_256` | 256 calls that each emit one struct |
-| `fan_take_N` | the `impl_take!` fan pattern for `0..N` |
-| `fan_rows_N` | one const per index, `stringify!` of the fan rows `(T + #, U + #)[0..=#]` |
+`cargo bench --bench ph_util_foreach_runtime` expands `impl_foreach!` for `0..64` and runs the generated functions. CI runs this bench offline.
 
 ## License
 
