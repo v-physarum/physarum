@@ -1,7 +1,6 @@
 //! `Component` derive for the `ph_beans` container.
 //!
-//! A struct with `provider` or `inject` is a module. A struct with neither is a
-//! data bean.
+//! A struct with fields is a data bean. A unit struct is a module.
 
 #![forbid(unsafe_code)]
 
@@ -13,9 +12,10 @@ use syn::{DeriveInput, parse_macro_input};
 
 /// Stores a data bean as itself, or a module as the beans it provides.
 ///
-/// `#[provider(A, B)]` owns `A` and `B`. `#[inject(A)]` receives `A` from the
-/// parent module. Provider accepts at most four types. Inject accepts at most
-/// three. A module is a unit struct.
+/// A struct with fields is a data bean: `create` calls [`Default`](core::default::Default).
+/// A unit struct is a module. `#[provider(A, B)]` owns `A` and `B`. `#[inject(A)]`
+/// receives `A` from the parent module. Provider accepts at most four types.
+/// Inject accepts at most three.
 #[proc_macro_derive(Component, attributes(provider, inject))]
 pub fn derive_component(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);

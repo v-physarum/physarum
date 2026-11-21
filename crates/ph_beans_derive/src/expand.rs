@@ -4,9 +4,7 @@ use proc_macro2::{Ident, Span, TokenStream};
 use quote::{format_ident, quote};
 use syn::{DeriveInput, Lifetime, Type, Visibility};
 
-use crate::parse::{self, Lists, PROVIDE_LIMIT, Role};
-
-const SLOTS: [&str; PROVIDE_LIMIT] = ["Ix0", "Ix1", "Ix2", "Ix3"];
+use crate::parse::{self, Lists, Role};
 
 struct Provided {
     ty: Type,
@@ -93,7 +91,7 @@ fn provided(lists: &Lists) -> syn::Result<Vec<Provided>> {
                 "provider types share a field name",
             ));
         }
-        slots.push(Provided { ty: ty.clone(), field, slot: slot_name(index, ty)? });
+        slots.push(Provided { ty: ty.clone(), field, slot: slot_name(index) });
     }
     Ok(slots)
 }
@@ -145,14 +143,8 @@ fn field_ident(name: &str, span: proc_macro2::Span) -> Ident {
     }
 }
 
-fn slot_name(index: usize, ty: &Type) -> syn::Result<Ident> {
-    let name = SLOTS.get(index).copied().ok_or_else(|| {
-        syn::Error::new_spanned(
-            ty,
-            format!("`provider` accepts at most {PROVIDE_LIMIT} beans"),
-        )
-    })?;
-    Ok(format_ident!("{name}"))
+fn slot_name(index: usize) -> Ident {
+    format_ident!("Ix{index}")
 }
 
 fn state_struct(module: &Module) -> TokenStream {

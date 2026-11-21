@@ -16,6 +16,9 @@ missing_docs = "warn"
 all = { level = "warn", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
 
+[dependencies]
+ph_util_foreach = { path = "../util/ph_util_foreach" }
+
 [dev-dependencies]
 ph_beans_derive = { path = "../ph_beans_derive" }
 ph_proc_macro_dylib = { path = "../tests/ph_proc_macro_dylib" }

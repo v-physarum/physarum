@@ -1,7 +1,7 @@
 //! `provider` and `inject` lists on a [`syn::DeriveInput`].
 
 use syn::punctuated::Punctuated;
-use syn::{Attribute, Data, DeriveInput, Fields, Ident, Meta, Token, Type};
+use syn::{Attribute, Data, DeriveInput, Fields, Meta, Token, Type};
 
 /// Most beans a module may provide. The fourth parent slot is the child.
 pub(crate) const PROVIDE_LIMIT: usize = 4;
@@ -31,17 +31,18 @@ pub(crate) fn role(input: &DeriveInput) -> syn::Result<Role> {
     let data = struct_data(input)?;
     reject_generics(input)?;
     let lists = lists(&input.attrs)?;
-    let Some(lists) = lists else {
-        return Ok(Role::Data);
-    };
-    if !matches!(data.fields, Fields::Unit) {
+    if matches!(data.fields, Fields::Unit) {
+        let lists = lists.unwrap_or_else(|| Lists { provider: Vec::new(), inject: Vec::new() });
+        validate(&lists)?;
+        return Ok(Role::Module(lists));
+    }
+    if lists.is_some() {
         return Err(syn::Error::new_spanned(
             &input.ident,
             "a module is a unit struct",
         ));
     }
-    validate(&input.ident, &lists)?;
-    Ok(Role::Module(lists))
+    Ok(Role::Data)
 }
 
 fn struct_data(input: &DeriveInput) -> syn::Result<&syn::DataStruct> {
@@ -124,13 +125,11 @@ fn path_type(ty: Type) -> syn::Result<Type> {
     Ok(ty)
 }
 
-fn validate(name: &Ident, lists: &Lists) -> syn::Result<()> {
+fn validate(lists: &Lists) -> syn::Result<()> {
     check_len(&lists.provider, PROVIDE_LIMIT, PROVIDE_ATTR)?;
     check_len(&lists.inject, INJECT_LIMIT, INJECT_ATTR)?;
     reject_duplicates(&lists.provider, PROVIDE_ATTR)?;
     reject_duplicates(&lists.inject, INJECT_ATTR)?;
-    reject_self(name, &lists.provider, "provide")?;
-    reject_self(name, &lists.inject, "inject")?;
     reject_both(lists)
 }
 
@@ -158,18 +157,6 @@ fn reject_duplicates(list: &[Type], label: &str) -> syn::Result<()> {
     Ok(())
 }
 
-fn reject_self(name: &Ident, list: &[Type], verb: &str) -> syn::Result<()> {
-    for ty in list {
-        if is_self_type(ty, name) {
-            return Err(syn::Error::new_spanned(
-                ty,
-                format!("a module cannot {verb} itself"),
-            ));
-        }
-    }
-    Ok(())
-}
-
 fn reject_both(lists: &Lists) -> syn::Result<()> {
     for ty in &lists.inject {
         let key = type_key(ty);
@@ -182,16 +169,6 @@ fn reject_both(lists: &Lists) -> syn::Result<()> {
         }
     }
     Ok(())
-}
-
-fn is_self_type(ty: &Type, name: &Ident) -> bool {
-    let Type::Path(path) = ty else {
-        return false;
-    };
-    let Some(segment) = path.path.segments.last() else {
-        return false;
-    };
-    path.path.segments.len() == 1 && segment.ident == *name && segment.arguments.is_none()
 }
 
 fn type_key(ty: &Type) -> String {
