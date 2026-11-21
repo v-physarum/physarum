@@ -8,30 +8,42 @@ use ph_util_foreach::impl_foreach;
 
 macro_rules! impl_take {
     (
-        $(
-            (
-                args: ($($arg:ident),* $(,)?);
-                ix: $ix:ident;
-                out: $out:ident;
-                rest: $($rest:ident),* $(,)?;
-            )
-        ),* $(,)?
+        args: ($($arg:ident),* $(,)?);
+        ix: $ix:ident;
+        out: $out:ident;
+        rest: $($rest:ident),* $(,)?;
     ) => {
-        $(
-            #[allow(clippy::similar_names, non_snake_case)]
-            impl<$($arg),*> Take<$ix> for ($($arg,)*) {
-                type Out = $out;
-                type Rest = ($($rest,)*);
+        #[allow(clippy::similar_names, non_snake_case)]
+        impl<$($arg),*> Take<$ix> for ($($arg,)*) {
+            type Out = $out;
+            type Rest = ($($rest,)*);
 
-                #[allow(clippy::inline_always)]
-                #[inline(always)]
-                fn take(self) -> (Self::Out, Self::Rest) {
-                    let ($($arg,)*) = self;
-                    ($out, ($($rest,)*))
-                }
+            #[allow(clippy::inline_always)]
+            #[inline(always)]
+            fn take(self) -> (Self::Out, Self::Rest) {
+                let ($($arg,)*) = self;
+                ($out, ($($rest,)*))
             }
-        )*
+        }
     };
+    (
+        (
+            args: ($($arg:ident),* $(,)?);
+            ix: $ix:ident;
+            out: $out:ident;
+            rest: $($rest:ident),* $(,)?;
+        )
+        $(, $next:tt)*
+    ) => {
+        impl_take!(
+            args: ($($arg),*);
+            ix: $ix;
+            out: $out;
+            rest: $($rest),*;
+        );
+        impl_take!($($next),*);
+    };
+    () => {};
 }
 
 impl_foreach!(

@@ -47,6 +47,38 @@ pub trait Tick {
 /// `Self` provides `P` at [`At::Ix`].
 ///
 /// The index is a slot type (`Ix0` through `Ix3`), not a number.
+///
+/// A parent that does not provide an injected bean fails here:
+///
+/// ```compile_fail
+/// use ph_beans::Bean;
+/// use ph_beans::Tick;
+/// use ph_beans_derive::Component;
+///
+/// #[derive(Component, Default)]
+/// struct Count(u32);
+///
+/// #[derive(Component)]
+/// #[inject(Count)]
+/// struct Child;
+///
+/// impl Tick for Child {
+///     type Beans<'a> = ChildBeans<'a>;
+///     fn tick(_: Self::Beans<'_>) {}
+/// }
+///
+/// #[derive(Component)]
+/// #[provider(Child)]
+/// struct Parent;
+///
+/// impl Tick for Parent {
+///     type Beans<'a> = ParentBeans<'a>;
+///     fn tick(_: Self::Beans<'_>) {}
+/// }
+///
+/// let mut parent = Parent::create();
+/// parent.tick();
+/// ```
 #[diagnostic::on_unimplemented(message = "`{Self}` does not provide `{P}`")]
 pub trait At<P> {
     /// Slot of `P` in `Self`'s provide list.
