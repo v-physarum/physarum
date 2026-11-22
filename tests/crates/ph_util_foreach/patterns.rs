@@ -4,51 +4,51 @@
 mod generated {
     use ph_util_foreach::impl_foreach;
 
-    impl_foreach!(range = 0..=10, body = {
-        pub fn excl + #() -> &'static str {
+    impl_foreach!(n in 0..=10 {
+        pub fn paste(excl, n)() -> &'static str {
             stringify!(Name[0..10])
         }
-        pub fn incl + #() -> &'static str {
+        pub fn paste(incl, n)() -> &'static str {
             stringify!(Name[0..=10])
         }
-        pub fn from + #() -> &'static str {
+        pub fn paste(from, n)() -> &'static str {
             stringify!(Name[0..])
         }
-        pub fn to + #() -> &'static str {
+        pub fn paste(to, n)() -> &'static str {
             stringify!(Name[..10])
         }
-        pub fn to_incl + #() -> &'static str {
+        pub fn paste(to_incl, n)() -> &'static str {
             stringify!(Name[..=10])
         }
-        pub fn full + #() -> &'static str {
+        pub fn paste(full, n)() -> &'static str {
             stringify!(Name[..])
         }
-        pub fn step_excl + #() -> &'static str {
-            stringify!(Name[0..10::2])
+        pub fn paste(step_excl, n)() -> &'static str {
+            stringify!(Name[(0..10).step_by(2)])
         }
-        pub fn step_incl + #() -> &'static str {
-            stringify!(Name[0..=9::2])
+        pub fn paste(step_incl, n)() -> &'static str {
+            stringify!(Name[(0..=9).step_by(2)])
         }
-        pub fn step_full + #() -> &'static str {
-            stringify!(Name[..::2])
+        pub fn paste(step_full, n)() -> &'static str {
+            stringify!(Name[(..).step_by(2)])
         }
-        pub fn step_from + #() -> &'static str {
-            stringify!(Name[0..::2])
+        pub fn paste(step_from, n)() -> &'static str {
+            stringify!(Name[(0..).step_by(2)])
         }
-        pub fn step_to + #() -> &'static str {
-            stringify!(Name[..10::2])
+        pub fn paste(step_to, n)() -> &'static str {
+            stringify!(Name[(..10).step_by(2)])
         }
-        pub fn step_to_incl + #() -> &'static str {
-            stringify!(Name[..=9::2])
+        pub fn paste(step_to_incl, n)() -> &'static str {
+            stringify!(Name[(..=9).step_by(2)])
         }
-        pub fn window + #() -> &'static str {
+        pub fn paste(window, n)() -> &'static str {
             stringify!(Name[2..=5])
         }
-        pub fn from_one_step + #() -> &'static str {
-            stringify!(Name[1..::2])
+        pub fn paste(from_one_step, n)() -> &'static str {
+            stringify!(Name[(1..).step_by(2)])
         }
-        pub fn last + #() -> &'static str {
-            stringify!(Name[-1..=-1])
+        pub fn paste(last, n)() -> &'static str {
+            stringify!(Name[end..=end])
         }
     });
 }

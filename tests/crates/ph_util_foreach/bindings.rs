@@ -6,93 +6,89 @@ fn takes_index(index: i128) -> i128 {
     index
 }
 
-impl_foreach!(
-    range = 0..4,
-    body = {
-        $id = Ix + #;
-        $n = #;
+impl_foreach!(n in 0..4 {
+        $id = paste(Ix, n);
+        $n = n;
         pub const $id: i128 = $n;
-        pub fn passed + #() -> i128 {
+        pub fn paste(passed, n)() -> i128 {
             takes_index($id) + takes_index($n)
         }
     }
 );
 
-impl_foreach!(range = -5..-4, body = {
-    $n = #;
+impl_foreach!(n in -5..-4 {
+    $n = n;
     pub fn neg_index() -> i128 {
         takes_index($n)
     }
 });
 
-impl_foreach!(range = 0..2, body = {
-    $id = Qx + #;
-    pub const $id: i128 = #;
+impl_foreach!(n in 0..2 {
+    $id = paste(Qx, n);
+    pub const $id: i128 = n;
 });
 
-impl_foreach!(range = 0..2, body = {
-    $id = Rx + #;
-    pub const $id: i128 = #;
+impl_foreach!(n in 0..2 {
+    $id = paste(Rx, n);
+    pub const $id: i128 = n;
 });
 
-impl_foreach!(range = 0..6::2, body = {
-    $id = Sx + #;
-    pub const $id: i128 = #;
+impl_foreach!(n in (0..6).step_by(2) {
+    $id = paste(Sx, n);
+    pub const $id: i128 = n;
 });
 
-impl_foreach!(0..2 {
-    $id = Zx + #;
-    pub const $id: i128 = #;
+impl_foreach!(n in 0..2 {
+    $id = paste(Zx, n);
+    pub const $id: i128 = n;
 });
 
-impl_foreach!(range = 0..1, body = {
-    $id = Ax + #;
+impl_foreach!(n in 0..1 {
+    $id = paste(Ax, n);
     pub mod hide {
-        $id = Bx + #;
+        $id = paste(Bx, n);
         pub const $id: i128 = 1;
     }
     pub const $id: i128 = 2;
 });
 
-impl_foreach!(range = 0..1, body = {
-    $id = Cx + #;
+impl_foreach!(n in 0..1 {
+    $id = paste(Cx, n);
     pub const $id: i128 = 4;
     pub fn seen() -> i128 {
         let inner = {
-            $id = Dy + #;
-            $n = #;
+            $id = paste(Dy, n);
+            $n = n;
             $n
         };
         inner + $id
     }
 });
 
-impl_foreach!(range = 0..1, body = {
-    $r#type = Vx + #;
+impl_foreach!(n in 0..1 {
+    $r#type = paste(Vx, n);
     pub const $type: i128 = 5;
 });
 
-impl_foreach!(range = 0..3, body = {
-    $n = #;
-    pub fn captured + #() -> i128 {
+impl_foreach!(n in 0..3 {
+    $n = n;
+    pub fn paste(captured, n)() -> i128 {
         let values = [($n)[0..2]];
         takes_index(values[0]) + takes_index(values[1])
     }
 });
 
-impl_foreach!(range = 0..3, body = {
-    $id = Fx + #;
-    $n = #;
-    pub mod fan_bind + # {
+impl_foreach!(n in 0..3 {
+    $id = paste(Fx, n);
+    $n = n;
+    pub mod paste(fan_bind, n) {
         pub const INDEX: i128 = $n;
-        pub const TEXT: &str = stringify!(Name[..=#]);
+        pub const TEXT: &str = stringify!(Name[..=n]);
     }
-    pub const $id: i128 = fan_bind + #::INDEX;
+    pub const $id: i128 = paste(fan_bind, n)::INDEX;
 });
 
-impl_foreach!(
-    range = 0..1,
-    body = {
+impl_foreach!(n in 0..1 {
         macro_rules! echo_ident {
             ($name:ident) => {
                 stringify!($name)

@@ -1,29 +1,30 @@
 //! Placeholder substitution for one `impl_foreach` invocation.
 //!
 //! The body is parsed once into a recursive token tree. Each index then only
-//! substitutes values. `#` is the index. `Ix + #` pastes that index onto an
-//! identifier. `$name = ...` bindings are scoped to the group that contains
-//! them. An unbound `$name` is copied through, so a nested `macro_rules`
-//! metavariable still works.
+//! substitutes values. The loop variable is the index. `paste(Ix, n)` pastes
+//! that index onto an identifier. `$name = ...` bindings are scoped to the
+//! group that contains them. An unbound `$name` is copied through, so a nested
+//! `macro_rules` metavariable still works.
 //!
 //! Flat mode repeats the body once per outer index and clips patterns to that
-//! full index set. Fan mode is selected when a bracket pattern mentions `#`
-//! (including `Name[#]` and `Off[#]`). Each fan copy still uses one outer
-//! index, but the domain is the prefix `0..=index`.
+//! full index set. Fan mode is selected when a bracket pattern mentions the
+//! loop variable (including `Name[n]` and `Off[n]`). Each fan copy still uses
+//! one outer index, but the domain is the prefix `0..=index`.
 
 use proc_macro2::{Delimiter, Group, Ident, Literal, Punct, Spacing, Span, TokenStream, TokenTree};
+use syn::Expr;
 
 use crate::error::{Error, ErrorKind, Result};
 use crate::range::{Domain, EvalCtx, Pattern, RangeExpr};
 
 pub(crate) fn expand(input: TokenStream) -> Result<TokenStream> {
-    let (range_tokens, body) = input.split_call()?;
-    let range = RangeExpr::parse(&range_tokens, crate::range::BoundStyle::Outer)?;
+    let call = split_call(input)?;
+    let range = RangeExpr::parse(&call.range, &call.index, crate::range::BoundStyle::Outer)?;
     let outer = range.compile_outer()?;
     if outer.is_empty() {
         return Ok(TokenStream::new());
     }
-    let (seq, binds) = parse_body(&body)?;
+    let (seq, binds) = parse_body(&call.body, &call.index)?;
     let mut output = TokenStream::new();
     let mut env = BindEnv::with_capacity(usize::try_from(binds).map_err(|_| Error::too_large())?);
     if seq.fan {
@@ -41,108 +42,51 @@ pub(crate) fn expand(input: TokenStream) -> Result<TokenStream> {
     Ok(output)
 }
 
-const RANGE_ARG: &str = "range";
-const BODY_ARG: &str = "body";
-
-trait Call {
-    fn split_call(self) -> Result<(Vec<TokenTree>, Vec<TokenTree>)>;
+struct Invocation {
+    index: String,
+    range: Vec<TokenTree>,
+    body: Vec<TokenTree>,
 }
 
-impl Call for TokenStream {
-    fn split_call(self) -> Result<(Vec<TokenTree>, Vec<TokenTree>)> {
-        let tokens: Vec<TokenTree> = self.into_iter().collect();
-        let span = tokens.first().map_or_else(Span::call_site, TokenTree::span);
-        if let Some(split) = tokens.unnamed_block(span)? {
-            return Ok(split);
-        }
-        tokens.named_call(span)
+/// `n in <range> { body }`. A comma before the body is optional.
+fn split_call(input: TokenStream) -> Result<Invocation> {
+    let tokens: Vec<TokenTree> = input.into_iter().collect();
+    let span = tokens.first().map_or_else(Span::call_site, TokenTree::span);
+    let Some(brace_at) = tokens.iter().rposition(OneToken::is_brace) else {
+        return Err(Error::new(
+            tokens.last().map_or(span, TokenTree::span),
+            ErrorKind::ExpectedBody,
+        ));
+    };
+    if brace_at + 1 != tokens.len() {
+        let after = tokens.get(brace_at + 1).map_or(span, TokenTree::span);
+        return Err(Error::new(after, ErrorKind::UnexpectedAfterBody));
     }
-}
-
-trait CallParts {
-    fn unnamed_block(&self, span: Span) -> Result<Option<(Vec<TokenTree>, Vec<TokenTree>)>>;
-    fn named_body_at(&self, brace_at: usize) -> bool;
-    fn range_of_block(&self, span: Span) -> Result<Vec<TokenTree>>;
-    fn named_call(&self, span: Span) -> Result<(Vec<TokenTree>, Vec<TokenTree>)>;
-}
-
-impl CallParts for [TokenTree] {
-    /// A trailing `{ ... }` is the body. It needs no name. A comma before it is
-    /// optional. `range = ...` still names the range when that name is written.
-    fn unnamed_block(&self, span: Span) -> Result<Option<(Vec<TokenTree>, Vec<TokenTree>)>> {
-        let Some(brace_at) = self.iter().rposition(OneToken::is_brace) else {
-            return Ok(None);
-        };
-        if brace_at + 1 != self.len() {
-            if self.named_body_at(brace_at) {
-                return Ok(None);
-            }
-            let after = self.get(brace_at + 1).map_or(span, TokenTree::span);
-            return Err(Error::new(after, ErrorKind::UnexpectedAfterBody));
-        }
-        if self.named_body_at(brace_at) {
-            return Ok(None);
-        }
-        let mut head = self[..brace_at].to_vec();
-        if head.last().is_some_and(OneToken::is_comma) {
-            head.pop();
-        }
-        if head.is_empty() {
-            return Err(Error::new(span, ErrorKind::ExpectedRange));
-        }
-        let range = head.range_of_block(span)?;
-        let TokenTree::Group(group) = &self[brace_at] else {
-            return Err(Error::new(span, ErrorKind::ExpectedBody));
-        };
-        Ok(Some((range, group.stream().into_iter().collect())))
+    let mut head = tokens[..brace_at].to_vec();
+    if head.last().is_some_and(OneToken::is_comma) {
+        head.pop();
     }
-
-    fn named_body_at(&self, brace_at: usize) -> bool {
-        brace_at >= 2
-            && self
-                .get(brace_at - 2)
-                .is_some_and(|tree| matches!(tree, TokenTree::Ident(name) if name == BODY_ARG))
-            && self.is_punct_at(brace_at - 1, '=')
+    let Some(TokenTree::Ident(name)) = head.first() else {
+        return Err(Error::new(span, ErrorKind::CallForm));
+    };
+    if head
+        .get(1)
+        .is_none_or(|token| !matches!(token, TokenTree::Ident(word) if word == "in"))
+    {
+        return Err(Error::new(name.span(), ErrorKind::CallForm));
     }
-
-    fn range_of_block(&self, span: Span) -> Result<Vec<TokenTree>> {
-        let named_range = self
-            .first()
-            .is_some_and(|tree| matches!(tree, TokenTree::Ident(name) if name == RANGE_ARG))
-            && self.is_punct_at(1, '=');
-        if named_range {
-            let value = self[2..].to_vec();
-            if value.is_empty() {
-                return Err(Error::new(span, ErrorKind::ExpectedRange));
-            }
-            return Ok(value);
-        }
-        if self.is_ident_at(0) && self.is_punct_at(1, '=') {
-            return Err(Error::new(span, ErrorKind::CallForm));
-        }
-        Ok(self.to_vec())
+    let index = normalized(name);
+    if index == "end" {
+        return Err(Error::new(name.span(), ErrorKind::IndexName));
     }
-
-    fn named_call(&self, span: Span) -> Result<(Vec<TokenTree>, Vec<TokenTree>)> {
-        let Some(comma_at) = self.iter().position(OneToken::is_comma) else {
-            return Err(Error::new(
-                self.last().map_or(span, TokenTree::span),
-                ErrorKind::ExpectedBody,
-            ));
-        };
-        let (left_name, left_value) = self[..comma_at].named_value(span)?;
-        let right_span = self.get(comma_at + 1).map_or(span, TokenTree::span);
-        let (right_name, right_value) = self[comma_at + 1..].named_value(right_span)?;
-        let (range, body) = match (left_name.as_str(), right_name.as_str()) {
-            (RANGE_ARG, BODY_ARG) => (left_value, right_value),
-            (BODY_ARG, RANGE_ARG) => (right_value, left_value),
-            _ => return Err(Error::new(span, ErrorKind::CallForm)),
-        };
-        if range.is_empty() {
-            return Err(Error::new(span, ErrorKind::ExpectedRange));
-        }
-        Ok((range, body.brace_body(span)?))
+    let range = head[2..].to_vec();
+    if range.is_empty() {
+        return Err(Error::new(span, ErrorKind::ExpectedRange));
     }
+    let TokenTree::Group(group) = &tokens[brace_at] else {
+        return Err(Error::new(span, ErrorKind::ExpectedBody));
+    };
+    Ok(Invocation { index, range, body: group.stream().into_iter().collect() })
 }
 
 trait OneToken {
@@ -169,52 +113,10 @@ impl OneToken for TokenTree {
     }
 }
 
-trait ArgTokens {
-    fn named_value(&self, span: Span) -> Result<(String, Vec<TokenTree>)>;
-    fn brace_body(&self, span: Span) -> Result<Vec<TokenTree>>;
-    fn is_punct_at(&self, index: usize, mark: char) -> bool;
-    fn is_ident_at(&self, index: usize) -> bool;
-}
-
-impl ArgTokens for [TokenTree] {
-    fn named_value(&self, span: Span) -> Result<(String, Vec<TokenTree>)> {
-        let Some(TokenTree::Ident(name)) = self.first() else {
-            return Err(Error::new(span, ErrorKind::CallForm));
-        };
-        if !self.is_punct_at(1, '=') {
-            return Err(Error::new(name.span(), ErrorKind::CallForm));
-        }
-        Ok((name.to_string(), self[2..].to_vec()))
-    }
-
-    fn brace_body(&self, span: Span) -> Result<Vec<TokenTree>> {
-        match self {
-            [TokenTree::Group(group)] if group.delimiter() == Delimiter::Brace => {
-                Ok(group.stream().into_iter().collect())
-            }
-            [TokenTree::Group(group), extra, ..] if group.delimiter() == Delimiter::Brace => {
-                Err(Error::new(extra.span(), ErrorKind::UnexpectedAfterBody))
-            }
-            _ => Err(Error::new(
-                self.first().map_or(span, TokenTree::span),
-                ErrorKind::ExpectedBody,
-            )),
-        }
-    }
-
-    fn is_punct_at(&self, index: usize, mark: char) -> bool {
-        matches!(self.get(index), Some(TokenTree::Punct(punct)) if punct.as_char() == mark)
-    }
-
-    fn is_ident_at(&self, index: usize) -> bool {
-        matches!(self.get(index), Some(TokenTree::Ident(_)))
-    }
-}
-
 /// One parsed body, or the body of one group or row.
 struct Seq {
     nodes: Vec<Node>,
-    /// A bracket pattern in this tree mentions `#`.
+    /// A bracket pattern in this tree mentions the loop variable.
     fan: bool,
     /// A placeholder, binding, or nested expanding group is present.
     expands: bool,
@@ -250,16 +152,16 @@ enum Node {
 
 /// Right-hand side of `$name = ...;`, before the index is known.
 enum Rhs {
-    /// `#`.
+    /// The loop variable.
     Index,
-    /// `Ident + #`.
+    /// `paste(Ident, n)`.
     Paste { base: String, span: Span },
 }
 
 enum Piece {
     Ident {
         ident: Ident,
-        /// `Off[#]` selects fan mode and emits the bare identifier.
+        /// `Off[n]` selects fan mode and emits the bare identifier.
         fan: bool,
     },
     Named {
@@ -315,16 +217,21 @@ impl Piece {
     }
 }
 
-fn parse_body(tokens: &[TokenTree]) -> Result<(Seq, u32)> {
+fn parse_body(tokens: &[TokenTree], index: &str) -> Result<(Seq, u32)> {
     let mut scope = Vec::new();
     let mut binds = 0;
-    let seq = parse_seq(tokens, &mut scope, &mut binds)?;
+    let seq = parse_seq(tokens, index, &mut scope, &mut binds)?;
     Ok((seq, binds))
 }
 
-fn parse_seq(tokens: &[TokenTree], scope: &mut Vec<String>, binds: &mut u32) -> Result<Seq> {
+fn parse_seq(
+    tokens: &[TokenTree],
+    index: &str,
+    scope: &mut Vec<String>,
+    binds: &mut u32,
+) -> Result<Seq> {
     let mark = scope.len();
-    let mut cursor = Cursor::new(tokens);
+    let mut cursor = Cursor::new(tokens, index);
     let mut nodes = Vec::new();
     let mut fan = false;
     let mut expands = false;
@@ -348,11 +255,12 @@ fn push_node(nodes: &mut Vec<Node>, node: Node) {
 struct Cursor<'a> {
     tokens: &'a [TokenTree],
     at: usize,
+    index: &'a str,
 }
 
 impl<'a> Cursor<'a> {
-    fn new(tokens: &'a [TokenTree]) -> Self {
-        Self { tokens, at: 0 }
+    fn new(tokens: &'a [TokenTree], index: &'a str) -> Self {
+        Self { tokens, at: 0, index }
     }
 
     fn done(&self) -> bool {
@@ -374,16 +282,8 @@ impl<'a> Cursor<'a> {
         matches!(self.peek(offset), Some(TokenTree::Punct(punct)) if punct.as_char() == mark)
     }
 
-    fn is_bare_hash(&self, offset: usize) -> bool {
-        self.is_punct(offset, '#') && !self.attribute_hash(offset)
-    }
-
-    fn attribute_hash(&self, offset: usize) -> bool {
-        match self.peek(offset + 1) {
-            Some(TokenTree::Group(group)) if group.delimiter() == Delimiter::Bracket => true,
-            Some(TokenTree::Punct(punct)) if punct.as_char() == '!' => true,
-            _ => false,
-        }
+    fn is_index(&self, offset: usize) -> bool {
+        matches!(self.peek(offset), Some(TokenTree::Ident(name)) if name == self.index)
     }
 
     fn pull(&mut self, scope: &mut Vec<String>, binds: &mut u32) -> Result<Node> {
@@ -396,7 +296,6 @@ impl<'a> Cursor<'a> {
         if let Some(node) = self.pull_paste()? {
             return Ok(node);
         }
-        self.reject_spaced_paste()?;
         if let Some(node) = self.pull_prefixed(scope, binds)? {
             return Ok(node);
         }
@@ -432,18 +331,15 @@ impl<'a> Cursor<'a> {
     }
 
     fn binding_rhs(&mut self) -> Result<Rhs> {
-        if self.is_bare_hash(3) && self.is_punct(4, ';') {
+        if self.is_index(3) && self.is_punct(4, ';') {
             self.advance(5)?;
             return Ok(Rhs::Index);
         }
-        if let Some(TokenTree::Ident(ident)) = self.peek(3).cloned()
-            && self.is_punct(4, '+')
-            && self.is_bare_hash(5)
-            && self.is_punct(6, ';')
+        if let Some(base) = self.paste_at(3)?
+            && self.is_punct(5, ';')
         {
-            let base = normalized(&ident);
-            let span = ident.span();
-            self.advance(7)?;
+            let span = self.peek(3).map_or_else(Span::call_site, TokenTree::span);
+            self.advance(6)?;
             return Ok(Rhs::Paste { base, span });
         }
         let span = self
@@ -454,32 +350,36 @@ impl<'a> Cursor<'a> {
     }
 
     fn pull_paste(&mut self) -> Result<Option<Node>> {
-        let Some(TokenTree::Ident(ident)) = self.peek(0) else {
+        let Some(base) = self.paste_at(0)? else {
             return Ok(None);
         };
-        if !(self.is_punct(1, '+') && self.is_bare_hash(2)) {
-            return Ok(None);
-        }
-        let base = paste_base(&ident.to_string()).to_string();
-        let span = ident.span();
-        self.advance(3)?;
+        let span = self.peek(0).map_or_else(Span::call_site, TokenTree::span);
+        self.advance(2)?;
         Ok(Some(Node::Paste { base, span }))
     }
 
-    fn reject_spaced_paste(&self) -> Result<()> {
-        if self
-            .peek(0)
-            .is_some_and(|token| matches!(token, TokenTree::Ident(_)))
-            && self.is_bare_hash(1)
-        {
-            let span = self.peek(1).map_or_else(Span::call_site, TokenTree::span);
-            return Err(Error::new(span, ErrorKind::SpacedPaste));
+    /// `paste(Ident, index)` starting at `offset`.
+    ///
+    /// `Ok(None)` when those tokens are not a `paste` call. A `paste` call of
+    /// the wrong shape is an error.
+    fn paste_at(&self, offset: usize) -> Result<Option<String>> {
+        let Some(TokenTree::Ident(name)) = self.peek(offset) else {
+            return Ok(None);
+        };
+        if name != "paste" {
+            return Ok(None);
         }
-        Ok(())
+        let Some(TokenTree::Group(group)) = self.peek(offset + 1) else {
+            return Ok(None);
+        };
+        if group.delimiter() != Delimiter::Parenthesis {
+            return Ok(None);
+        }
+        Ok(Some(paste_base_from(name, group, self.index)?))
     }
 
     fn pull_index(&mut self) -> Result<Option<Node>> {
-        if !self.is_bare_hash(0) {
+        if !self.is_index(0) {
             return Ok(None);
         }
         let span = self.peek(0).map_or_else(Span::call_site, TokenTree::span);
@@ -491,7 +391,7 @@ impl<'a> Cursor<'a> {
         let Some((delimiter, span, original, inner)) = self.group_at(0) else {
             return Ok(None);
         };
-        let body = parse_seq(&inner, scope, binds)?;
+        let body = parse_seq(&inner, self.index, scope, binds)?;
         self.advance(1)?;
         if body.expands {
             Ok(Some(Node::Group { delimiter, span, body }))
@@ -559,7 +459,7 @@ impl<'a> Cursor<'a> {
             let Some(found) = found else {
                 break;
             };
-            pieces.push(lower(found, scope, binds)?);
+            pieces.push(lower(found, self.index, scope, binds)?);
             if self.is_punct(0, '+') && self.pattern_at(1)?.is_some() {
                 self.advance(1)?;
                 continue;
@@ -605,11 +505,15 @@ impl<'a> Cursor<'a> {
         if group.delimiter() != Delimiter::Bracket {
             return Ok(None);
         }
-        classify(group.stream(), group.span())
+        crate::range::classify_bracket(
+            &group.stream().into_iter().collect::<Vec<_>>(),
+            self.index,
+            group.span(),
+        )
     }
 }
 
-fn lower(found: Found, scope: &mut Vec<String>, binds: &mut u32) -> Result<Piece> {
+fn lower(found: Found, index: &str, scope: &mut Vec<String>, binds: &mut u32) -> Result<Piece> {
     match found {
         Found::Named { raw, span, pattern } => {
             if pattern.is_off(&raw) {
@@ -618,28 +522,10 @@ fn lower(found: Found, scope: &mut Vec<String>, binds: &mut u32) -> Result<Piece
             Ok(Piece::Named { base: paste_base(&raw).to_string(), span, pattern })
         }
         Found::Rows { span, pattern, inner } => {
-            let body = parse_seq(&inner, scope, binds)?;
+            let body = parse_seq(&inner, index, scope, binds)?;
             Ok(Piece::Rows { span, pattern, body })
         }
     }
-}
-
-fn classify(stream: TokenStream, span: Span) -> Result<Option<Pattern>> {
-    let tokens: Vec<TokenTree> = stream.into_iter().collect();
-    if is_only_hash(&tokens) {
-        return Ok(Some(Pattern::Shorthand { span }));
-    }
-    match RangeExpr::parse_pattern(&tokens)? {
-        Some(mut range) => {
-            range.span = span;
-            Ok(Some(Pattern::Range(range)))
-        }
-        None => Ok(None),
-    }
-}
-
-fn is_only_hash(tokens: &[TokenTree]) -> bool {
-    matches!(tokens, [TokenTree::Punct(punct)] if punct.as_char() == '#')
 }
 
 /// Bindings captured while one index is emitted.
@@ -828,6 +714,54 @@ fn normalized(ident: &Ident) -> String {
 
 fn paste_base(text: &str) -> &str {
     text.strip_prefix("r#").unwrap_or(text)
+}
+
+fn paste_base_from(name: &Ident, group: &Group, index: &str) -> Result<String> {
+    let mut stream = TokenStream::new();
+    stream.extend([
+        TokenTree::Ident(name.clone()),
+        TokenTree::Group(group.clone()),
+    ]);
+    let expr = syn::parse2::<Expr>(stream)
+        .map_err(|error| Error::new(error.span(), ErrorKind::SpacedPaste))?;
+    let Expr::Call(call) = expr else {
+        return Err(Error::new(name.span(), ErrorKind::SpacedPaste));
+    };
+    let mut args = call.args.iter();
+    let Some(first) = args.next() else {
+        return Err(Error::new(name.span(), ErrorKind::SpacedPaste));
+    };
+    let Some(second) = args.next() else {
+        return Err(Error::new(name.span(), ErrorKind::SpacedPaste));
+    };
+    if args.next().is_some() {
+        return Err(Error::new(name.span(), ErrorKind::SpacedPaste));
+    }
+    let Some(base) = single_ident(first) else {
+        return Err(Error::new(name.span(), ErrorKind::SpacedPaste));
+    };
+    let Some(index_arg) = single_ident(second) else {
+        return Err(Error::new(name.span(), ErrorKind::SpacedPaste));
+    };
+    if index_arg != index {
+        return Err(Error::new(index_arg.span(), ErrorKind::SpacedPaste));
+    }
+    Ok(paste_base(&base.to_string()).to_string())
+}
+
+fn single_ident(expr: &Expr) -> Option<&Ident> {
+    let Expr::Path(path) = expr else {
+        return None;
+    };
+    if !path.attrs.is_empty() || path.qself.is_some() || path.path.leading_colon.is_some() {
+        return None;
+    }
+    let mut segments = path.path.segments.iter();
+    let segment = segments.next()?;
+    if segments.next().is_some() || !matches!(segment.arguments, syn::PathArguments::None) {
+        return None;
+    }
+    Some(&segment.ident)
 }
 
 /// Decimal digits of one non-negative index.

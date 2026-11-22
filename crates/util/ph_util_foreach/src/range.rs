@@ -1,8 +1,9 @@
 //! Range syntax, domain checks, and index lists.
 //!
-//! Outer ranges and `Name[<pat>]` patterns share one parser. `syn` reads a range
-//! literal as [`ExprRange`] and each integer as [`LitInt`]. The outer range must
-//! already be finite. A pattern may use open ends, `#`, and the literal `-1`.
+//! Outer ranges and `Name[<pat>]` patterns share one parser. `syn` reads the
+//! tokens as an [`Expr`]: a range ([`ExprRange`]) or `(range).step_by(step)`. Each
+//! integer is a [`LitInt`]. The index is the loop variable. `end` is the last
+//! domain index, and only as a pattern bound. `-1` is the integer negative one.
 //!
 //! Evaluation walks [`Range`] and [`RangeInclusive`] with [`Iterator::step_by`].
 //! The domain is a second progression, so the stride passed to `step_by` is the
@@ -18,9 +19,10 @@
 
 use std::ops::{Range, RangeInclusive};
 
-use proc_macro2::{Ident, Literal, Spacing, Span, TokenStream, TokenTree};
+use proc_macro2::{Spacing, Span, TokenStream, TokenTree};
 use syn::{
-    BinOp, Expr, ExprBinary, ExprPath, ExprUnary, Lit, LitInt, PathArguments, RangeLimits, UnOp,
+    BinOp, Expr, ExprMethodCall, ExprPath, ExprRange, ExprUnary, Lit, LitInt, PathArguments,
+    RangeLimits, UnOp,
 };
 
 use crate::error::{Error, ErrorKind, Result};
@@ -28,18 +30,12 @@ use crate::error::{Error, ErrorKind, Result};
 /// How a bound is read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum BoundStyle {
-    /// Outer range: integer literals only, and `-1` is the integer negative one.
+    /// Outer range: integer literals only.
     Outer,
-    /// Pattern bound: `#`, `#±N`, and the literal `-1` (last domain index).
+    /// Pattern bound: integer literals, the loop variable ± an integer, and `end`.
     Pattern,
-    /// Step: positive integer literal or `#±N`. The literal `-1` stays negative.
+    /// Step: a positive integer literal, or the loop variable ± an integer.
     Step,
-}
-
-impl BoundStyle {
-    fn is_last_index(self, magnitude: i128) -> bool {
-        self == Self::Pattern && magnitude == 1
-    }
 }
 
 /// A bound before it is evaluated.
@@ -47,9 +43,9 @@ impl BoundStyle {
 pub(crate) enum Bound {
     /// An integer literal, already signed.
     Int(i128),
-    /// The literal `-1` in a pattern: last index of the domain.
+    /// The path `end` in a pattern: last index of the domain.
     LastIndex,
-    /// `#` plus `offset` (`#-1` is `Here { offset: -1 }`).
+    /// The loop variable plus `offset` (`n - 1` is `Here { offset: -1 }`).
     Here { offset: i128 },
 }
 
@@ -136,28 +132,20 @@ impl RangeExpr {
         start || end
     }
 
-    /// Parses `tokens` as one range. `style` decides what `-1` and `#` mean.
-    pub(crate) fn parse(tokens: &[TokenTree], style: BoundStyle) -> Result<Self> {
+    /// Parses `tokens` as one outer range or `(range).step_by(step)`.
+    ///
+    /// `index` is the loop variable. Using it, or `end`, in the outer range is an error.
+    pub(crate) fn parse(tokens: &[TokenTree], index: &str, style: BoundStyle) -> Result<Self> {
         if tokens.is_empty() {
             return Err(Error::new(Span::call_site(), ErrorKind::ExpectedRange));
         }
-        match open_kind(tokens)? {
-            Open::Range => parse_range_literal(tokens, style),
-            Open::NotRange(span) => Err(Error::new(span, ErrorKind::ExpectedDots)),
-        }
-    }
-
-    /// Parses a bracket pattern in one pass.
-    ///
-    /// `None` means the brackets do not open with a range, so they stay ordinary
-    /// Rust. A broken bound such as `#+` is an error.
-    pub(crate) fn parse_pattern(tokens: &[TokenTree]) -> Result<Option<Self>> {
-        if tokens.is_empty() {
-            return Ok(None);
-        }
-        match open_kind(tokens)? {
-            Open::Range => parse_range_literal(tokens, BoundStyle::Pattern).map(Some),
-            Open::NotRange(_) => Ok(None),
+        let span = token_span(tokens);
+        let expr =
+            syn_expr(tokens).map_err(|error| Error::new(error.span(), ErrorKind::ExpectedDots))?;
+        match opened(&expr) {
+            Opened::Range(range) => range_from_range(range, index, style, span),
+            Opened::Step(call) => range_from_method(call, index, style, span),
+            Opened::Other => Err(Error::new(span, ErrorKind::ExpectedDots)),
         }
     }
 
@@ -218,7 +206,7 @@ impl RangeExpr {
         } else {
             Window::Exclusive(start..end)
         };
-        // `T[#+1..=#]` when `#` is the last index: the window is empty and the
+        // `T[n + 1..=n]` when `n` is the last index: the window is empty and the
         // start sits one past the domain. That hole edge is allowed.
         if window.is_high_hole(ctx.domain) {
             return Ok(());
@@ -268,11 +256,6 @@ impl RangeExprBuilder {
         self
     }
 
-    fn step(mut self, step: Option<SpannedBound>) -> Self {
-        self.step = step;
-        self
-    }
-
     fn build(self) -> RangeExpr {
         RangeExpr::new(self)
     }
@@ -281,17 +264,17 @@ impl RangeExprBuilder {
 /// A bracket pattern.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Pattern {
-    /// `Name[#]`, defined as `Name[0..=#]`.
+    /// `Name[n]`, defined as `Name[0..=n]`.
     Shorthand { span: Span },
     /// An explicit range.
     Range(RangeExpr),
 }
 
 impl Pattern {
-    /// Whether a bound of this pattern mentions `#`.
+    /// Whether a bound of this pattern mentions the loop variable.
     ///
-    /// A step of `#` does not count: the domain stays the flat outer set, and
-    /// only the stride changes with the index.
+    /// A step that mentions the variable does not count: the domain stays the
+    /// flat outer set, and only the stride changes with the index.
     pub(crate) fn uses_index(self) -> bool {
         match self {
             Self::Shorthand { .. } => true,
@@ -299,7 +282,7 @@ impl Pattern {
         }
     }
 
-    /// The range this pattern selects. `Name[#]` is `0..=#`.
+    /// The range this pattern selects. `Name[n]` is `0..=n`.
     pub(crate) fn to_range(self) -> RangeExpr {
         match self {
             Self::Shorthand { span } => RangeExpr::shorthand(span),
@@ -307,7 +290,7 @@ impl Pattern {
         }
     }
 
-    /// `Off[#]`: the shorthand pattern on the name `Off`.
+    /// `Off[n]`: the shorthand pattern on the name `Off`.
     pub(crate) fn is_off(self, raw: &str) -> bool {
         raw == "Off" && matches!(self, Self::Shorthand { .. })
     }
@@ -371,7 +354,7 @@ impl Domain {
 /// Values substituted while a pattern is resolved.
 #[derive(Clone, Copy)]
 pub(crate) struct EvalCtx<'a> {
-    /// Current `#`.
+    /// Current index.
     pub(crate) index: i128,
     pub(crate) domain: &'a Domain,
 }
@@ -664,154 +647,200 @@ enum Clip {
     Filtered,
 }
 
-/// Whether the tokens open with a range literal.
-enum Open {
-    /// `..`, or a bound followed by `..` / `..=`.
-    Range,
-    /// Not a range. The span is where `..` was missing.
-    NotRange(Span),
+/// A bracket's expression, after parentheses are stripped.
+enum Opened<'a> {
+    Range(&'a ExprRange),
+    Step(&'a ExprMethodCall),
+    Other,
 }
 
-fn open_kind(tokens: &[TokenTree]) -> Result<Open> {
-    if starts_with_range_op(tokens) {
-        return Ok(Open::Range);
+/// Parses one bracket as a pattern.
+///
+/// `None` means the brackets are ordinary Rust and stay as written. A lone
+/// loop variable is the shorthand `0..=index`.
+pub(crate) fn classify_bracket(
+    tokens: &[TokenTree],
+    index: &str,
+    span: Span,
+) -> Result<Option<Pattern>> {
+    if tokens.is_empty() {
+        return Ok(None);
     }
-    match bound_prefix(tokens)? {
-        Some(len) if starts_with_range_op(&tokens[len..]) => Ok(Open::Range),
-        Some(len) => Ok(Open::NotRange(token_span(&tokens[len..]))),
-        None => Ok(Open::NotRange(token_span(tokens))),
+    if is_only_index(tokens, index) {
+        return Ok(Some(Pattern::Shorthand { span }));
     }
-}
-
-/// Placeholder written where the source has `#`, so `syn` can parse the range.
-const HASH_IDENT: &str = "ph_foreach_index";
-/// Stand-in for a user identifier that would otherwise look like [`HASH_IDENT`].
-const USER_IDENT: &str = "ph_foreach_user";
-/// Tokens in a one-token bound: `#` or a single integer literal.
-const ONE_TOKEN: usize = 1;
-/// Tokens in a `-N` bound.
-const SIGNED_LITERAL: usize = 2;
-/// Tokens in a `#±N` bound.
-const HASH_OFFSET: usize = 3;
-
-fn parse_range_literal(tokens: &[TokenTree], style: BoundStyle) -> Result<RangeExpr> {
-    if let Some(span) = ellipsis_span(tokens)? {
-        return Err(Error::new(span, ErrorKind::ExpectedDots));
-    }
-    let split = split_step(tokens);
-    reject_hash_tails(split.range)?;
-    if let Some(step) = split.step {
-        reject_hash_tails(step)?;
-    }
-    let span = token_span(tokens);
-    let expr = match syn_expr(split.range) {
+    let expr = match syn_expr(tokens) {
         Ok(expr) => expr,
-        Err(syn_span) => return Err(syn_failure(split.range, style, syn_span)),
+        Err(_) if looks_like_range(tokens) => {
+            return Err(Error::new(span, ErrorKind::OnePattern));
+        }
+        Err(_) => return Ok(None),
     };
-    let Expr::Range(range) = expr else {
-        return Err(Error::new(span, ErrorKind::ExpectedDots));
-    };
+    match opened(&expr) {
+        Opened::Range(range) => {
+            let built = range_from_range(range, index, BoundStyle::Pattern, span)?;
+            Ok(Some(Pattern::Range(built)))
+        }
+        Opened::Step(call) => {
+            let built = range_from_method(call, index, BoundStyle::Pattern, span)?;
+            Ok(Some(Pattern::Range(built)))
+        }
+        Opened::Other => Ok(None),
+    }
+}
+
+fn is_only_index(tokens: &[TokenTree], index: &str) -> bool {
+    match tokens {
+        [TokenTree::Ident(name)] => name == index,
+        _ => false,
+    }
+}
+
+fn opened(expr: &Expr) -> Opened<'_> {
+    match expr {
+        Expr::MethodCall(call) if call.method == "step_by" => Opened::Step(call),
+        Expr::Paren(inner) => opened(&inner.expr),
+        Expr::Group(inner) => opened(&inner.expr),
+        Expr::Range(range) => Opened::Range(range),
+        _ => Opened::Other,
+    }
+}
+
+fn range_from_range(
+    range: &ExprRange,
+    index: &str,
+    style: BoundStyle,
+    span: Span,
+) -> Result<RangeExpr> {
     if side_has_range(range.start.as_deref()) || side_has_range(range.end.as_deref()) {
         return Err(trailing(style, span));
     }
-    let start = bound_from(range.start.as_deref(), style, trailing_kind(style))?;
-    let end = bound_from(range.end.as_deref(), style, trailing_kind(style))?;
+    let start = bound_from(range.start.as_deref(), index, style, trailing_kind(style))?;
+    let end = bound_from(range.end.as_deref(), index, style, trailing_kind(style))?;
     let end_inclusive = match range.limits {
         RangeLimits::Closed(_) => true,
         RangeLimits::HalfOpen(_) => false,
-    };
-    let step = match split.step {
-        None => None,
-        Some(step_tokens) => Some(parse_step(step_tokens, style, split.missing)?),
     };
     Ok(RangeExpr::builder(span)
         .start(start)
         .end(end)
         .end_inclusive(end_inclusive)
-        .step(step)
         .build())
 }
 
-fn ellipsis_span(tokens: &[TokenTree]) -> Result<Option<Span>> {
-    let index = if starts_with_range_op(tokens) {
-        0
-    } else {
-        match bound_prefix(tokens)? {
-            Some(len) => len,
-            None => return Ok(None),
-        }
+fn range_from_method(
+    call: &ExprMethodCall,
+    index: &str,
+    style: BoundStyle,
+    span: Span,
+) -> Result<RangeExpr> {
+    let mut args = call.args.iter();
+    let Some(step) = args.next() else {
+        return Err(Error::new(span, ErrorKind::ExpectedStep));
     };
-    if is_joint_pair(tokens, index, '.', '.') && is_punct(tokens, index + 2, '.') {
-        return Ok(Some(token_span(&tokens[index..])));
+    if args.next().is_some() {
+        return Err(Error::new(span, ErrorKind::ExpectedStep));
     }
-    Ok(None)
-}
-
-fn parse_step(tokens: &[TokenTree], parent: BoundStyle, missing: Span) -> Result<SpannedBound> {
-    if tokens.is_empty() {
-        return Err(Error::new(missing, ErrorKind::ExpectedStep));
-    }
-    let expr = match syn_expr(tokens) {
-        Ok(expr) => expr,
-        Err(span) => {
-            let kind = if opens_as_bound(tokens)? {
-                trailing_kind(parent)
-            } else {
-                ErrorKind::ExpectedStep
-            };
-            return Err(Error::new(span, kind));
-        }
+    let Opened::Range(range) = opened(&call.receiver) else {
+        return Err(trailing(style, span));
     };
-    if expr_has_range(&expr) {
-        return Err(trailing(parent, expr_span(&expr)));
-    }
-    interpret(&expr, BoundStyle::Step, ErrorKind::ExpectedStep)
+    let mut built = range_from_range(range, index, style, span)?;
+    built.step = Some(interpret(
+        step,
+        index,
+        BoundStyle::Step,
+        ErrorKind::StepLastIndex,
+    )?);
+    Ok(built)
 }
 
 fn bound_from(
     expr: Option<&Expr>,
+    index: &str,
     style: BoundStyle,
     shape: ErrorKind,
 ) -> Result<Option<SpannedBound>> {
     match expr {
         None => Ok(None),
-        Some(expr) => interpret(expr, style, shape).map(Some),
+        Some(expr) => interpret(expr, index, style, shape).map(Some),
     }
 }
 
-fn interpret(expr: &Expr, style: BoundStyle, shape: ErrorKind) -> Result<SpannedBound> {
+fn interpret(
+    expr: &Expr,
+    index: &str,
+    style: BoundStyle,
+    shape: ErrorKind,
+) -> Result<SpannedBound> {
     match expr {
-        Expr::Lit(literal) => lit_bound(&literal.lit, style, false, literal.lit.span()),
-        Expr::Unary(unary) => unary_bound(unary, style, shape),
-        Expr::Path(path) if is_hash_path(path) => Ok(SpannedBound::here(0, hash_span(path))),
-        Expr::Binary(binary) => hash_offset(binary, shape),
-        Expr::Group(group) => interpret(&group.expr, style, shape),
+        Expr::Paren(inner) => interpret(&inner.expr, index, style, shape),
+        Expr::Group(inner) => interpret(&inner.expr, index, style, shape),
+        Expr::Lit(literal) => lit_bound(&literal.lit, false, literal.lit.span()),
+        Expr::Unary(unary) => unary_bound(unary, shape),
+        Expr::Path(path) => path_bound(path, index, style, shape),
+        Expr::Binary(binary) => index_offset(binary, index, style, shape),
         other => Err(Error::new(expr_span(other), shape)),
     }
 }
 
-fn unary_bound(unary: &ExprUnary, style: BoundStyle, shape: ErrorKind) -> Result<SpannedBound> {
-    let UnOp::Neg(minus) = &unary.op else {
-        return Err(Error::new(expr_span(&unary.expr), shape));
+fn path_bound(
+    path: &ExprPath,
+    index: &str,
+    style: BoundStyle,
+    shape: ErrorKind,
+) -> Result<SpannedBound> {
+    let Some(name) = plain_ident(path) else {
+        return Err(Error::new(path_span(path), shape));
     };
-    match unary.expr.as_ref() {
-        Expr::Lit(literal) => lit_bound(&literal.lit, style, true, minus.span),
-        _ => Err(Error::new(minus.span, shape)),
+    let span = name.span();
+    if name == index {
+        return here_or_outer(span, style);
+    }
+    if name == "end" {
+        return end_bound(span, style);
+    }
+    Err(Error::new(span, shape))
+}
+
+fn here_or_outer(span: Span, style: BoundStyle) -> Result<SpannedBound> {
+    if style == BoundStyle::Outer {
+        Err(Error::new(span, ErrorKind::OuterHash))
+    } else {
+        Ok(SpannedBound::here(0, span))
     }
 }
 
-fn hash_offset(binary: &ExprBinary, shape: ErrorKind) -> Result<SpannedBound> {
-    if !is_hash_expr(&binary.left) {
+fn end_bound(span: Span, style: BoundStyle) -> Result<SpannedBound> {
+    match style {
+        BoundStyle::Outer => Err(Error::new(span, ErrorKind::OuterHash)),
+        BoundStyle::Pattern => Ok(SpannedBound::last_index(span)),
+        BoundStyle::Step => Err(Error::new(span, ErrorKind::StepLastIndex)),
+    }
+}
+
+fn index_offset(
+    binary: &syn::ExprBinary,
+    index: &str,
+    style: BoundStyle,
+    shape: ErrorKind,
+) -> Result<SpannedBound> {
+    if !is_index_expr(&binary.left, index) {
         return Err(Error::new(expr_span(&binary.left), shape));
     }
-    let span = hash_expr_span(&binary.left);
+    if style == BoundStyle::Outer {
+        return Err(Error::new(expr_span(&binary.left), ErrorKind::OuterHash));
+    }
     let Expr::Lit(literal) = binary.right.as_ref() else {
-        return Err(Error::new(expr_span(&binary.right), shape));
+        return Err(Error::new(
+            expr_span(&binary.right),
+            ErrorKind::UnsuffixedLiteral,
+        ));
     };
     let Lit::Int(int) = &literal.lit else {
         return Err(Error::new(literal.lit.span(), ErrorKind::UnsuffixedLiteral));
     };
     let magnitude = plain_int(int)?;
+    let span = expr_span(&binary.left);
     let offset = match &binary.op {
         BinOp::Add(_) => magnitude,
         BinOp::Sub(_) => magnitude
@@ -822,16 +851,32 @@ fn hash_offset(binary: &ExprBinary, shape: ErrorKind) -> Result<SpannedBound> {
     Ok(SpannedBound::here(offset, span))
 }
 
-fn lit_bound(lit: &Lit, style: BoundStyle, negative: bool, span: Span) -> Result<SpannedBound> {
+fn is_index_expr(expr: &Expr, index: &str) -> bool {
+    match expr {
+        Expr::Paren(inner) => is_index_expr(&inner.expr, index),
+        Expr::Group(inner) => is_index_expr(&inner.expr, index),
+        Expr::Path(path) => plain_ident(path).is_some_and(|name| name == index),
+        _ => false,
+    }
+}
+
+fn unary_bound(unary: &ExprUnary, shape: ErrorKind) -> Result<SpannedBound> {
+    let UnOp::Neg(minus) = &unary.op else {
+        return Err(Error::new(expr_span(&unary.expr), shape));
+    };
+    match unary.expr.as_ref() {
+        Expr::Lit(literal) => lit_bound(&literal.lit, true, minus.span),
+        _ => Err(Error::new(minus.span, shape)),
+    }
+}
+
+fn lit_bound(lit: &Lit, negative: bool, span: Span) -> Result<SpannedBound> {
     let Lit::Int(int) = lit else {
         return Err(Error::new(span, ErrorKind::UnsuffixedLiteral));
     };
     let magnitude = plain_int(int)?;
     if !negative {
         return Ok(SpannedBound::int(magnitude, int.span()));
-    }
-    if style.is_last_index(magnitude) {
-        return Ok(SpannedBound::last_index(span));
     }
     let signed = magnitude
         .checked_neg()
@@ -847,54 +892,38 @@ fn plain_int(int: &LitInt) -> Result<i128> {
         .map_err(|_| Error::new(int.span(), ErrorKind::LiteralOverflow))
 }
 
-fn is_hash_expr(expr: &Expr) -> bool {
-    match expr {
-        Expr::Path(path) => is_hash_path(path),
-        Expr::Group(group) => is_hash_expr(&group.expr),
-        _ => false,
-    }
-}
-
-fn is_hash_path(path: &ExprPath) -> bool {
+fn plain_ident(path: &ExprPath) -> Option<&proc_macro2::Ident> {
     if !path.attrs.is_empty() || path.qself.is_some() || path.path.leading_colon.is_some() {
-        return false;
+        return None;
     }
     let mut segments = path.path.segments.iter();
-    let Some(segment) = segments.next() else {
-        return false;
-    };
-    if segments.next().is_some() {
-        return false;
+    let segment = segments.next()?;
+    if segments.next().is_some() || !matches!(segment.arguments, PathArguments::None) {
+        return None;
     }
-    segment.ident == HASH_IDENT && matches!(segment.arguments, PathArguments::None)
+    Some(&segment.ident)
 }
 
-fn hash_span(path: &ExprPath) -> Span {
+fn path_span(path: &ExprPath) -> Span {
     path.path
         .segments
         .first()
         .map_or_else(Span::call_site, |segment| segment.ident.span())
 }
 
-fn hash_expr_span(expr: &Expr) -> Span {
-    match expr {
-        Expr::Path(path) => hash_span(path),
-        Expr::Group(group) => hash_expr_span(&group.expr),
-        other => expr_span(other),
-    }
-}
-
 fn expr_span(expr: &Expr) -> Span {
     match expr {
         Expr::Lit(literal) => literal.lit.span(),
-        Expr::Path(path) => hash_span(path),
+        Expr::Path(path) => path_span(path),
         Expr::Unary(unary) => match &unary.op {
             UnOp::Neg(token) => token.span,
             UnOp::Not(token) => token.span,
             UnOp::Deref(token) => token.span,
             _ => Span::call_site(),
         },
-        Expr::Group(group) => expr_span(&group.expr),
+        Expr::Paren(inner) => expr_span(&inner.expr),
+        Expr::Group(inner) => expr_span(&inner.expr),
+        Expr::Binary(binary) => expr_span(&binary.left),
         _ => Span::call_site(),
     }
 }
@@ -910,6 +939,10 @@ fn expr_has_range(expr: &Expr) -> bool {
         Expr::Unary(unary) => expr_has_range(&unary.expr),
         Expr::Paren(paren) => expr_has_range(&paren.expr),
         Expr::Group(group) => expr_has_range(&group.expr),
+        Expr::Call(call) => call.args.iter().any(expr_has_range),
+        Expr::MethodCall(call) => {
+            expr_has_range(&call.receiver) || call.args.iter().any(expr_has_range)
+        }
         _ => false,
     }
 }
@@ -926,143 +959,36 @@ fn trailing_kind(style: BoundStyle) -> ErrorKind {
     }
 }
 
-fn syn_failure(tokens: &[TokenTree], style: BoundStyle, span: Span) -> Error {
-    let kind = if contains_range_op(tokens) {
-        trailing_kind(style)
-    } else {
-        ErrorKind::ExpectedDots
-    };
-    Error::new(span, kind)
+fn syn_expr(tokens: &[TokenTree]) -> std::result::Result<Expr, syn::Error> {
+    let stream = TokenStream::from_iter(tokens.iter().cloned());
+    syn::parse2(stream)
 }
 
-struct StepSplit<'a> {
-    range: &'a [TokenTree],
-    step: Option<&'a [TokenTree]>,
-    missing: Span,
-}
-
-fn split_step(tokens: &[TokenTree]) -> StepSplit<'_> {
-    let mut index = 0;
-    while index + 1 < tokens.len() {
-        if is_joint_pair(tokens, index, ':', ':') {
-            return StepSplit {
-                range: &tokens[..index],
-                step: Some(&tokens[index + 2..]),
-                missing: token_span(&tokens[index..]),
-            };
-        }
-        index += 1;
-    }
-    StepSplit { range: tokens, step: None, missing: Span::call_site() }
-}
-
-fn syn_expr(tokens: &[TokenTree]) -> std::result::Result<Expr, Span> {
-    syn::parse2(tokens_for_syn(tokens)).map_err(|error| error.span())
-}
-
-fn tokens_for_syn(tokens: &[TokenTree]) -> TokenStream {
-    let mut out = TokenStream::new();
+fn looks_like_range(tokens: &[TokenTree]) -> bool {
+    let mut previous_dot = false;
     for token in tokens {
         match token {
-            TokenTree::Punct(punct) if punct.as_char() == '#' => {
-                let ident = Ident::new(HASH_IDENT, punct.span());
-                out.extend([TokenTree::Ident(ident)]);
+            TokenTree::Group(group) => {
+                let nested: Vec<TokenTree> = group.stream().into_iter().collect();
+                if looks_like_range(&nested) {
+                    return true;
+                }
+                previous_dot = false;
             }
-            TokenTree::Ident(ident) if ident == HASH_IDENT || ident == USER_IDENT => {
-                let renamed = Ident::new(USER_IDENT, ident.span());
-                out.extend([TokenTree::Ident(renamed)]);
+            TokenTree::Punct(punct)
+                if punct.as_char() == '.' && punct.spacing() == Spacing::Joint =>
+            {
+                previous_dot = true;
             }
-            TokenTree::Literal(literal) => {
-                out.extend([TokenTree::Literal(literal_for_syn(literal))]);
-            }
-            other => out.extend([other.clone()]),
+            TokenTree::Punct(punct) if previous_dot && punct.as_char() == '.' => return true,
+            _ => previous_dot = false,
         }
     }
-    out
+    false
 }
 
-fn literal_for_syn(literal: &Literal) -> Literal {
-    let text = literal.to_string();
-    let mut chars = text.chars();
-    if chars.next() != Some('0') {
-        return literal.clone();
-    }
-    let Some(mark) = chars.next() else {
-        return literal.clone();
-    };
-    if !matches!(mark, 'X' | 'O' | 'B') {
-        return literal.clone();
-    }
-    let mut normalized = String::with_capacity(text.len());
-    normalized.push('0');
-    normalized.push(mark.to_ascii_lowercase());
-    normalized.extend(chars);
-    match normalized.parse::<Literal>() {
-        Ok(mut parsed) => {
-            parsed.set_span(literal.span());
-            parsed
-        }
-        Err(_) => literal.clone(),
-    }
-}
-
-fn bound_prefix(tokens: &[TokenTree]) -> Result<Option<usize>> {
-    if is_punct(tokens, 0, '#') {
-        if is_sign(tokens, 1) {
-            let Some(TokenTree::Literal(literal)) = tokens.get(2) else {
-                return Err(Error::new(
-                    token_span(&tokens[1..]),
-                    ErrorKind::MissingAfterSign,
-                ));
-            };
-            let _ = checked_literal(literal)?;
-            return Ok(Some(HASH_OFFSET));
-        }
-        return Ok(Some(ONE_TOKEN));
-    }
-    if is_punct(tokens, 0, '-') {
-        let Some(TokenTree::Literal(literal)) = tokens.get(1) else {
-            return Ok(None);
-        };
-        let _ = checked_literal(literal)?;
-        return Ok(Some(SIGNED_LITERAL));
-    }
-    if let Some(TokenTree::Literal(literal)) = tokens.first() {
-        let _ = checked_literal(literal)?;
-        return Ok(Some(ONE_TOKEN));
-    }
-    Ok(None)
-}
-
-fn opens_as_bound(tokens: &[TokenTree]) -> Result<bool> {
-    Ok(bound_prefix(tokens)?.is_some())
-}
-
-fn checked_literal(literal: &Literal) -> Result<i128> {
-    let stream = TokenStream::from(TokenTree::Literal(literal_for_syn(literal)));
-    let parsed = syn::parse2::<Lit>(stream)
-        .map_err(|_| Error::new(literal.span(), ErrorKind::UnsuffixedLiteral))?;
-    match parsed {
-        Lit::Int(int) => plain_int(&int),
-        _ => Err(Error::new(literal.span(), ErrorKind::UnsuffixedLiteral)),
-    }
-}
-
-fn reject_hash_tails(tokens: &[TokenTree]) -> Result<()> {
-    let mut index = 0;
-    while index < tokens.len() {
-        if is_punct(tokens, index, '#')
-            && is_sign(tokens, index + 1)
-            && !is_literal(tokens, index + 2)
-        {
-            return Err(Error::new(
-                token_span(&tokens[index + 1..]),
-                ErrorKind::MissingAfterSign,
-            ));
-        }
-        index += 1;
-    }
-    Ok(())
+fn token_span(tokens: &[TokenTree]) -> Span {
+    tokens.first().map_or_else(Span::call_site, TokenTree::span)
 }
 
 fn step_through(
@@ -1122,37 +1048,4 @@ fn step_wide(
         current = next;
     }
     Ok(())
-}
-
-fn starts_with_range_op(tokens: &[TokenTree]) -> bool {
-    is_joint_pair(tokens, 0, '.', '.')
-}
-
-fn contains_range_op(tokens: &[TokenTree]) -> bool {
-    (0..tokens.len()).any(|index| is_joint_pair(tokens, index, '.', '.'))
-}
-
-fn is_joint_pair(tokens: &[TokenTree], index: usize, first: char, second: char) -> bool {
-    match (tokens.get(index), tokens.get(index + 1)) {
-        (Some(TokenTree::Punct(left)), Some(TokenTree::Punct(right))) => {
-            left.as_char() == first && left.spacing() == Spacing::Joint && right.as_char() == second
-        }
-        _ => false,
-    }
-}
-
-fn is_punct(tokens: &[TokenTree], index: usize, mark: char) -> bool {
-    matches!(tokens.get(index), Some(TokenTree::Punct(punct)) if punct.as_char() == mark)
-}
-
-fn is_sign(tokens: &[TokenTree], index: usize) -> bool {
-    is_punct(tokens, index, '+') || is_punct(tokens, index, '-')
-}
-
-fn is_literal(tokens: &[TokenTree], index: usize) -> bool {
-    matches!(tokens.get(index), Some(TokenTree::Literal(_)))
-}
-
-fn token_span(tokens: &[TokenTree]) -> Span {
-    tokens.first().map_or_else(Span::call_site, TokenTree::span)
 }

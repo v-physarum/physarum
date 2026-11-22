@@ -16,11 +16,11 @@ macro_rules! impl_take {
     };
 }
 
-impl_foreach!(range = 0..CASE_LEN, body = {
+impl_foreach!(n in 0..CASE_LEN {
     impl_take!(
-        args: (T[..=#]),
-        ix: Ix + #,
-        out: T + #,
-        rest: T[..#] + Off[#] + T[#+1..=#],
+        args: (T[..=n]),
+        ix: paste(Ix, n),
+        out: paste(T, n),
+        rest: T[..n] + Off[n] + T[n + 1..=n],
     );
 });

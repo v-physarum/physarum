@@ -2,11 +2,13 @@
 
 use ph_util_foreach::impl_foreach;
 
-impl_foreach!(range = 0..4, body = {
-    pub struct Ix + #;
+impl_foreach!(n in 0..4 {
+    pub struct paste(Ix, n);
 });
 
-impl_foreach!(body = { pub struct Rev + #; }, range = 0..2);
+impl_foreach!(n in 0..2 {
+    pub struct paste(Rev, n);
+});
 
 #[test]
 fn indexes_zero_through_three() {
