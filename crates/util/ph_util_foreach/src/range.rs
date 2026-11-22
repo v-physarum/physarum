@@ -104,20 +104,6 @@ pub(crate) struct RangeExpr {
 }
 
 impl RangeExpr {
-    fn new(built: RangeExprBuilder) -> Self {
-        Self {
-            start: built.start,
-            end: built.end,
-            end_inclusive: built.end_inclusive,
-            step: built.step,
-            span: built.span,
-        }
-    }
-
-    fn builder(span: Span) -> RangeExprBuilder {
-        RangeExprBuilder::new(span)
-    }
-
     /// Whether a bound mentions the loop variable.
     ///
     /// A step that mentions the variable does not count: the domain stays the
@@ -138,11 +124,8 @@ impl RangeExpr {
         let span = token_span(tokens);
         let expr =
             syn_expr(tokens).map_err(|error| Error::new(error.span(), ErrorKind::ExpectedDots))?;
-        match opened(&expr) {
-            Opened::Range(range) => range_from_range(range, index, style, span),
-            Opened::Step(call) => range_from_method(call, index, style, span),
-            Opened::Other => Err(Error::new(span, ErrorKind::ExpectedDots)),
-        }
+        opened_range(&expr, index, style, span)?
+            .ok_or_else(|| Error::new(span, ErrorKind::ExpectedDots))
     }
 
     /// Indices selected by a finite outer range.
@@ -219,41 +202,6 @@ impl RangeExpr {
             return Err(ctx.domain.outside(self.span, window.end()));
         }
         window.walk(step, ctx.domain, &mut visit)
-    }
-}
-
-#[derive(Clone, Copy)]
-#[must_use]
-struct RangeExprBuilder {
-    start: Option<SpannedBound>,
-    end: Option<SpannedBound>,
-    end_inclusive: bool,
-    step: Option<SpannedBound>,
-    span: Span,
-}
-
-impl RangeExprBuilder {
-    fn new(span: Span) -> Self {
-        Self { start: None, end: None, end_inclusive: false, step: None, span }
-    }
-
-    fn start(mut self, start: Option<SpannedBound>) -> Self {
-        self.start = start;
-        self
-    }
-
-    fn end(mut self, end: Option<SpannedBound>) -> Self {
-        self.end = end;
-        self
-    }
-
-    fn end_inclusive(mut self, end_inclusive: bool) -> Self {
-        self.end_inclusive = end_inclusive;
-        self
-    }
-
-    fn build(self) -> RangeExpr {
-        RangeExpr::new(self)
     }
 }
 
@@ -634,19 +582,18 @@ pub(crate) fn classify_bracket(
         }
         Err(_) => return Ok(None),
     };
-    match opened(&expr) {
-        Opened::Range(range) => Ok(Some(range_from_range(
-            range,
-            index,
-            BoundStyle::Pattern,
-            span,
-        )?)),
-        Opened::Step(call) => Ok(Some(range_from_method(
-            call,
-            index,
-            BoundStyle::Pattern,
-            span,
-        )?)),
+    opened_range(&expr, index, BoundStyle::Pattern, span)
+}
+
+fn opened_range(
+    expr: &Expr,
+    index: &str,
+    style: BoundStyle,
+    span: Span,
+) -> Result<Option<RangeExpr>> {
+    match opened(expr) {
+        Opened::Range(range) => Ok(Some(range_from_range(range, index, style, span)?)),
+        Opened::Step(call) => Ok(Some(range_from_method(call, index, style, span)?)),
         Opened::Other => Ok(None),
     }
 }
@@ -676,11 +623,7 @@ fn range_from_range(
         RangeLimits::Closed(_) => true,
         RangeLimits::HalfOpen(_) => false,
     };
-    Ok(RangeExpr::builder(span)
-        .start(start)
-        .end(end)
-        .end_inclusive(end_inclusive)
-        .build())
+    Ok(RangeExpr { start, end, end_inclusive, step: None, span })
 }
 
 fn range_from_method(
