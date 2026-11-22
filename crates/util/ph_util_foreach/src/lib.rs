@@ -24,11 +24,9 @@ mod range;
 /// arguments, in either order.
 /// `#` is the current index. `Name + #` appends that index's decimal digits
 /// (`Ix + #` expands to `Ix0`). An identifier immediately followed by `#`
-/// is a compile error except in an index binding: `$name = Ident #;` captures
-/// that pasted identifier, `$name = #;` captures the index literal, and later
-/// `$name` expands to the captured token, including as a function argument.
-/// Edition 2021 and later reserve `Ident#` as a prefix, so the identifier and
-/// `#` are written as separate tokens. `$name = Ident + #;` is the same paste.
+/// is a compile error. `$name = Ident + #;` captures that pasted identifier,
+/// `$name = #;` captures the index literal, and later `$name` expands to the
+/// captured token, including as a function argument.
 ///
 /// ```
 /// #![allow(non_upper_case_globals)]
@@ -39,7 +37,7 @@ mod range;
 /// }
 ///
 /// impl_foreach!(range = 0..2, body = {
-///     $id = Ix #;
+///     $id = Ix + #;
 ///     $n = #;
 ///     pub const $id: i128 = $n;
 ///     pub fn passed + #() -> i128 {

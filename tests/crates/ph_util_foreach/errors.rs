@@ -151,22 +151,26 @@ fn pattern_errors() {
 fn index_binding_rejects_a_bad_right_hand_side() {
     assert_err(
         "impl_foreach!(range = 0..1, body = { $id = Ix; });",
-        "$name = Ident #;",
+        "$name = Ident + #;",
+    );
+    assert_err(
+        "impl_foreach!(range = 0..1, body = { $id = Ix #; });",
+        "$name = Ident + #;",
     );
     assert_err(
         "impl_foreach!(range = 0..1, body = { $id = Ix # });",
-        "$name = Ident #;",
+        "$name = Ident + #;",
     );
     assert_err(
         "impl_foreach!(range = 0..1, body = { $id = Ix + # });",
-        "$name = Ident #;",
+        "$name = Ident + #;",
     );
     assert_err(
         "impl_foreach!(range = 0..1, body = { $id = #+1; });",
-        "$name = Ident #;",
+        "$name = Ident + #;",
     );
     assert_err(
-        "impl_foreach!(range = -1..0, body = { $id = Ix #; });",
+        "impl_foreach!(range = -1..0, body = { $id = Ix + #; });",
         "cannot paste a negative index",
     );
 }

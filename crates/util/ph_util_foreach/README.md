@@ -94,7 +94,7 @@ Exactly one pattern is allowed in one pair of brackets. `A[0..#, Off]` is a comp
 | `X + Y` | the two expansions concatenated; an empty piece adds no comma |
 | `(A, B, …)[<pat>]` | one parenthesized row per index, separated by commas |
 
-`Name + #` pastes the index onto an identifier. `Ix + #` expands to `Ix0`, `Ix1`, and so on. The index must be non-negative; pasting a negative index is a compile error. An identifier immediately followed by `#` (`Ix #`) is a compile error except as the right-hand side of an index binding (`$id = Ix #;`).
+`Name + #` pastes the index onto an identifier. `Ix + #` expands to `Ix0`, `Ix1`, and so on. The index must be non-negative; pasting a negative index is a compile error. An identifier immediately followed by `#` (`Ix #`) is a compile error.
 
 `X + Y` concatenates sequence expansions such as `Name[<pat>]` and `(…)[<pat>]`. A bare identifier is a one-element piece, so `X + Name[..]` expands to `X, Name0, Name1, ...`. Writing the pieces next to each other (`X Name[..]`) is a compile error. `Ix + #` is paste: the left side is a bare identifier, the right side is `#`, and the expansion is one identifier.
 
@@ -110,8 +110,7 @@ A binding captures the current index under a name. The statement is removed from
 
 | Form | Captures |
 | --- | --- |
-| `$name = Ident #;` | the identifier `Ident` with the decimal digits of the current index appended (`Ix #` at index `2` is `Ix2`) |
-| `$name = Ident + #;` | the same identifier as `Ident #` |
+| `$name = Ident + #;` | the identifier `Ident` with the decimal digits of the current index appended (`Ix + #` at index `2` is `Ix2`) |
 | `$name = #;` | the current index as an unsuffixed integer literal |
 
 ```rust
@@ -120,7 +119,7 @@ fn takes_index(index: i128) -> i128 {
 }
 
 impl_foreach!(range = 0..4, body = {
-    $id = Ix #;
+    $id = Ix + #;
     $n = #;
     pub const $id: i128 = $n;
     pub fn passed + #() -> i128 {
@@ -131,7 +130,7 @@ impl_foreach!(range = 0..4, body = {
 
 `passed0` returns `0` and the const is `Ix0`. `passed3` returns `3` and the const is `Ix3`.
 
-`Ident #` and `Ident + #` are the same paste as `Name + #`. Rust 2021 and later reserve an identifier glued to `#` (`Ix#`) as a prefix, so the binding writes the identifier and `#` as separate tokens. An identifier followed by `#` outside a binding (`struct Ix #;`) is still a compile error. The pasted index must be non-negative. `$name = #;` may capture a negative index as a literal.
+`Ident + #` is the same paste as `Name + #`. `$name = Ident #;` is a compile error. The pasted index must be non-negative. `$name = #;` may capture a negative index as a literal.
 
 The binding lasts until the end of the body or group that contains it (`{...}`, `(...)`, `[...]`, or a row template). A later binding of the same name hides the earlier one until that inner group ends. `$name` before its binding, and `$name` after the group ends, stays as written, so a `macro_rules` metavariable that was never bound stays in the output.
 
@@ -182,7 +181,7 @@ The macro emits `compile_error!` when:
 - `A..B` or `A..=B` has a start after the end, other than an empty hole-edge slice;
 - a bound lies outside the domain;
 - the placeholder syntax cannot be parsed (`A[0..#, Off]`, a second range in the same brackets, `::` with no step, or an identifier immediately followed by `#` outside a binding);
-- an index binding is not `$name = Ident #;`, `$name = Ident + #;`, or `$name = #;`.
+- an index binding is not `$name = Ident + #;` or `$name = #;`.
 
 An empty hole-edge slice expands to no tokens.
 

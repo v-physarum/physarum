@@ -9,7 +9,7 @@ fn takes_index(index: i128) -> i128 {
 impl_foreach!(
     range = 0..4,
     body = {
-        $id = Ix #;
+        $id = Ix + #;
         $n = #;
         pub const $id: i128 = $n;
         pub fn passed + #() -> i128 {
@@ -31,35 +31,35 @@ impl_foreach!(range = 0..2, body = {
 });
 
 impl_foreach!(range = 0..2, body = {
-    $id = Rx #;
+    $id = Rx + #;
     pub const $id: i128 = #;
 });
 
 impl_foreach!(range = 0..6::2, body = {
-    $id = Sx #;
+    $id = Sx + #;
     pub const $id: i128 = #;
 });
 
 impl_foreach!(0..2 {
-    $id = Zx #;
+    $id = Zx + #;
     pub const $id: i128 = #;
 });
 
 impl_foreach!(range = 0..1, body = {
-    $id = Ax #;
+    $id = Ax + #;
     pub mod hide {
-        $id = Bx #;
+        $id = Bx + #;
         pub const $id: i128 = 1;
     }
     pub const $id: i128 = 2;
 });
 
 impl_foreach!(range = 0..1, body = {
-    $id = Cx #;
+    $id = Cx + #;
     pub const $id: i128 = 4;
     pub fn seen() -> i128 {
         let inner = {
-            $id = Dy #;
+            $id = Dy + #;
             $n = #;
             $n
         };
@@ -68,7 +68,7 @@ impl_foreach!(range = 0..1, body = {
 });
 
 impl_foreach!(range = 0..1, body = {
-    $r#type = Vx #;
+    $r#type = Vx + #;
     pub const $type: i128 = 5;
 });
 
@@ -81,7 +81,7 @@ impl_foreach!(range = 0..3, body = {
 });
 
 impl_foreach!(range = 0..3, body = {
-    $id = Fx #;
+    $id = Fx + #;
     $n = #;
     pub mod fan_bind + # {
         pub const INDEX: i128 = $n;

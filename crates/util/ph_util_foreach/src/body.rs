@@ -3,7 +3,7 @@
 //! The body is compiled once into one instruction tape. A header is followed
 //! by its body on that same tape, so a group does not allocate its own vector.
 //! Each index then only substitutes values. Pasted identifiers are written into
-//! a stack buffer. `$name = Ident #;` and `$name = #;` capture that substitution
+//! a stack buffer. `$name = Ident + #;` and `$name = #;` capture that substitution
 //! for the rest of the enclosing group, and `$name` reads the captured token.
 //! Flat mode repeats the body once per outer index and clips
 //! patterns to that full index set. Fan mode is selected when a bracket pattern
@@ -291,7 +291,7 @@ enum Op {
 /// Right-hand side of `$name = ...;`, before the index is known.
 #[derive(Clone, Copy)]
 enum BindRhs {
-    /// `Ident #` or `Ident + #`.
+    /// `Ident + #`.
     Paste { at: u32, len: u32, span: Span },
     /// `#`.
     Index,
@@ -784,7 +784,7 @@ impl Program {
         self.source.truncate(inner_at);
         Ok(stat)
     }
-    /// `$name = Ident #;`, `$name = Ident + #;`, or `$name = #;`, and a later `$name`.
+    /// `$name = Ident + #;` or `$name = #;`, and a later `$name`.
     ///
     /// A `$name` that is not in scope is left unchanged, so a nested `macro_rules`
     /// metavariable stays in the output.
@@ -1696,18 +1696,15 @@ fn binding_paste(tokens: &[TokenTree], rhs: usize) -> Option<ParsedRhs> {
     let TokenTree::Ident(ident) = tokens.get(rhs)? else {
         return None;
     };
+    if !(tokens.is_plus_at(rhs + 1)
+        && tokens.is_bare_hash(rhs + 2)
+        && tokens.is_punct_at(rhs + 3, ';'))
+    {
+        return None;
+    }
     let base = normalized_ident(ident);
     let span = ident.span();
-    if tokens.is_bare_hash(rhs + 1) && tokens.is_punct_at(rhs + 2, ';') {
-        return Some(ParsedRhs { next: rhs + 3, form: RhsForm::Paste { base, span } });
-    }
-    if tokens.is_plus_at(rhs + 1)
-        && tokens.is_bare_hash(rhs + 2)
-        && tokens.is_punct_at(rhs + 3, ';')
-    {
-        return Some(ParsedRhs { next: rhs + 4, form: RhsForm::Paste { base, span } });
-    }
-    None
+    Some(ParsedRhs { next: rhs + 4, form: RhsForm::Paste { base, span } })
 }
 
 fn binding_span(tokens: &[TokenTree], index: usize) -> Span {
