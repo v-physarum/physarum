@@ -22,6 +22,10 @@ ph_test_errors = { path = "crates/tests/ph_test_errors" }
 ph_util_foreach = { path = "crates/util/ph_util_foreach" }
 
 [[test]]
+name = "ph_util_foreach_bindings"
+path = "tests/crates/ph_util_foreach/bindings.rs"
+
+[[test]]
 name = "ph_util_foreach_errors"
 path = "tests/crates/ph_util_foreach/errors.rs"
 

@@ -77,6 +77,10 @@ pub(crate) enum ErrorKind {
     NegativePaste,
     #[error("write `Name + #` to paste an index; `Name #` is not a paste")]
     SpacedPaste,
+    #[error("write `$name = Ident #;`, `$name = Ident + #;`, or `$name = #;`")]
+    BindingForm,
+    #[error("unknown index binding")]
+    UnknownBinding,
     #[error("body is too large")]
     BodyTooLarge,
 }

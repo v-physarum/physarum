@@ -1,7 +1,7 @@
 //! Repeats a token tree for each index of a finite range.
 //!
 //! The crate README documents every range form, the `::S` step, placeholders,
-//! and flat versus fan expansion.
+//! index bindings, and flat versus fan expansion.
 
 mod body;
 mod error;
@@ -24,7 +24,32 @@ mod range;
 /// arguments, in either order.
 /// `#` is the current index. `Name + #` appends that index's decimal digits
 /// (`Ix + #` expands to `Ix0`). An identifier immediately followed by `#`
-/// is a compile error.
+/// is a compile error except in an index binding: `$name = Ident #;` captures
+/// that pasted identifier, `$name = #;` captures the index literal, and later
+/// `$name` expands to the captured token, including as a function argument.
+/// Edition 2021 and later reserve `Ident#` as a prefix, so the identifier and
+/// `#` are written as separate tokens. `$name = Ident + #;` is the same paste.
+///
+/// ```
+/// #![allow(non_upper_case_globals)]
+/// use ph_util_foreach::impl_foreach;
+///
+/// fn takes_index(index: i128) -> i128 {
+///     index
+/// }
+///
+/// impl_foreach!(range = 0..2, body = {
+///     $id = Ix #;
+///     $n = #;
+///     pub const $id: i128 = $n;
+///     pub fn passed + #() -> i128 {
+///         takes_index($id)
+///     }
+/// });
+///
+/// assert_eq!(passed0(), 0);
+/// assert_eq!(passed1(), 1);
+/// ```
 /// `Name[0..4]` expands to the comma-separated identifiers `Name0, Name1, Name2, Name3`.
 /// Sequence pieces concatenate only with `+` (`X + Name[..]`). `X Name[..]` is a
 /// compile error.

@@ -94,7 +94,7 @@ Exactly one pattern is allowed in one pair of brackets. `A[0..#, Off]` is a comp
 | `X + Y` | the two expansions concatenated; an empty piece adds no comma |
 | `(A, B, …)[<pat>]` | one parenthesized row per index, separated by commas |
 
-`Name + #` is the only identifier paste. `Ix + #` expands to `Ix0`, `Ix1`, and so on. The index must be non-negative; pasting a negative index is a compile error. An identifier immediately followed by `#` (`Ix #`) is a compile error.
+`Name + #` pastes the index onto an identifier. `Ix + #` expands to `Ix0`, `Ix1`, and so on. The index must be non-negative; pasting a negative index is a compile error. An identifier immediately followed by `#` (`Ix #`) is a compile error except as the right-hand side of an index binding (`$id = Ix #;`).
 
 `X + Y` concatenates sequence expansions such as `Name[<pat>]` and `(…)[<pat>]`. A bare identifier is a one-element piece, so `X + Name[..]` expands to `X, Name0, Name1, ...`. Writing the pieces next to each other (`X Name[..]`) is a compile error. `Ix + #` is paste: the left side is a bare identifier, the right side is `#`, and the expansion is one identifier.
 
@@ -103,6 +103,41 @@ Inside a tuple row, `#` is the row index. `(T + #, U + #)[0..3]` expands to `(T0
 `#[...]` and `#![...]` stay attributes. Brackets that do not open with a range stay as written, and `#` inside them is still the current index, so `arr[(#)]` becomes `arr[(0)]`. An identifier followed by a real range is the placeholder, so `Name[0..2]` is `Name0, Name1`.
 
 `Off[0..2]` is the ordinary sequence `Off0, Off1`. Only `Off[#]` is the bare hole marker.
+
+## Index bindings
+
+A binding captures the current index under a name. The statement is removed from the output. Later `$name` in that same group expands to the captured token, including where a function argument is written.
+
+| Form | Captures |
+| --- | --- |
+| `$name = Ident #;` | the identifier `Ident` with the decimal digits of the current index appended (`Ix #` at index `2` is `Ix2`) |
+| `$name = Ident + #;` | the same identifier as `Ident #` |
+| `$name = #;` | the current index as an unsuffixed integer literal |
+
+```rust
+fn takes_index(index: i128) -> i128 {
+    index
+}
+
+impl_foreach!(range = 0..4, body = {
+    $id = Ix #;
+    $n = #;
+    pub const $id: i128 = $n;
+    pub fn passed + #() -> i128 {
+        takes_index($id)
+    }
+});
+```
+
+`passed0` returns `0` and the const is `Ix0`. `passed3` returns `3` and the const is `Ix3`.
+
+`Ident #` and `Ident + #` are the same paste as `Name + #`. Rust 2021 and later reserve an identifier glued to `#` (`Ix#`) as a prefix, so the binding writes the identifier and `#` as separate tokens. An identifier followed by `#` outside a binding (`struct Ix #;`) is still a compile error. The pasted index must be non-negative. `$name = #;` may capture a negative index as a literal.
+
+The binding lasts until the end of the body or group that contains it (`{...}`, `(...)`, `[...]`, or a row template). A later binding of the same name hides the earlier one until that inner group ends. `$name` before its binding, and `$name` after the group ends, stays as written, so a `macro_rules` metavariable that was never bound stays in the output.
+
+The captured value is the index at the binding. A later row does not rebind it: in `$n = #; ($n)[0..2]` every copy sees that same index.
+
+`$name = #+1;` and any other right-hand side are compile errors. The statement needs the trailing `;`.
 
 ## Flat and fan
 
@@ -146,7 +181,8 @@ The macro emits `compile_error!` when:
 - the step is less than or equal to zero;
 - `A..B` or `A..=B` has a start after the end, other than an empty hole-edge slice;
 - a bound lies outside the domain;
-- the placeholder syntax cannot be parsed (`A[0..#, Off]`, a second range in the same brackets, `::` with no step, or an identifier immediately followed by `#`).
+- the placeholder syntax cannot be parsed (`A[0..#, Off]`, a second range in the same brackets, `::` with no step, or an identifier immediately followed by `#` outside a binding);
+- an index binding is not `$name = Ident #;`, `$name = Ident + #;`, or `$name = #;`.
 
 An empty hole-edge slice expands to no tokens.
 
