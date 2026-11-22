@@ -3,12 +3,14 @@
 //! The body is compiled once into one instruction tape. A header is followed
 //! by its body on that same tape, so a group does not allocate its own vector.
 //! Each index then only substitutes values. Pasted identifiers are written into
-//! a stack buffer. Flat mode repeats the body once per outer index and clips
+//! a stack buffer. `$name = Ident + #;` and `$name = #;` capture that substitution
+//! for the rest of the enclosing group, and `$name` reads the captured token.
+//! Flat mode repeats the body once per outer index and clips
 //! patterns to that full index set. Fan mode is selected when a bracket pattern
 //! mentions `#` (including `Name[#]` and `Off[#]`). Each fan copy still uses one
 //! outer index, but the domain is the prefix `0..=index`.
 
-use proc_macro2::{Delimiter, Group, Ident, Punct, Spacing, Span, TokenStream, TokenTree};
+use proc_macro2::{Delimiter, Group, Ident, Literal, Punct, Spacing, Span, TokenStream, TokenTree};
 
 use crate::error::{Error, ErrorKind, Result};
 use crate::range::{BoundStyle, Domain, EvalCtx, Pattern, RangeExpr};
@@ -24,6 +26,7 @@ pub(crate) fn expand(input: TokenStream) -> Result<TokenStream> {
     let root = program.source.len();
     let stat = program.compile_seq(Source::new(0, root))?;
     let mut output = TokenStream::new();
+    let mut env = BindEnv::with_capacity(Program::widen(program.bind_slots)?);
     if stat.fan {
         if outer.first() < 0 {
             return Err(Error::new(range.span, ErrorKind::FanEmpty));
@@ -33,7 +36,7 @@ pub(crate) fn expand(input: TokenStream) -> Result<TokenStream> {
             let tape = Tape::new(0, stat.logical);
             output
                 .with_program(&program)
-                .emit_seq(tape, &EvalCtx::new(index, &domain))
+                .emit_seq(tape, &EvalCtx::new(index, &domain), &mut env)
         })?;
     } else {
         let domain = Domain::flat(&outer);
@@ -41,7 +44,7 @@ pub(crate) fn expand(input: TokenStream) -> Result<TokenStream> {
             let tape = Tape::new(0, stat.logical);
             output
                 .with_program(&program)
-                .emit_seq(tape, &EvalCtx::new(index, &domain))
+                .emit_seq(tape, &EvalCtx::new(index, &domain), &mut env)
         })?;
     }
     Ok(output)
@@ -216,6 +219,11 @@ struct Program {
     tokens: Vec<TokenTree>,
     bytes: Vec<u8>,
     source: Vec<TokenTree>,
+    /// Binding names visible to later tokens. A nested group truncates this
+    /// back to the length it started with.
+    scope: Vec<NameRef>,
+    /// `Bind` instructions on the tape. Emission reserves the binding stack once.
+    bind_slots: u32,
 }
 
 struct Inst {
@@ -266,6 +274,136 @@ enum Op {
         /// Logical instructions in the row template that follows this header.
         body: u32,
     },
+    /// `$name = ...;` captures the current index and emits nothing.
+    Bind {
+        name_at: u32,
+        name_len: u32,
+        rhs: BindRhs,
+    },
+    /// `$name` after a binding in this group.
+    Use {
+        name_at: u32,
+        name_len: u32,
+        span: Span,
+    },
+}
+
+/// Right-hand side of `$name = ...;`, before the index is known.
+#[derive(Clone, Copy)]
+enum BindRhs {
+    /// `Ident + #`.
+    Paste { at: u32, len: u32, span: Span },
+    /// `#`.
+    Index,
+}
+
+/// The token captured when a binding runs.
+#[derive(Clone, Copy)]
+enum Captured {
+    Paste { at: u32, len: u32, index: i128 },
+    Index { value: i128 },
+}
+
+#[derive(Clone, Copy)]
+struct Binding {
+    name_at: u32,
+    name_len: u32,
+    value: Captured,
+}
+
+impl Binding {
+    fn same_name(self, bytes: &[u8], at: u32, len: u32) -> bool {
+        self.name_len == len && names_equal(bytes, self.name_at, at, len)
+    }
+}
+
+/// Bindings captured while one index is emitted.
+///
+/// `expand` reserves one slot per binding instruction. Pushing during emission
+/// does not allocate.
+struct BindEnv {
+    stack: Vec<Binding>,
+}
+
+impl BindEnv {
+    fn with_capacity(slots: usize) -> Self {
+        Self { stack: Vec::with_capacity(slots) }
+    }
+
+    fn len(&self) -> usize {
+        self.stack.len()
+    }
+
+    fn truncate(&mut self, len: usize) {
+        self.stack.truncate(len);
+    }
+
+    fn push(&mut self, binding: Binding) {
+        debug_assert!(
+            self.stack.len() < self.stack.capacity(),
+            "index binding stack reserved too little capacity"
+        );
+        self.stack.push(binding);
+    }
+
+    /// Captures the current index. The binding statement emits no tokens.
+    fn capture(&mut self, name_at: u32, name_len: u32, rhs: BindRhs, index: i128) -> Result<()> {
+        let value = match rhs {
+            BindRhs::Index => Captured::Index { value: index },
+            BindRhs::Paste { at, len, span } => {
+                if index < 0 {
+                    return Err(Error::new(span, ErrorKind::NegativePaste));
+                }
+                Captured::Paste { at, len, index }
+            }
+        };
+        self.push(Binding { name_at, name_len, value });
+        Ok(())
+    }
+
+    fn find(&self, bytes: &[u8], at: u32, len: u32) -> Option<Captured> {
+        self.stack
+            .iter()
+            .rev()
+            .find(|binding| binding.same_name(bytes, at, len))
+            .map(|binding| binding.value)
+    }
+}
+
+/// A binding name packed into `Program::bytes`.
+#[derive(Clone, Copy)]
+struct NameRef {
+    at: u32,
+    len: u32,
+}
+
+impl NameRef {
+    fn new(at: u32, len: u32) -> Self {
+        Self { at, len }
+    }
+}
+
+/// `$name` or `$name = ...;` read from the body.
+struct DollarHead {
+    name: String,
+    span: Span,
+    kind: DollarKind,
+}
+
+enum DollarKind {
+    /// `$name` with no `=`. Substituted only when `name` is already bound.
+    Mention,
+    Bind(ParsedRhs),
+}
+
+struct ParsedRhs {
+    next: usize,
+    form: RhsForm,
+}
+
+enum RhsForm {
+    Index,
+    Paste { base: String, span: Span },
 }
 
 struct SeqStat {
@@ -393,7 +531,14 @@ enum Class {
 
 impl Program {
     fn from_body(body: Vec<TokenTree>) -> Self {
-        Self { ops: Vec::new(), tokens: Vec::new(), bytes: Vec::new(), source: body }
+        Self {
+            ops: Vec::new(),
+            tokens: Vec::new(),
+            bytes: Vec::new(),
+            source: body,
+            scope: Vec::new(),
+            bind_slots: 0,
+        }
     }
 
     fn pack_str(&mut self, text: &str) -> Result<(u32, u32)> {
@@ -418,8 +563,11 @@ impl Program {
         Ok(stat)
     }
     fn compile_into(&mut self, source: Source) -> Result<SeqStat> {
+        let mark = self.scope.len();
         let mut counts = Counts::new();
-        self.compile_range(&mut counts, source)?;
+        let compiled = self.compile_range(&mut counts, source);
+        self.scope.truncate(mark);
+        compiled?;
         Ok(SeqStat::new(&counts))
     }
     fn compile_bracket_sequence(
@@ -636,6 +784,82 @@ impl Program {
         self.source.truncate(inner_at);
         Ok(stat)
     }
+    /// `$name = Ident + #;` or `$name = #;`, and a later `$name`.
+    ///
+    /// A `$name` that is not in scope is left unchanged, so a nested `macro_rules`
+    /// metavariable stays in the output.
+    fn compile_binding(
+        &mut self,
+        counts: &mut Counts,
+        source: Source,
+        index: usize,
+    ) -> Result<Option<usize>> {
+        let head = {
+            let tokens = self.source_slice(source)?;
+            read_dollar(tokens, index)?
+        };
+        let Some(head) = head else {
+            return Ok(None);
+        };
+        match head.kind {
+            DollarKind::Mention => self.compile_mention(counts, &head.name, head.span, index),
+            DollarKind::Bind(rhs) => self.compile_defined(counts, &head.name, rhs),
+        }
+    }
+
+    fn compile_mention(
+        &mut self,
+        counts: &mut Counts,
+        name: &str,
+        span: Span,
+        index: usize,
+    ) -> Result<Option<usize>> {
+        if !self.scope_has(name) {
+            return Ok(None);
+        }
+        let (name_at, name_len) = self.pack_str(name)?;
+        self.flush_copy(counts)?;
+        self.push_op(counts, Op::Use { name_at, name_len, span }, false)?;
+        Ok(Some(index + 2))
+    }
+
+    fn compile_defined(
+        &mut self,
+        counts: &mut Counts,
+        name: &str,
+        rhs: ParsedRhs,
+    ) -> Result<Option<usize>> {
+        let next = rhs.next;
+        let (name_at, name_len) = self.pack_str(name)?;
+        self.scope.push(NameRef::new(name_at, name_len));
+        let rhs = self.pack_rhs(rhs.form)?;
+        self.flush_copy(counts)?;
+        self.push_op(counts, Op::Bind { name_at, name_len, rhs }, false)?;
+        self.bind_slots = Self::checked_add(self.bind_slots, 1)?;
+        Ok(Some(next))
+    }
+
+    fn pack_rhs(&mut self, form: RhsForm) -> Result<BindRhs> {
+        match form {
+            RhsForm::Index => Ok(BindRhs::Index),
+            RhsForm::Paste { base, span } => {
+                let (at, len) = self.pack_str(&base)?;
+                Ok(BindRhs::Paste { at, len, span })
+            }
+        }
+    }
+
+    fn scope_has(&self, name: &str) -> bool {
+        let Ok(len) = u32::try_from(name.len()) else {
+            return false;
+        };
+        let needle = name.as_bytes();
+        self.scope
+            .iter()
+            .rev()
+            .any(|entry| entry.len == len && byte_range(&self.bytes, entry.at, len) == Some(needle))
+    }
+
     fn compile_range(&mut self, counts: &mut Counts, source: Source) -> Result<()> {
         let mut index = 0;
         while index < source.len {
@@ -644,6 +868,9 @@ impl Program {
         self.flush_copy(counts)
     }
     fn compile_one(&mut self, counts: &mut Counts, source: Source, index: usize) -> Result<usize> {
+        if let Some(next) = self.compile_binding(counts, source, index)? {
+            return Ok(next);
+        }
         if let Some(next) = self.compile_bracket_sequence(counts, source, index)? {
             return Ok(next);
         }
@@ -972,6 +1199,16 @@ enum Step {
         pieces: u32,
     },
     Piece,
+    Bind {
+        name_at: u32,
+        name_len: u32,
+        rhs: BindRhs,
+    },
+    Use {
+        name_at: u32,
+        name_len: u32,
+        span: Span,
+    },
 }
 
 /// A list piece. The identifier is owned because the output token keeps it.
@@ -1001,7 +1238,15 @@ impl<'a> Emitting<'a> {
         Self { out, prog }
     }
 
-    fn emit_seq(&mut self, tape: Tape, ctx: &EvalCtx<'_>) -> Result<()> {
+    /// Emits `tape`. Bindings pushed for this tape are dropped before return.
+    fn emit_seq(&mut self, tape: Tape, ctx: &EvalCtx<'_>, env: &mut BindEnv) -> Result<()> {
+        let mark = env.len();
+        let emitted = self.emit_tape(tape, ctx, env);
+        env.truncate(mark);
+        emitted
+    }
+
+    fn emit_tape(&mut self, tape: Tape, ctx: &EvalCtx<'_>, env: &mut BindEnv) -> Result<()> {
         let mut at = tape.at;
         for _ in 0..tape.count {
             let (width, step) = self.step_at(at)?;
@@ -1009,7 +1254,7 @@ impl<'a> Emitting<'a> {
                 Step::Copy { at: tok_at, len } => self.emit_copy(tok_at, len)?,
                 Step::Group { delimiter, span, body } => {
                     let group = GroupEmit::new(at, delimiter, span, body);
-                    self.emit_group(&group, ctx)?;
+                    self.emit_group(&group, ctx, env)?;
                 }
                 Step::Index { span } => {
                     self.out
@@ -1020,17 +1265,40 @@ impl<'a> Emitting<'a> {
                 }
                 Step::List { pieces } => {
                     let body_at = at.checked_add(1).ok_or_else(Error::too_large)?;
-                    self.emit_list(Tape::new(body_at, pieces), ctx)?;
+                    self.emit_list(Tape::new(body_at, pieces), ctx, env)?;
                 }
                 Step::Piece => {
                     let mut emitted = false;
                     let mut out = ListOut::new(ctx, &mut emitted);
-                    self.emit_piece(at, &mut out)?;
+                    self.emit_piece(at, &mut out, env)?;
+                }
+                Step::Bind { name_at, name_len, rhs } => {
+                    env.capture(name_at, name_len, rhs, ctx.index)?;
+                }
+                Step::Use { name_at, name_len, span } => {
+                    self.emit_use(env, name_at, name_len, span)?;
                 }
             }
             at = at.checked_add(width).ok_or_else(Error::too_large)?;
         }
         Ok(())
+    }
+
+    fn emit_use(&mut self, env: &BindEnv, name_at: u32, name_len: u32, span: Span) -> Result<()> {
+        let Some(value) = env.find(&self.prog.bytes, name_at, name_len) else {
+            return Err(Error::new(span, ErrorKind::UnknownBinding));
+        };
+        match value {
+            Captured::Index { value } => {
+                let mut literal = Literal::i128_unsuffixed(value);
+                literal.set_span(span);
+                self.out.extend([TokenTree::Literal(literal)]);
+                Ok(())
+            }
+            Captured::Paste { at, len, index } => {
+                self.emit_pasted(self.prog.text(at, len)?, index, span)
+            }
+        }
     }
 
     /// Width and opcode of the instruction at `at`, without cloning it.
@@ -1048,23 +1316,34 @@ impl<'a> Emitting<'a> {
             Op::Index { span } => Step::Index { span: *span },
             Op::Paste { at, len, span } => Step::Paste { at: *at, len: *len, span: *span },
             Op::List { pieces } => Step::List { pieces: *pieces },
+            Op::Bind { name_at, name_len, rhs } => {
+                Step::Bind { name_at: *name_at, name_len: *name_len, rhs: *rhs }
+            }
+            Op::Use { name_at, name_len, span } => {
+                Step::Use { name_at: *name_at, name_len: *name_len, span: *span }
+            }
             Op::Ident(_) | Op::Off(_) | Op::Named { .. } | Op::Rows { .. } => Step::Piece,
         };
         Ok((width, step))
     }
 
-    fn emit_group(&mut self, group: &GroupEmit, ctx: &EvalCtx<'_>) -> Result<()> {
+    fn emit_group(
+        &mut self,
+        group: &GroupEmit,
+        ctx: &EvalCtx<'_>,
+        env: &mut BindEnv,
+    ) -> Result<()> {
         let mut inner = TokenStream::new();
         let body_at = group.at.checked_add(1).ok_or_else(Error::too_large)?;
         let tape = Tape::new(body_at, group.body);
-        inner.with_program(self.prog).emit_seq(tape, ctx)?;
+        inner.with_program(self.prog).emit_seq(tape, ctx, env)?;
         let mut built = Group::new(group.delimiter, inner);
         built.set_span(group.span);
         self.out.extend([TokenTree::Group(built)]);
         Ok(())
     }
 
-    fn emit_list(&mut self, tape: Tape, ctx: &EvalCtx<'_>) -> Result<()> {
+    fn emit_list(&mut self, tape: Tape, ctx: &EvalCtx<'_>, env: &mut BindEnv) -> Result<()> {
         let mut emitted = false;
         let mut out = ListOut::new(ctx, &mut emitted);
         let mut at = tape.at;
@@ -1079,13 +1358,13 @@ impl<'a> Emitting<'a> {
             if width == 0 {
                 return Err(Error::too_large());
             }
-            self.emit_piece(at, &mut out)?;
+            self.emit_piece(at, &mut out, env)?;
             at = at.checked_add(width).ok_or_else(Error::too_large)?;
         }
         Ok(())
     }
 
-    fn emit_piece(&mut self, at: usize, out: &mut ListOut<'_>) -> Result<()> {
+    fn emit_piece(&mut self, at: usize, out: &mut ListOut<'_>, env: &mut BindEnv) -> Result<()> {
         let piece = {
             let op = &self.prog.ops.get(at).ok_or_else(Error::too_large)?.op;
             match op {
@@ -1100,7 +1379,9 @@ impl<'a> Emitting<'a> {
                 | Op::Group { .. }
                 | Op::Index { .. }
                 | Op::Paste { .. }
-                | Op::List { .. } => return Err(Error::too_large()),
+                | Op::List { .. }
+                | Op::Bind { .. }
+                | Op::Use { .. } => return Err(Error::too_large()),
             }
         };
         match piece {
@@ -1115,7 +1396,7 @@ impl<'a> Emitting<'a> {
             Piece::Rows { span, pattern, body } => {
                 let body_at = at.checked_add(1).ok_or_else(Error::too_large)?;
                 let row = RowHead::new(body_at, span, pattern, body);
-                self.emit_rows(out, &row)
+                self.emit_rows(out, &row, env)
             }
         }
     }
@@ -1171,7 +1452,7 @@ impl<'a> Emitting<'a> {
         })
     }
 
-    fn emit_rows(&mut self, out: &mut ListOut<'_>, row: &RowHead) -> Result<()> {
+    fn emit_rows(&mut self, out: &mut ListOut<'_>, row: &RowHead, env: &mut BindEnv) -> Result<()> {
         let ctx = *out.ctx;
         let domain = ctx.domain;
         let range = row.pattern.to_range();
@@ -1180,7 +1461,7 @@ impl<'a> Emitting<'a> {
             let tape = Tape::new(row.at, row.body);
             inner
                 .with_program(self.prog)
-                .emit_seq(tape, &EvalCtx::new(index, domain))?;
+                .emit_seq(tape, &EvalCtx::new(index, domain), env)?;
             self.push_comma(out.emitted);
             let mut group = Group::new(Delimiter::Parenthesis, inner);
             group.set_span(row.span);
@@ -1346,4 +1627,89 @@ impl SourceTokens for [TokenTree] {
 
 fn paste_base(text: &str) -> &str {
     text.strip_prefix("r#").unwrap_or(text)
+}
+
+fn normalized_ident(name: &Ident) -> String {
+    let text = name.to_string();
+    match text.strip_prefix("r#") {
+        Some(raw) => raw.to_string(),
+        None => text,
+    }
+}
+
+fn byte_range(bytes: &[u8], at: u32, len: u32) -> Option<&[u8]> {
+    let start = usize::try_from(at).ok()?;
+    let width = usize::try_from(len).ok()?;
+    let end = start.checked_add(width)?;
+    bytes.get(start..end)
+}
+
+fn names_equal(bytes: &[u8], left_at: u32, right_at: u32, len: u32) -> bool {
+    match (
+        byte_range(bytes, left_at, len),
+        byte_range(bytes, right_at, len),
+    ) {
+        (Some(left), Some(right)) => left == right,
+        _ => false,
+    }
+}
+
+fn read_dollar(tokens: &[TokenTree], index: usize) -> Result<Option<DollarHead>> {
+    if !tokens.is_punct_at(index, '$') {
+        return Ok(None);
+    }
+    let Some(TokenTree::Ident(ident)) = tokens.get(index + 1) else {
+        return Ok(None);
+    };
+    let name = normalized_ident(ident);
+    let span = ident.span();
+    if !tokens.is_punct_at(index + 2, '=') {
+        return Ok(Some(DollarHead { name, span, kind: DollarKind::Mention }));
+    }
+    let rhs = parse_binding_rhs(tokens, index)?;
+    Ok(Some(DollarHead { name, span, kind: DollarKind::Bind(rhs) }))
+}
+
+fn parse_binding_rhs(tokens: &[TokenTree], index: usize) -> Result<ParsedRhs> {
+    let rhs = index + 3;
+    if let Some(parsed) = binding_index(tokens, rhs) {
+        return Ok(parsed);
+    }
+    if let Some(parsed) = binding_paste(tokens, rhs) {
+        return Ok(parsed);
+    }
+    Err(Error::new(
+        binding_span(tokens, index),
+        ErrorKind::BindingForm,
+    ))
+}
+
+fn binding_index(tokens: &[TokenTree], rhs: usize) -> Option<ParsedRhs> {
+    if tokens.is_bare_hash(rhs) && tokens.is_punct_at(rhs + 1, ';') {
+        Some(ParsedRhs { next: rhs + 2, form: RhsForm::Index })
+    } else {
+        None
+    }
+}
+
+fn binding_paste(tokens: &[TokenTree], rhs: usize) -> Option<ParsedRhs> {
+    let TokenTree::Ident(ident) = tokens.get(rhs)? else {
+        return None;
+    };
+    if !(tokens.is_plus_at(rhs + 1)
+        && tokens.is_bare_hash(rhs + 2)
+        && tokens.is_punct_at(rhs + 3, ';'))
+    {
+        return None;
+    }
+    let base = normalized_ident(ident);
+    let span = ident.span();
+    Some(ParsedRhs { next: rhs + 4, form: RhsForm::Paste { base, span } })
+}
+
+fn binding_span(tokens: &[TokenTree], index: usize) -> Span {
+    tokens
+        .get(index + 3)
+        .or_else(|| tokens.get(index + 2))
+        .map_or_else(Span::call_site, TokenTree::span)
 }

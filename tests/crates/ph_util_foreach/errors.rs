@@ -148,6 +148,34 @@ fn pattern_errors() {
 }
 
 #[test]
+fn index_binding_rejects_a_bad_right_hand_side() {
+    assert_err(
+        "impl_foreach!(range = 0..1, body = { $id = Ix; });",
+        "$name = Ident + #;",
+    );
+    assert_err(
+        "impl_foreach!(range = 0..1, body = { $id = Ix #; });",
+        "$name = Ident + #;",
+    );
+    assert_err(
+        "impl_foreach!(range = 0..1, body = { $id = Ix # });",
+        "$name = Ident + #;",
+    );
+    assert_err(
+        "impl_foreach!(range = 0..1, body = { $id = Ix + # });",
+        "$name = Ident + #;",
+    );
+    assert_err(
+        "impl_foreach!(range = 0..1, body = { $id = #+1; });",
+        "$name = Ident + #;",
+    );
+    assert_err(
+        "impl_foreach!(range = -1..0, body = { $id = Ix + #; });",
+        "cannot paste a negative index",
+    );
+}
+
+#[test]
 fn unnamed_trailing_block_is_valid() {
     impl_foreach!(0..2 {
         let _k = #;
