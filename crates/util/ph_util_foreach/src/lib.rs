@@ -45,9 +45,9 @@ mod range;
 /// assert_eq!(passed0(), 0);
 /// assert_eq!(passed1(), 1);
 /// ```
-/// `Name[0..4]` expands to the comma-separated identifiers `Name0, Name1, Name2, Name3`.
-/// Sequence pieces concatenate only with `+` (`X + Name[..]`). `X Name[..]` is a
-/// compile error.
+/// `Name[0..4]` and `repeat(Name, 0..4)` expand to the comma-separated identifiers
+/// `Name0, Name1, Name2, Name3`. A list is comma-separated: `X, repeat(Name, ..)`.
+/// `X Name[..]` and `X + Name[..]` are compile errors. `Name[n]` is not a range.
 ///
 /// An outer range must be finite (`A..B`, `A..=B`, or `(A..B).step_by(S)`).
 /// Parentheses around the range are required for `step_by`. Open ranges such as

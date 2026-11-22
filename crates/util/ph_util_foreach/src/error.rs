@@ -67,8 +67,10 @@ pub(crate) enum ErrorKind {
     ExpectedBody,
     #[error("unexpected token after the body")]
     UnexpectedAfterBody,
-    #[error("write `+` to concatenate; `X Name[..]` is not concatenation")]
+    #[error("write `repeat(Name, range)`, separated by commas; `X Name[..]` is not a list")]
     NotConcat,
+    #[error("write `repeat(Ident, range)` or `repeat((row), range)`")]
+    RepeatForm,
     #[error("cannot paste a negative index into an identifier")]
     NegativePaste,
     #[error("write `paste(Ident, n)` to paste an index")]

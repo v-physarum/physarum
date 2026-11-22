@@ -7,15 +7,15 @@
 //! `macro_rules` metavariable still works.
 //!
 //! Flat mode repeats the body once per outer index and clips patterns to that
-//! full index set. Fan mode is selected when a bracket pattern mentions the
-//! loop variable (including `Name[n]` and `Off[n]`). Each fan copy still uses
-//! one outer index, but the domain is the prefix `0..=index`.
+//! full index set. Fan mode is selected when a range bound mentions the loop
+//! variable (`Name[0..=n]`, `repeat(Name, ..=n)`). Each fan copy still uses one
+//! outer index, but the domain is the prefix `0..=index`.
 
 use proc_macro2::{Delimiter, Group, Ident, Literal, Punct, Spacing, Span, TokenStream, TokenTree};
 use syn::Expr;
 
 use crate::error::{Error, ErrorKind, Result};
-use crate::range::{Domain, EvalCtx, Pattern, RangeExpr};
+use crate::range::{BoundStyle, Domain, EvalCtx, RangeExpr};
 
 pub(crate) fn expand(input: TokenStream) -> Result<TokenStream> {
     let call = split_call(input)?;
@@ -161,17 +161,15 @@ enum Rhs {
 enum Piece {
     Ident {
         ident: Ident,
-        /// `Off[n]` selects fan mode and emits the bare identifier.
-        fan: bool,
     },
     Named {
         base: String,
         span: Span,
-        pattern: Pattern,
+        pattern: RangeExpr,
     },
     Rows {
         span: Span,
-        pattern: Pattern,
+        pattern: RangeExpr,
         body: Seq,
     },
 }
@@ -180,11 +178,11 @@ enum Found {
     Named {
         raw: String,
         span: Span,
-        pattern: Pattern,
+        pattern: RangeExpr,
     },
     Rows {
         span: Span,
-        pattern: Pattern,
+        pattern: RangeExpr,
         inner: Vec<TokenTree>,
     },
 }
@@ -210,9 +208,9 @@ impl Node {
 impl Piece {
     fn is_fan(&self) -> bool {
         match self {
-            Self::Ident { fan, .. } => *fan,
-            Self::Named { pattern, .. } => pattern.uses_index(),
-            Self::Rows { pattern, body, .. } => pattern.uses_index() || body.fan,
+            Self::Ident { .. } => false,
+            Self::Named { pattern, .. } => pattern.mentions_index(),
+            Self::Rows { pattern, body, .. } => pattern.mentions_index() || body.fan,
         }
     }
 }
@@ -290,13 +288,16 @@ impl<'a> Cursor<'a> {
         if let Some(node) = self.pull_binding(scope, binds)? {
             return Ok(node);
         }
+        if let Some(node) = self.pull_repeat_list(scope, binds)? {
+            return Ok(node);
+        }
         if let Some(node) = self.pull_bracket_list(scope, binds)? {
             return Ok(node);
         }
         if let Some(node) = self.pull_paste()? {
             return Ok(node);
         }
-        if let Some(node) = self.pull_prefixed(scope, binds)? {
+        if let Some(node) = self.pull_prefixed()? {
             return Ok(node);
         }
         if let Some(node) = self.pull_index()? {
@@ -418,6 +419,137 @@ impl<'a> Cursor<'a> {
         Ok(Node::Copy(vec![token]))
     }
 
+    /// `repeat(Ident, range)`, optionally with leading idents and a comma-separated tail.
+    ///
+    /// `K, repeat(Name, 0..2), Off` is one list. A comma is emitted only between
+    /// pieces that produce tokens, so an empty `repeat` drops the comma beside it.
+    fn pull_repeat_list(
+        &mut self,
+        scope: &mut Vec<String>,
+        binds: &mut u32,
+    ) -> Result<Option<Node>> {
+        let mut pieces = Vec::new();
+        if let Some(skip) = self.idents_before_repeat() {
+            for ident in skip {
+                pieces.push(Piece::Ident { ident });
+            }
+        }
+        if !self.is_repeat_call(0) {
+            return Ok(None);
+        }
+        pieces.push(self.take_repeat(scope, binds)?);
+        while self.is_punct(0, ',') {
+            if self.is_repeat_call(1) {
+                self.advance(1)?;
+                pieces.push(self.take_repeat(scope, binds)?);
+                continue;
+            }
+            if self.is_bare_piece(1) {
+                let Some(TokenTree::Ident(ident)) = self.peek(1).cloned() else {
+                    break;
+                };
+                self.advance(2)?;
+                pieces.push(Piece::Ident { ident });
+                continue;
+            }
+            break;
+        }
+        Ok(Some(Node::List { pieces }))
+    }
+
+    /// Idents separated by commas that sit in front of `repeat(...)`.
+    ///
+    /// The cursor is moved onto that `repeat`. `None` means this is not such a prefix.
+    fn idents_before_repeat(&mut self) -> Option<Vec<Ident>> {
+        let mut at = 0;
+        let mut idents = Vec::new();
+        loop {
+            let Some(TokenTree::Ident(ident)) = self.peek(at) else {
+                return None;
+            };
+            if self.is_repeat_call(at) {
+                if idents.is_empty() {
+                    return None;
+                }
+                self.at = self.at.checked_add(at)?;
+                return Some(idents);
+            }
+            if ident == self.index || ident == "paste" || ident == "repeat" {
+                return None;
+            }
+            if !self.is_punct(at + 1, ',') {
+                return None;
+            }
+            idents.push(ident.clone());
+            at = at.checked_add(2)?;
+        }
+    }
+
+    fn is_repeat_call(&self, offset: usize) -> bool {
+        match (self.peek(offset), self.peek(offset + 1)) {
+            (Some(TokenTree::Ident(name)), Some(TokenTree::Group(group))) => {
+                name == "repeat" && group.delimiter() == Delimiter::Parenthesis
+            }
+            _ => false,
+        }
+    }
+
+    /// An identifier that is one list element, not a call, a pattern, or the loop variable.
+    fn is_bare_piece(&self, offset: usize) -> bool {
+        let Some(TokenTree::Ident(ident)) = self.peek(offset) else {
+            return false;
+        };
+        if ident == self.index || ident == "repeat" || ident == "paste" {
+            return false;
+        }
+        match self.peek(offset + 1) {
+            Some(TokenTree::Group(group))
+                if matches!(
+                    group.delimiter(),
+                    Delimiter::Parenthesis | Delimiter::Bracket
+                ) =>
+            {
+                false
+            }
+            Some(TokenTree::Punct(punct)) if matches!(punct.as_char(), '!' | ':') => false,
+            _ => true,
+        }
+    }
+
+    fn take_repeat(&mut self, scope: &mut Vec<String>, binds: &mut u32) -> Result<Piece> {
+        let span = self.peek(0).map_or_else(Span::call_site, TokenTree::span);
+        let Some(TokenTree::Group(group)) = self.peek(1).cloned() else {
+            return Err(Error::new(span, ErrorKind::RepeatForm));
+        };
+        let tokens: Vec<TokenTree> = group.stream().into_iter().collect();
+        let mut args = split_commas(&tokens);
+        let Some(range_tokens) = args.pop() else {
+            return Err(Error::new(span, ErrorKind::RepeatForm));
+        };
+        let Some(head) = args.pop() else {
+            return Err(Error::new(span, ErrorKind::RepeatForm));
+        };
+        if !args.is_empty() {
+            return Err(Error::new(span, ErrorKind::RepeatForm));
+        }
+        let pattern = RangeExpr::parse(&range_tokens, self.index, BoundStyle::Pattern)?;
+        let piece = match head.as_slice() {
+            [TokenTree::Ident(base)] => Piece::Named {
+                base: paste_base(&base.to_string()).to_string(),
+                span: base.span(),
+                pattern,
+            },
+            [TokenTree::Group(inner)] if inner.delimiter() == Delimiter::Parenthesis => {
+                let inner_tokens: Vec<TokenTree> = inner.stream().into_iter().collect();
+                let body = parse_seq(&inner_tokens, self.index, scope, binds)?;
+                Piece::Rows { span: inner.span(), pattern, body }
+            }
+            _ => return Err(Error::new(span, ErrorKind::RepeatForm)),
+        };
+        self.advance(2)?;
+        Ok(piece)
+    }
+
     fn pull_bracket_list(
         &mut self,
         scope: &mut Vec<String>,
@@ -429,20 +561,14 @@ impl<'a> Cursor<'a> {
         self.collect_list(Vec::new(), scope, binds).map(Some)
     }
 
-    fn pull_prefixed(&mut self, scope: &mut Vec<String>, binds: &mut u32) -> Result<Option<Node>> {
-        let Some(TokenTree::Ident(ident)) = self.peek(0).cloned() else {
+    fn pull_prefixed(&mut self) -> Result<Option<Node>> {
+        let Some(TokenTree::Ident(ident)) = self.peek(0) else {
             return Ok(None);
         };
-        if self.is_punct(1, '+') {
-            if self.pattern_at(2)?.is_none() {
-                return Ok(None);
-            }
-            self.advance(2)?;
-            let prefix = Piece::Ident { ident, fan: false };
-            return self.collect_list(vec![prefix], scope, binds).map(Some);
-        }
-        if self.pattern_at(1)?.is_some() {
-            return Err(Error::new(ident.span(), ErrorKind::NotConcat));
+        let span = ident.span();
+        let joined = self.is_punct(1, '+') && self.pattern_at(2)?.is_some();
+        if joined || self.pattern_at(1)?.is_some() {
+            return Err(Error::new(span, ErrorKind::NotConcat));
         }
         Ok(None)
     }
@@ -453,21 +579,13 @@ impl<'a> Cursor<'a> {
         scope: &mut Vec<String>,
         binds: &mut u32,
     ) -> Result<Node> {
-        let started = pieces.len();
-        loop {
-            let found = self.take_piece()?;
-            let Some(found) = found else {
-                break;
-            };
-            pieces.push(lower(found, self.index, scope, binds)?);
-            if self.is_punct(0, '+') && self.pattern_at(1)?.is_some() {
-                self.advance(1)?;
-                continue;
-            }
-            break;
-        }
-        if pieces.len() == started {
+        let Some(found) = self.take_piece()? else {
             return Err(Error::too_large());
+        };
+        pieces.push(lower(found, self.index, scope, binds)?);
+        if self.is_punct(0, '+') && self.pattern_at(1)?.is_some() {
+            let span = self.peek(0).map_or_else(Span::call_site, TokenTree::span);
+            return Err(Error::new(span, ErrorKind::NotConcat));
         }
         Ok(Node::List { pieces })
     }
@@ -492,7 +610,7 @@ impl<'a> Cursor<'a> {
         Ok(Some(found))
     }
 
-    fn pattern_at(&self, offset: usize) -> Result<Option<Pattern>> {
+    fn pattern_at(&self, offset: usize) -> Result<Option<RangeExpr>> {
         let Some(head) = self.peek(offset) else {
             return Ok(None);
         };
@@ -516,9 +634,6 @@ impl<'a> Cursor<'a> {
 fn lower(found: Found, index: &str, scope: &mut Vec<String>, binds: &mut u32) -> Result<Piece> {
     match found {
         Found::Named { raw, span, pattern } => {
-            if pattern.is_off(&raw) {
-                return Ok(Piece::Ident { ident: Ident::new("Off", span), fan: true });
-            }
             Ok(Piece::Named { base: paste_base(&raw).to_string(), span, pattern })
         }
         Found::Rows { span, pattern, inner } => {
@@ -526,6 +641,21 @@ fn lower(found: Found, index: &str, scope: &mut Vec<String>, binds: &mut u32) ->
             Ok(Piece::Rows { span, pattern, body })
         }
     }
+}
+
+/// Splits `tokens` on commas that are not nested in a group.
+fn split_commas(tokens: &[TokenTree]) -> Vec<Vec<TokenTree>> {
+    let mut args = Vec::new();
+    let mut current = Vec::new();
+    for token in tokens {
+        if matches!(token, TokenTree::Punct(punct) if punct.as_char() == ',') {
+            args.push(std::mem::take(&mut current));
+            continue;
+        }
+        current.push(token.clone());
+    }
+    args.push(current);
+    args
 }
 
 /// Bindings captured while one index is emitted.
@@ -652,14 +782,14 @@ fn emit_list<'a>(
                 out.extend([TokenTree::Ident(ident.clone())]);
             }
             Piece::Named { base, span, pattern } => {
-                pattern.to_range().visit(ctx, |index| {
+                pattern.visit(ctx, |index| {
                     push_comma(out, &mut emitted);
                     emit_pasted(out, base, index, *span)
                 })?;
             }
             Piece::Rows { span, pattern, body } => {
                 let domain = *ctx.domain;
-                pattern.to_range().visit(ctx, |index| {
+                pattern.visit(ctx, |index| {
                     let mut inner = TokenStream::new();
                     emit(body, &EvalCtx::new(index, &domain), env, &mut inner)?;
                     push_comma(out, &mut emitted);

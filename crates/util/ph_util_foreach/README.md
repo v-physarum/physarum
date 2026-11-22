@@ -58,16 +58,18 @@ Exactly one pattern is allowed in one pair of brackets. `A[0..n, Off]` is a comp
 | --- | --- |
 | `n` | the current index as an integer literal |
 | `paste(Ix, n)` | the identifier `Ix` with the decimal digits of the index appended |
-| `Name[n]` | `Name[0..=n]` |
-| `Off[n]` | the identifier `Off`, with no digits |
+| `Name[0..=n]` | the identifiers `Name0` through `Namen` |
+| `repeat(Name, 0..=n)` | the same identifiers |
 
 `paste(Ix, n)` pastes a non-negative index. A negative index is a compile error. `paste` takes one identifier and the loop variable: `paste(Ix, n + 1)` is a compile error. A `paste` that is not a call is an ordinary identifier.
 
-`+` concatenates sequence pieces. `X + Name[0..2]` expands to `X, Name0, Name1`. `X Name[0..2]` is a compile error. `paste(Ix, n) + 1` is the identifier `Ix0` followed by `+ 1`.
+`repeat(Name, 0..2)` expands to `Name0, Name1`. A comma separates list pieces, and an empty `repeat` drops the comma beside it: `X, repeat(Name, ..)` expands to `X, Name0, Name1`. `repeat((paste(T, n), paste(U, n)), 0..3)` repeats the row. `X Name[0..2]` and `X + Name[0..2]` are compile errors. `paste(Ix, n) + 1` is the identifier `Ix0` followed by `+ 1`.
+
+`Name[n]` is not a range. It stays a bracket with the index substituted, so at index 0 it is `Name[0]`. Write `Name[0..=n]` or `repeat(Name, 0..=n)`.
 
 Inside a tuple row, the loop variable is the row index. `(paste(T, n), paste(U, n))[0..3]` expands to `(T0, U0), (T1, U1), (T2, U2)`.
 
-`#[...]` and `#![...]` stay attributes. `arr[(n)]` becomes `arr[(0)]`, because the parentheses are not the shorthand. `Off[0..2]` is `Off0, Off1`. Only `Off[n]` is the bare hole marker.
+`#[...]` and `#![...]` stay attributes. `arr[(n)]` becomes `arr[(0)]`. `Off[0..2]` and `repeat(Off, 0..2)` are `Off0, Off1`. A bare `Off` between repeats is the hole marker.
 
 ## Index bindings
 
@@ -90,7 +92,7 @@ Any other right-hand side is a compile error. The statement needs the trailing `
 
 Flat mode emits one copy per outer index. The domain is the outer set. `pub struct paste(Ix, n);` is flat. A step that mentions the loop variable stays flat when no pattern bound does.
 
-Fan mode is used when a pattern bound mentions the loop variable, including the shorthand `Name[n]` and `Off[n]`. `end` does not select fan. Fan mode still emits one copy per outer index. The domain is `0..=n`.
+Fan mode is used when a range bound mentions the loop variable, as in `Name[0..=n]` or `repeat(Name, ..=n)`. `end` does not select fan. Fan mode still emits one copy per outer index. The domain is `0..=n`.
 
 ```rust
 impl_foreach!(n in 0..4 {
@@ -98,7 +100,7 @@ impl_foreach!(n in 0..4 {
         args: (T[..=n]),
         ix: paste(Ix, n),
         out: paste(T, n),
-        rest: T[..n] + Off[n] + T[n + 1..=n],
+        rest: repeat(T, ..n), Off, repeat(T, n + 1..=n),
     );
 });
 ```
@@ -120,6 +122,8 @@ A syntax or range error expands to `compile_error!`. That includes:
 - a bound outside the domain;
 - more than one range in one pair of brackets;
 - a `paste(...)` that is not `paste(Ident, n)`;
+- a `repeat(...)` that is not `repeat(Ident, range)` or `repeat((row), range)`;
+- `X Name[..]` or `X + Name[..]` where `repeat(Name, range)` is required;
 - an index binding that is not `$name = paste(Ident, n);` or `$name = n;`.
 
 An empty hole-edge slice expands to no tokens.

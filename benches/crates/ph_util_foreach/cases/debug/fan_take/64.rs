@@ -21,6 +21,6 @@ impl_foreach!(n in 0..CASE_LEN {
         args: (T[..=n]),
         ix: paste(Ix, n),
         out: paste(T, n),
-        rest: T[..n] + Off[n] + T[n + 1..=n],
+        rest: repeat(T, ..n), Off, repeat(T, n + 1..=n),
     );
 });

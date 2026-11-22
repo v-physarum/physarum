@@ -118,15 +118,11 @@ impl RangeExpr {
         RangeExprBuilder::new(span)
     }
 
-    fn shorthand(span: Span) -> Self {
-        Self::builder(span)
-            .start(Some(SpannedBound::int(0, span)))
-            .end(Some(SpannedBound::here(0, span)))
-            .end_inclusive(true)
-            .build()
-    }
-
-    fn mentions_index(self) -> bool {
+    /// Whether a bound mentions the loop variable.
+    ///
+    /// A step that mentions the variable does not count: the domain stays the
+    /// flat outer set, and only the stride changes with the index.
+    pub(crate) fn mentions_index(self) -> bool {
         let start = self.start.is_some_and(SpannedBound::mentions_index);
         let end = self.end.is_some_and(SpannedBound::mentions_index);
         start || end
@@ -206,8 +202,8 @@ impl RangeExpr {
         } else {
             Window::Exclusive(start..end)
         };
-        // `T[n + 1..=n]` when `n` is the last index: the window is empty and the
-        // start sits one past the domain. That hole edge is allowed.
+        // `repeat(T, n + 1..=n)` when `n` is the last index: the window is empty
+        // and the start sits one past the domain. That hole edge is allowed.
         if window.is_high_hole(ctx.domain) {
             return Ok(());
         }
@@ -258,41 +254,6 @@ impl RangeExprBuilder {
 
     fn build(self) -> RangeExpr {
         RangeExpr::new(self)
-    }
-}
-
-/// A bracket pattern.
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum Pattern {
-    /// `Name[n]`, defined as `Name[0..=n]`.
-    Shorthand { span: Span },
-    /// An explicit range.
-    Range(RangeExpr),
-}
-
-impl Pattern {
-    /// Whether a bound of this pattern mentions the loop variable.
-    ///
-    /// A step that mentions the variable does not count: the domain stays the
-    /// flat outer set, and only the stride changes with the index.
-    pub(crate) fn uses_index(self) -> bool {
-        match self {
-            Self::Shorthand { .. } => true,
-            Self::Range(range) => range.mentions_index(),
-        }
-    }
-
-    /// The range this pattern selects. `Name[n]` is `0..=n`.
-    pub(crate) fn to_range(self) -> RangeExpr {
-        match self {
-            Self::Shorthand { span } => RangeExpr::shorthand(span),
-            Self::Range(range) => range,
-        }
-    }
-
-    /// `Off[n]`: the shorthand pattern on the name `Off`.
-    pub(crate) fn is_off(self, raw: &str) -> bool {
-        raw == "Off" && matches!(self, Self::Shorthand { .. })
     }
 }
 
@@ -657,17 +618,14 @@ enum Opened<'a> {
 /// Parses one bracket as a pattern.
 ///
 /// `None` means the brackets are ordinary Rust and stay as written. A lone
-/// loop variable is the shorthand `0..=index`.
+/// loop variable is not a range: `Name[n]` stays `Name[n]`.
 pub(crate) fn classify_bracket(
     tokens: &[TokenTree],
     index: &str,
     span: Span,
-) -> Result<Option<Pattern>> {
+) -> Result<Option<RangeExpr>> {
     if tokens.is_empty() {
         return Ok(None);
-    }
-    if is_only_index(tokens, index) {
-        return Ok(Some(Pattern::Shorthand { span }));
     }
     let expr = match syn_expr(tokens) {
         Ok(expr) => expr,
@@ -677,22 +635,19 @@ pub(crate) fn classify_bracket(
         Err(_) => return Ok(None),
     };
     match opened(&expr) {
-        Opened::Range(range) => {
-            let built = range_from_range(range, index, BoundStyle::Pattern, span)?;
-            Ok(Some(Pattern::Range(built)))
-        }
-        Opened::Step(call) => {
-            let built = range_from_method(call, index, BoundStyle::Pattern, span)?;
-            Ok(Some(Pattern::Range(built)))
-        }
+        Opened::Range(range) => Ok(Some(range_from_range(
+            range,
+            index,
+            BoundStyle::Pattern,
+            span,
+        )?)),
+        Opened::Step(call) => Ok(Some(range_from_method(
+            call,
+            index,
+            BoundStyle::Pattern,
+            span,
+        )?)),
         Opened::Other => Ok(None),
-    }
-}
-
-fn is_only_index(tokens: &[TokenTree], index: &str) -> bool {
-    match tokens {
-        [TokenTree::Ident(name)] => name == index,
-        _ => false,
     }
 }
 

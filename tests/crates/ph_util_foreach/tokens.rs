@@ -186,7 +186,7 @@ impl_foreach!(n in 0..=4 {
 
 impl_foreach!(n in 0..3 {
     pub mod paste(flat_full, n) {
-        pub const TEXT: &str = stringify!(X + Name[..];);
+        pub const TEXT: &str = stringify!(X, repeat(Name, ..););
     }
     pub mod paste(flat_paste, n) {
         pub const TEXT: &str = stringify!(paste(Ix, n) Name[..];);
@@ -195,46 +195,46 @@ impl_foreach!(n in 0..3 {
 
 impl_foreach!(n in 0..3 {
     pub mod paste(fan_prefix, n) {
-        pub const TEXT: &str = stringify!(X + Name[..]; Y + Name[..=n];);
+        pub const TEXT: &str = stringify!(X, repeat(Name, ..); Y, repeat(Name, ..=n););
     }
     pub mod paste(fan_short, n) {
-        pub const TEXT: &str = stringify!(K + Name[n];);
+        pub const TEXT: &str = stringify!(K, repeat(Name, 0..=n););
     }
     pub mod paste(fan_row, n) {
-        pub const TEXT: &str = stringify!(K + (paste(T, n))[..=n];);
+        pub const TEXT: &str = stringify!(K, repeat((paste(T, n)), ..=n););
     }
 });
 
 impl_foreach!(n in (0..6).step_by(2) {
     pub mod paste(fan_step, n) {
-        pub const TEXT: &str = stringify!(K + Name[..=n];);
+        pub const TEXT: &str = stringify!(K, repeat(Name, ..=n););
     }
 });
 
 impl_foreach!(n in (0..6).step_by(2) {
     pub mod paste(flat_step, n) {
-        pub const TEXT: &str = stringify!(K + Name[..];);
+        pub const TEXT: &str = stringify!(K, repeat(Name, ..););
     }
 });
 
 impl_foreach!(n in (0..10).step_by(2) {
     pub mod paste(gap_all, n) {
-        pub const TEXT: &str = stringify!(K + Name[0..10];);
+        pub const TEXT: &str = stringify!(K, repeat(Name, 0..10););
     }
     pub mod paste(gap_mid, n) {
-        pub const TEXT: &str = stringify!(K + Name[1..=7];);
+        pub const TEXT: &str = stringify!(K, repeat(Name, 1..=7););
     }
 });
 
 impl_foreach!(n in 0..2 {
     pub mod paste(off_seq, n) {
-        pub const TEXT: &str = stringify!(K + Off[0..2];);
+        pub const TEXT: &str = stringify!(K, repeat(Off, 0..2););
     }
     pub mod paste(empty_plus, n) {
-        pub const TEXT: &str = stringify!(K + Name[0..0] + Name[0..2];);
+        pub const TEXT: &str = stringify!(K, repeat(Name, 0..0), repeat(Name, 0..2););
     }
     pub mod paste(plus_literal, n) {
-        pub const TEXT: &str = stringify!(K + Name[0..2] + 1;);
+        pub const TEXT: &str = stringify!(K, repeat(Name, 0..2) + 1;);
     }
     pub mod paste(paste_plus, n) {
         pub const TEXT: &str = stringify!(let x = paste(Ix, n) + 1;);
@@ -246,37 +246,43 @@ impl_foreach!(n in 0..2 {
 
 impl_foreach!(n in 0..2 {
     pub mod paste(off_bare, n) {
-        pub const TEXT: &str = stringify!(K + Off[n];);
+        pub const TEXT: &str = stringify!(K, Off;);
     }
     pub mod paste(hole, n) {
-        pub const TEXT: &str = stringify!(K + Name[n + 1..=n];);
+        pub const TEXT: &str = stringify!(K, repeat(Name, n + 1..=n););
     }
 });
 
 impl_foreach!(n in 0..3 {
     pub mod paste(rows, n) {
-        pub const TEXT: &str = stringify!(K + (paste(T, n), paste(U, n))[0..3];);
+        pub const TEXT: &str = stringify!(K, repeat((paste(T, n), paste(U, n)), 0..3););
     }
 });
 
 impl_foreach!(n in 1..3 {
     pub mod paste(offset, n) {
-        pub const TEXT: &str = stringify!(K + Name[n - 1..=n];);
+        pub const TEXT: &str = stringify!(K, repeat(Name, n - 1..=n););
     }
     pub mod paste(step_hash, n) {
-        pub const TEXT: &str = stringify!(K + Name[(0..=n).step_by(n + 1)];);
+        pub const TEXT: &str = stringify!(K, repeat(Name, (0..=n).step_by(n + 1)););
     }
 });
 
 impl_foreach!(n in 0..4 {
     pub mod paste(hole_edge, n) {
-        pub const TEXT: &str = stringify!(K + Name[4..=3];);
+        pub const TEXT: &str = stringify!(K, repeat(Name, 4..=3););
     }
 });
 
 impl_foreach!(n in 0..1 {
     pub mod paste(ordinary, n) {
         pub const TEXT: &str = stringify!(let x = values[i]; let y = Name[];);
+    }
+    pub mod paste(not_short, n) {
+        pub const TEXT: &str = stringify!(Name[n]);
+    }
+    pub mod paste(not_off, n) {
+        pub const TEXT: &str = stringify!(Off[n]);
     }
     pub mod paste(attribute, n) {
         pub const TEXT: &str = stringify!(#[allow(dead_code)] struct paste(Ix, n););
@@ -519,6 +525,8 @@ fn paste_and_ordinary_tokens() {
         &[Text::new(ordinary0::TEXT)],
         &Text::new("let x = values[i]; let y = Name[];"),
     );
+    assert_rows(&[Text::new(not_short0::TEXT)], &Text::new("Name[0]"));
+    assert_rows(&[Text::new(not_off0::TEXT)], &Text::new("Off[0]"));
     assert_rows(
         &[Text::new(attribute0::TEXT)],
         &Text::new("#[allow(dead_code)] struct Ix0;"),

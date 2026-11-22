@@ -18,7 +18,7 @@ fn spaced_paste_and_negative_index_are_errors() {
         "cannot paste a negative index",
     );
     assert_err(
-        "impl_foreach!(n in -1..0 { Name[n]; });",
+        "impl_foreach!(n in -1..0 { Name[0..=n]; });",
         "fan mode domain `0..=index` is empty",
     );
     assert_err(
@@ -39,7 +39,11 @@ fn spaced_paste_and_negative_index_are_errors() {
     );
     assert_err(
         "impl_foreach!(n in 0..2 { X Name[0..1]; });",
-        "not concatenation",
+        "repeat(Name, range)",
+    );
+    assert_err(
+        "impl_foreach!(n in 0..2 { X + Name[0..1]; });",
+        "repeat(Name, range)",
     );
 }
 
