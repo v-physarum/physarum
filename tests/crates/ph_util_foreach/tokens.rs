@@ -54,48 +54,44 @@ fn assert_rows(rows: &[Text<'_>], expected: &Text<'_>) {
     assert_eq!(actual, expected.words());
 }
 
-impl_foreach!(range = 0..=3, body = {
-    pub struct Incl + #;
+impl_foreach!(n in 0..=3 {
+    pub struct paste(Incl, n);
 });
 
-impl_foreach!(range = 0x10..0x12, body = {
-    pub struct Hex + #;
+impl_foreach!(n in 0x10..0x12 {
+    pub struct paste(Hex, n);
 });
 
-impl_foreach!(range = 0X10..0X12, body = {
-    pub struct HexUpper + #;
+impl_foreach!(n in 0o10..0o12 {
+    pub struct paste(Oct, n);
 });
 
-impl_foreach!(range = 0o10..0o12, body = {
-    pub struct Oct + #;
+impl_foreach!(n in 0b1000..0b1010 {
+    pub struct paste(Bin, n);
 });
 
-impl_foreach!(range = 0b1000..0b1010, body = {
-    pub struct Bin + #;
+impl_foreach!(n in 0x1_0..0x1_2 {
+    pub struct paste(HexSep, n);
 });
 
-impl_foreach!(range = 0x1_0..0x1_2, body = {
-    pub struct HexSep + #;
+impl_foreach!(n in (1..10).step_by(2) {
+    pub struct paste(Odd, n);
 });
 
-impl_foreach!(range = 1..10::2, body = {
-    pub struct Odd + #;
+impl_foreach!(n in 2..=5 {
+    pub struct paste(Win, n);
 });
 
-impl_foreach!(range = 2..=5, body = {
-    pub struct Win + #;
+impl_foreach!(n in 3..=3 {
+    pub struct paste(One, n);
 });
 
-impl_foreach!(range = 3..=3, body = {
-    pub struct One + #;
+impl_foreach!(n in (10..=12).step_by(2) {
+    pub struct paste(Ten, n);
 });
 
-impl_foreach!(range = 10..=12::2, body = {
-    pub struct Ten + #;
-});
-
-impl_foreach!(range = 0..1::2, body = {
-    pub struct Half + #;
+impl_foreach!(n in (0..1).step_by(2) {
+    pub struct paste(Half, n);
 });
 
 #[allow(unused_macros)]
@@ -105,195 +101,198 @@ macro_rules! fail_if_emitted {
     };
 }
 
-impl_foreach!(
-    range = 5..5,
-    body = {
-        fail_if_emitted!();
-    }
-);
-
-impl_foreach!(range = -1..0, body = {
-    pub const NEG: i128 = #;
+impl_foreach!(n in 5..5 {
+    fail_if_emitted!();
 });
 
-impl_foreach!(range = 0..1, body = {
-    pub const ZERO: i128 = #;
+impl_foreach!(n in -1..0 {
+    pub const NEG: i128 = n;
+});
+
+impl_foreach!(n in 0..1 {
+    pub const ZERO: i128 = n;
     pub fn add(left: i32, right: i32) -> i32 {
         left + right
     }
 });
 
-impl_foreach!(range = 0..2, body = {
+impl_foreach!(n in 0..2 {
     #[allow(dead_code)]
-    pub struct Attr + #;
+    pub struct paste(Attr, n);
 });
 
-impl_foreach!(range = 0..10, body = {
-    pub mod excl + # {
+impl_foreach!(n in 0..10 {
+    pub mod paste(excl, n) {
         pub const TEXT: &str = stringify!(Name[0..10]);
     }
-    pub mod from + # {
+    pub mod paste(from, n) {
         pub const TEXT: &str = stringify!(Name[0..]);
     }
-    pub mod to + # {
+    pub mod paste(to, n) {
         pub const TEXT: &str = stringify!(Name[..10]);
     }
-    pub mod full + # {
+    pub mod paste(full, n) {
         pub const TEXT: &str = stringify!(Name[..]);
     }
-    pub mod step_excl + # {
-        pub const TEXT: &str = stringify!(Name[0..10::2]);
+    pub mod paste(step_excl, n) {
+        pub const TEXT: &str = stringify!(Name[(0..10).step_by(2)]);
     }
-    pub mod step_full + # {
-        pub const TEXT: &str = stringify!(Name[..::2]);
+    pub mod paste(step_full, n) {
+        pub const TEXT: &str = stringify!(Name[(..).step_by(2)]);
     }
 });
 
-impl_foreach!(range = 0..=10, body = {
-    pub mod incl + # {
+impl_foreach!(n in 0..=10 {
+    pub mod paste(incl, n) {
         pub const TEXT: &str = stringify!(Name[0..=10]);
     }
-    pub mod to_incl + # {
+    pub mod paste(to_incl, n) {
         pub const TEXT: &str = stringify!(Name[..=10]);
     }
-    pub mod from_step + # {
-        pub const TEXT: &str = stringify!(Name[0..::2]);
+    pub mod paste(from_step, n) {
+        pub const TEXT: &str = stringify!(Name[(0..).step_by(2)]);
     }
-    pub mod to_step + # {
-        pub const TEXT: &str = stringify!(Name[..10::2]);
+    pub mod paste(to_step, n) {
+        pub const TEXT: &str = stringify!(Name[(..10).step_by(2)]);
     }
-    pub mod window + # {
+    pub mod paste(window, n) {
         pub const TEXT: &str = stringify!(Name[2..=5]);
     }
-    pub mod from_one + # {
-        pub const TEXT: &str = stringify!(Name[1..::2]);
+    pub mod paste(from_one, n) {
+        pub const TEXT: &str = stringify!(Name[(1..).step_by(2)]);
     }
-    pub mod last + # {
-        pub const TEXT: &str = stringify!(Name[-1..=-1]);
+    pub mod paste(last, n) {
+        pub const TEXT: &str = stringify!(Name[end..=end]);
     }
-    pub mod through_last + # {
-        pub const TEXT: &str = stringify!(Name[0..=-1]);
-    }
-});
-
-impl_foreach!(range = 0..=9, body = {
-    pub mod step_incl + # {
-        pub const TEXT: &str = stringify!(Name[0..=9::2]);
+    pub mod paste(through_last, n) {
+        pub const TEXT: &str = stringify!(Name[0..=end]);
     }
 });
 
-impl_foreach!(range = 0..=4, body = {
-    pub mod last_only + # {
-        pub const TEXT: &str = stringify!(Name[-1..=-1]);
-    }
-    pub mod last_tail + # {
-        pub const TEXT: &str = stringify!(Name[-1..]);
+impl_foreach!(n in 0..=9 {
+    pub mod paste(step_incl, n) {
+        pub const TEXT: &str = stringify!(Name[(0..=9).step_by(2)]);
     }
 });
 
-impl_foreach!(range = 0..3, body = {
-    pub mod flat_full + # {
-        pub const TEXT: &str = stringify!(X + Name[..];);
+impl_foreach!(n in 0..=4 {
+    pub mod paste(last_only, n) {
+        pub const TEXT: &str = stringify!(Name[end..=end]);
     }
-    pub mod flat_paste + # {
-        pub const TEXT: &str = stringify!(Ix + # Name[..];);
-    }
-});
-
-impl_foreach!(range = 0..3, body = {
-    pub mod fan_prefix + # {
-        pub const TEXT: &str = stringify!(X + Name[..]; Y + Name[..=#];);
-    }
-    pub mod fan_short + # {
-        pub const TEXT: &str = stringify!(K + Name[#];);
-    }
-    pub mod fan_row + # {
-        pub const TEXT: &str = stringify!(K + (T + #)[..=#];);
+    pub mod paste(last_tail, n) {
+        pub const TEXT: &str = stringify!(Name[end..]);
     }
 });
 
-impl_foreach!(range = 0..6::2, body = {
-    pub mod fan_step + # {
-        pub const TEXT: &str = stringify!(K + Name[..=#];);
+impl_foreach!(n in 0..3 {
+    pub mod paste(flat_full, n) {
+        pub const TEXT: &str = stringify!(X, repeat(Name, ..););
+    }
+    pub mod paste(flat_paste, n) {
+        pub const TEXT: &str = stringify!(paste(Ix, n) Name[..];);
     }
 });
 
-impl_foreach!(range = 0..6::2, body = {
-    pub mod flat_step + # {
-        pub const TEXT: &str = stringify!(K + Name[..];);
+impl_foreach!(n in 0..3 {
+    pub mod paste(fan_prefix, n) {
+        pub const TEXT: &str = stringify!(X, repeat(Name, ..); Y, repeat(Name, ..=n););
+    }
+    pub mod paste(fan_short, n) {
+        pub const TEXT: &str = stringify!(K, repeat(Name, 0..=n););
+    }
+    pub mod paste(fan_row, n) {
+        pub const TEXT: &str = stringify!(K, repeat((paste(T, n)), ..=n););
     }
 });
 
-impl_foreach!(range = 0..10::2, body = {
-    pub mod gap_all + # {
-        pub const TEXT: &str = stringify!(K + Name[0..10];);
-    }
-    pub mod gap_mid + # {
-        pub const TEXT: &str = stringify!(K + Name[1..=7];);
+impl_foreach!(n in (0..6).step_by(2) {
+    pub mod paste(fan_step, n) {
+        pub const TEXT: &str = stringify!(K, repeat(Name, ..=n););
     }
 });
 
-impl_foreach!(range = 0..2, body = {
-    pub mod off_seq + # {
-        pub const TEXT: &str = stringify!(K + Off[0..2];);
-    }
-    pub mod empty_plus + # {
-        pub const TEXT: &str = stringify!(K + Name[0..0] + Name[0..2];);
-    }
-    pub mod plus_literal + # {
-        pub const TEXT: &str = stringify!(K + Name[0..2] + 1;);
-    }
-    pub mod paste_plus + # {
-        pub const TEXT: &str = stringify!(let x = Ix + # + 1;);
-    }
-    pub mod index_brackets + # {
-        pub const TEXT: &str = stringify!(let x = arr[(#)];);
+impl_foreach!(n in (0..6).step_by(2) {
+    pub mod paste(flat_step, n) {
+        pub const TEXT: &str = stringify!(K, repeat(Name, ..););
     }
 });
 
-impl_foreach!(range = 0..2, body = {
-    pub mod off_bare + # {
-        pub const TEXT: &str = stringify!(K + Off[#];);
+impl_foreach!(n in (0..10).step_by(2) {
+    pub mod paste(gap_all, n) {
+        pub const TEXT: &str = stringify!(K, repeat(Name, 0..10););
     }
-    pub mod hole + # {
-        pub const TEXT: &str = stringify!(K + Name[#+1..=#];);
-    }
-});
-
-impl_foreach!(range = 0..3, body = {
-    pub mod rows + # {
-        pub const TEXT: &str = stringify!(K + (T + #, U + #)[0..3];);
+    pub mod paste(gap_mid, n) {
+        pub const TEXT: &str = stringify!(K, repeat(Name, 1..=7););
     }
 });
 
-impl_foreach!(range = 1..3, body = {
-    pub mod offset + # {
-        pub const TEXT: &str = stringify!(K + Name[#-1..=#];);
+impl_foreach!(n in 0..2 {
+    pub mod paste(off_seq, n) {
+        pub const TEXT: &str = stringify!(K, repeat(Off, 0..2););
     }
-    pub mod step_hash + # {
-        pub const TEXT: &str = stringify!(K + Name[0..=#::#+1];);
+    pub mod paste(empty_plus, n) {
+        pub const TEXT: &str = stringify!(K, repeat(Name, 0..0), repeat(Name, 0..2););
+    }
+    pub mod paste(plus_literal, n) {
+        pub const TEXT: &str = stringify!(K, repeat(Name, 0..2) + 1;);
+    }
+    pub mod paste(paste_plus, n) {
+        pub const TEXT: &str = stringify!(let x = paste(Ix, n) + 1;);
+    }
+    pub mod paste(index_brackets, n) {
+        pub const TEXT: &str = stringify!(let x = arr[(n)];);
     }
 });
 
-impl_foreach!(range = 0..4, body = {
-    pub mod hole_edge + # {
-        pub const TEXT: &str = stringify!(K + Name[4..=3];);
+impl_foreach!(n in 0..2 {
+    pub mod paste(off_bare, n) {
+        pub const TEXT: &str = stringify!(K, Off;);
+    }
+    pub mod paste(hole, n) {
+        pub const TEXT: &str = stringify!(K, repeat(Name, n + 1..=n););
     }
 });
 
-impl_foreach!(range = 0..1, body = {
-    pub mod ordinary + # {
+impl_foreach!(n in 0..3 {
+    pub mod paste(rows, n) {
+        pub const TEXT: &str = stringify!(K, repeat((paste(T, n), paste(U, n)), 0..3););
+    }
+});
+
+impl_foreach!(n in 1..3 {
+    pub mod paste(offset, n) {
+        pub const TEXT: &str = stringify!(K, repeat(Name, n - 1..=n););
+    }
+    pub mod paste(step_hash, n) {
+        pub const TEXT: &str = stringify!(K, repeat(Name, (0..=n).step_by(n + 1)););
+    }
+});
+
+impl_foreach!(n in 0..4 {
+    pub mod paste(hole_edge, n) {
+        pub const TEXT: &str = stringify!(K, repeat(Name, 4..=3););
+    }
+});
+
+impl_foreach!(n in 0..1 {
+    pub mod paste(ordinary, n) {
         pub const TEXT: &str = stringify!(let x = values[i]; let y = Name[];);
     }
-    pub mod attribute + # {
-        pub const TEXT: &str = stringify!(#[allow(dead_code)] struct Ix + #;);
+    pub mod paste(not_short, n) {
+        pub const TEXT: &str = stringify!(Name[n]);
+    }
+    pub mod paste(not_off, n) {
+        pub const TEXT: &str = stringify!(Off[n]);
+    }
+    pub mod paste(attribute, n) {
+        pub const TEXT: &str = stringify!(#[allow(dead_code)] struct paste(Ix, n););
     }
 });
 
 #[test]
 fn outer_ranges_paste_the_selected_indexes() {
     let _ = (Incl0, Incl1, Incl2, Incl3);
-    let _ = (Hex16, Hex17, HexUpper16, HexUpper17);
+    let _ = (Hex16, Hex17);
     let _ = (Oct8, Oct9, Bin8, Bin9, HexSep16, HexSep17);
     let _ = (Odd1, Odd3, Odd5, Odd7, Odd9);
     let _ = (Win2, Win3, Win4, Win5);
@@ -526,6 +525,8 @@ fn paste_and_ordinary_tokens() {
         &[Text::new(ordinary0::TEXT)],
         &Text::new("let x = values[i]; let y = Name[];"),
     );
+    assert_rows(&[Text::new(not_short0::TEXT)], &Text::new("Name[0]"));
+    assert_rows(&[Text::new(not_off0::TEXT)], &Text::new("Off[0]"));
     assert_rows(
         &[Text::new(attribute0::TEXT)],
         &Text::new("#[allow(dead_code)] struct Ix0;"),

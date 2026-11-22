@@ -1,3 +1,3 @@
-impl_foreach!(range = INDEX..NEXT, body = {
-    pub struct Ix + #;
+impl_foreach!(n in INDEX..NEXT {
+    pub struct paste(Ix, n);
 });

@@ -1,171 +1,111 @@
 # ph_util_foreach
 
-`impl_foreach` copies a token-tree body once for each index of a finite range. The copy can build structs, impls, and the invocations of other macros. This crate does not define those other macros.
-
-The public entry is the stable `proc_macro` API. Expansion tokens are `proc_macro2`, and `quote` builds `compile_error!`. `thiserror` writes the error text. Those crates are compiled with this macro, so a later build of a user crate does not compile them again.
+Repeats a token tree once for each index of a finite range. `syn` parses the range as an ordinary Rust expression. Evaluation walks `Range` and `RangeInclusive` with `step_by`.
 
 ## Invocation
 
 ```rust
-use ph_util_foreach::impl_foreach;
-
-impl_foreach!(range = 0..4, body = {
-    pub struct Ix + #;
+impl_foreach!(n in 0..4 {
+    pub struct paste(Ix, n);
 });
 ```
 
-The call is `impl_foreach!(0..4 { .. })`. The trailing block is the body and needs no name. `impl_foreach!(range = 0..4, body = { .. })` still names both arguments, in either order. The body is an arbitrary token tree. A semicolon ends the invocation when it is an item. Commas inside the body separate fields of a nested macro.
-
-`0..4` above expands to:
-
-```rust
-pub struct Ix0;
-pub struct Ix1;
-pub struct Ix2;
-pub struct Ix3;
-```
+The caller chooses the loop variable. The call is `impl_foreach!(n in <range> { ... })`. A comma before the block is optional: `impl_foreach!(n in 0..4, { ... })`. The body is an arbitrary token tree. A semicolon ends the invocation when it is an item. The loop variable cannot be named `end`.
 
 ## Ranges
 
-Outer ranges and patterns inside `[]` use the same forms. Bounds are integer literals or `#` expressions. Nothing is hard-coded to a sample such as `0..4`.
+`syn` parses the range. Parentheses around the range are required when the step is a method call, because `0..10.step_by(2)` is `0..(10.step_by(2))`.
 
-| Syntax | Rust range | Indices |
-| --- | --- | --- |
-| `A..B` | `Range` | `A` inclusive, `B` exclusive |
-| `A..=B` | `RangeInclusive` | `A` and `B` inclusive |
-| `A..` | `RangeFrom` | from `A` through the end of the domain |
-| `..B` | `RangeTo` | from the start of the domain up to `B`, exclusive |
-| `..=B` | `RangeToInclusive` | from the start of the domain through `B`, inclusive |
-| `..` | `RangeFull` | the whole domain |
-| `<range>::S` | step | the same range, every `S`-th index |
+| Form | Indexes |
+| --- | --- |
+| `0..4` | `0, 1, 2, 3` |
+| `0..=3` | `0, 1, 2, 3` |
+| `(0..10).step_by(2)` | `0, 2, 4, 6, 8` |
+| `(0..=9).step_by(2)` | `0, 2, 4, 6, 8` |
+| `(1..10).step_by(2)` | `1, 3, 5, 7, 9` |
 
-`::S` applies to every form, including bounds that use `#`: `0..#::2`, `..=#::2`, `0..10::2`, `..::2`.
+The step counts from the start. It is a positive integer literal, the loop variable, or the loop variable plus or minus an integer (`2`, `n`, `n + 1`). A step that is not positive is a compile error. A step wider than `usize` is applied by arithmetic instead of `Iterator::step_by`.
 
-The step counts in arithmetic from the start of the clipped range. `0..10::2` is `0, 2, 4, 6, 8`. `0..=9::2` is the same list. `S` is a positive integer literal, or `#±N` when that value is a positive compile-time constant (`::2`, `::#`, `::#+1`). `S <= 0` is a compile error, whether `S` is written as `0`, a negative literal, or a `#±N` expression that evaluates to `0` or below.
-
-An open end is clipped to the current domain, and then `::S` is applied.
+`-1` is the integer negative one. `0x10`, `0o10`, and `0b1000` are ordinary integer literals. An uppercase prefix such as `0X10` is not an integer literal.
 
 ### Outer range
 
-`impl_foreach!(range = <Range>, body = { /* body */ })` uses the forms in the table. The set has to be finite with no parent domain:
+The outer set has to be finite:
 
-| Outer range | Result |
+| Form | |
 | --- | --- |
-| `A..B` | allowed, for example `impl_foreach!(range = 0..4, body = { /* body */ })` |
-| `A..=B` | allowed, for example `impl_foreach!(range = 0..=3, body = { /* body */ })` |
-| `A..B::S` and `A..=B::S` | allowed, for example `impl_foreach!(range = 0..10::2, body = { /* body */ })` |
-| `A..`, `..B`, `..=B`, `..` | rejected, including when written with `::S` |
+| `n in 0..4` | allowed |
+| `n in 0..=3` | allowed |
+| `n in (0..10).step_by(2)` | allowed |
+| `n in 0..`, `..4`, `..=4`, `..` | compile error |
+| `n in (0..).step_by(2)` and the other open forms | compile error |
 
-Inside `Name[<pat>]`, open forms stay valid. The step domain closes them.
+The loop variable and `end` cannot appear in the outer range.
 
 ### Domain
 
-- Flat mode: the index set of the outer range after its `::S` step.
-- Fan mode: for each outer index, the prefix `0..=outer` (every integer, including indexes the outer step skipped).
-
-A bound outside that domain is a compile error. An empty slice on the hole edge is allowed: `(last + 1)..=last`. That is the window `T[#+1..=#]` produces when `#` is the last index of the domain.
-
-An inclusive bound must lie in `first..=last`. An exclusive end may be at most one outer step past the last index, so `Name[0..10]` is valid on the domain produced by `0..10` or `0..10::2`.
-
-On a stepped flat domain the range is generated arithmetically and then intersected with the index set. `Name[1..=7]` on `0..10::2` is `Name2, Name4, Name6`.
+A `Name[...]` pattern is clipped to the domain. Flat mode uses the outer set. Fan mode uses `0..=index`. A bound outside that domain is a compile error. An empty slice on the hole edge is allowed: `n + 1..=n` when `n` is the last index of the domain.
 
 ### Bounds in a pattern
 
-A pattern bound is one of:
+A pattern bound is an integer literal, the loop variable, `loop + integer` or `loop - integer`, or the path `end`. `end` is the last domain index, and only when it is the whole bound (`0..=end`, `end..=end`, `end..`). `-1` is negative one, so `Name[-1..=-1]` on a non-negative domain is outside the domain.
 
-- an integer literal (`0`, `10`, `-2`);
-- `#`, the current index;
-- `#±N`, written `#+1` or `#-1`;
-- the literal `-1`, which means the last index of the domain.
-
-`-1` is that sentinel only when it is written as the pattern bound. `#-1` is arithmetic on the current index. In an outer range, `-1` is the integer negative one, because there is no domain yet.
-
-Exactly one pattern is allowed in one pair of brackets. `A[0..#, Off]` is a compile error.
+Exactly one pattern is allowed in one pair of brackets. `A[0..n, Off]` is a compile error. Brackets that are not a range, not `(range).step_by(...)`, and not exactly the loop variable stay as written.
 
 ## Placeholders
 
-| Form | Expansion |
+| Written | Expansion |
 | --- | --- |
-| `#` | the current index as an integer literal |
-| `Name + #` | the identifier `Name` with the decimal digits of `#` appended |
-| `Name[#]` | `Name[0..=#]` |
-| `Name[<pat>]` | `Name` plus those digits for each index in `<pat>`, separated by commas |
-| `Off[#]` | the identifier `Off`, with no digits |
-| `X + Y` | the two expansions concatenated; an empty piece adds no comma |
-| `(A, B, …)[<pat>]` | one parenthesized row per index, separated by commas |
+| `n` | the current index as an integer literal |
+| `paste(Ix, n)` | the identifier `Ix` with the decimal digits of the index appended |
+| `Name[0..=n]` | the identifiers `Name0` through `Namen` |
+| `repeat(Name, 0..=n)` | the same identifiers |
 
-`Name + #` pastes the index onto an identifier. `Ix + #` expands to `Ix0`, `Ix1`, and so on. The index must be non-negative; pasting a negative index is a compile error. An identifier immediately followed by `#` (`Ix #`) is a compile error.
+`paste(Ix, n)` pastes a non-negative index. A negative index is a compile error. `paste` takes one identifier and the loop variable: `paste(Ix, n + 1)` is a compile error. A `paste` that is not a call is an ordinary identifier.
 
-`X + Y` concatenates sequence expansions such as `Name[<pat>]` and `(…)[<pat>]`. A bare identifier is a one-element piece, so `X + Name[..]` expands to `X, Name0, Name1, ...`. Writing the pieces next to each other (`X Name[..]`) is a compile error. `Ix + #` is paste: the left side is a bare identifier, the right side is `#`, and the expansion is one identifier.
+`repeat(Name, 0..2)` expands to `Name0, Name1`. A comma separates list pieces, and an empty `repeat` drops the comma beside it: `X, repeat(Name, ..)` expands to `X, Name0, Name1`. `repeat((paste(T, n), paste(U, n)), 0..3)` repeats the row. `X Name[0..2]` and `X + Name[0..2]` are compile errors. `paste(Ix, n) + 1` is the identifier `Ix0` followed by `+ 1`.
 
-Inside a tuple row, `#` is the row index. `(T + #, U + #)[0..3]` expands to `(T0, U0), (T1, U1), (T2, U2)`.
+`Name[n]` is not a range. It stays a bracket with the index substituted, so at index 0 it is `Name[0]`. Write `Name[0..=n]` or `repeat(Name, 0..=n)`.
 
-`#[...]` and `#![...]` stay attributes. Brackets that do not open with a range stay as written, and `#` inside them is still the current index, so `arr[(#)]` becomes `arr[(0)]`. An identifier followed by a real range is the placeholder, so `Name[0..2]` is `Name0, Name1`.
+Inside a tuple row, the loop variable is the row index. `(paste(T, n), paste(U, n))[0..3]` expands to `(T0, U0), (T1, U1), (T2, U2)`.
 
-`Off[0..2]` is the ordinary sequence `Off0, Off1`. Only `Off[#]` is the bare hole marker.
+`#[...]` and `#![...]` stay attributes. `arr[(n)]` becomes `arr[(0)]`. `Off[0..2]` and `repeat(Off, 0..2)` are `Off0, Off1`. A bare `Off` between repeats is the hole marker.
 
 ## Index bindings
 
-A binding captures the current index under a name. The statement is removed from the output. Later `$name` in that same group expands to the captured token, including where a function argument is written.
-
 | Form | Captures |
 | --- | --- |
-| `$name = Ident + #;` | the identifier `Ident` with the decimal digits of the current index appended (`Ix + #` at index `2` is `Ix2`) |
-| `$name = #;` | the current index as an unsuffixed integer literal |
+| `$name = paste(Ident, n);` | the pasted identifier |
+| `$name = n;` | the index as an unsuffixed integer literal |
 
 ```rust
-fn takes_index(index: i128) -> i128 {
-    index
-}
-
-impl_foreach!(range = 0..4, body = {
-    $id = Ix + #;
-    $n = #;
+impl_foreach!(n in 0..4 {
+    $id = paste(Ix, n);
+    $n = n;
     pub const $id: i128 = $n;
-    pub fn passed + #() -> i128 {
-        takes_index($id)
-    }
 });
 ```
 
-`passed0` returns `0` and the const is `Ix0`. `passed3` returns `3` and the const is `Ix3`.
-
-`Ident + #` is the same paste as `Name + #`. `$name = Ident #;` is a compile error. The pasted index must be non-negative. `$name = #;` may capture a negative index as a literal.
-
-The binding lasts until the end of the body or group that contains it (`{...}`, `(...)`, `[...]`, or a row template). A later binding of the same name hides the earlier one until that inner group ends. `$name` before its binding, and `$name` after the group ends, stays as written, so a `macro_rules` metavariable that was never bound stays in the output.
-
-The captured value is the index at the binding. A later row does not rebind it: in `$n = #; ($n)[0..2]` every copy sees that same index.
-
-`$name = #+1;` and any other right-hand side are compile errors. The statement needs the trailing `;`.
+Any other right-hand side is a compile error. The statement needs the trailing `;`. The captured value is the index at the binding. A later row does not rebind it. An unbound `$name` is copied through for a nested `macro_rules`.
 
 ## Flat and fan
 
-Flat mode emits one copy per outer index. `#` is that index. The domain is the full outer set. `pub struct Ix + #;` is flat.
+Flat mode emits one copy per outer index. The domain is the outer set. `pub struct paste(Ix, n);` is flat. A step that mentions the loop variable stays flat when no pattern bound does.
+
+Fan mode is used when a range bound mentions the loop variable, as in `Name[0..=n]` or `repeat(Name, ..=n)`. `end` does not select fan. Fan mode still emits one copy per outer index. The domain is `0..=n`.
 
 ```rust
-impl_foreach!(range = 0..10::2, body = {
-    pub struct Ix + #;
-});
-```
-
-expands to `Ix0`, `Ix2`, `Ix4`, `Ix6`, and `Ix8`.
-
-Fan mode is used when the body contains a prefix or hole form: `Name[#]`, `Off[#]`, or any range bound that mentions `#` (`T[..=#]`, `T[..#]`, `T[#+1..=#]`, and the same shapes with other names). A step of `#` by itself stays in flat mode. Fan mode still emits one copy per outer index. `#` is that index, the hole is that index, and the domain is `0..=#`.
-
-```rust
-impl_foreach!(range = 0..4, body = {
+impl_foreach!(n in 0..4 {
     impl_take!(
-        args: (T[..=#]),
-        ix: Ix + #,
-        out: T + #,
-        rest: T[..#] + Off[#] + T[#+1..=#],
+        args: (T[..=n]),
+        ix: paste(Ix, n),
+        out: paste(T, n),
+        rest: repeat(T, ..n), Off, repeat(T, n + 1..=n),
     );
 });
 ```
 
-`impl_take!` is a local `macro_rules!` helper written by the caller. The four copies are:
-
-| `#` | `args` | `ix` | `out` | `rest` |
+| `n` | `args` | `ix` | `out` | `rest` |
 | --- | --- | --- | --- | --- |
 | 0 | `(T0)` | `Ix0` | `T0` | `Off` |
 | 1 | `(T0, T1)` | `Ix1` | `T1` | `T0, Off` |
@@ -174,14 +114,17 @@ impl_foreach!(range = 0..4, body = {
 
 ## Compile-time checks
 
-The macro emits `compile_error!` when:
+A syntax or range error expands to `compile_error!`. That includes:
 
-- the outer range is open;
-- the step is less than or equal to zero;
-- `A..B` or `A..=B` has a start after the end, other than an empty hole-edge slice;
-- a bound lies outside the domain;
-- the placeholder syntax cannot be parsed (`A[0..#, Off]`, a second range in the same brackets, `::` with no step, or an identifier immediately followed by `#` outside a binding);
-- an index binding is not `$name = Ident + #;` or `$name = #;`.
+- an open outer range;
+- a step that is not positive;
+- a start after the end, other than an empty hole-edge slice;
+- a bound outside the domain;
+- more than one range in one pair of brackets;
+- a `paste(...)` that is not `paste(Ident, n)`;
+- a `repeat(...)` that is not `repeat(Ident, range)` or `repeat((row), range)`;
+- `X Name[..]` or `X + Name[..]` where `repeat(Name, range)` is required;
+- an index binding that is not `$name = paste(Ident, n);` or `$name = n;`.
 
 An empty hole-edge slice expands to no tokens.
 

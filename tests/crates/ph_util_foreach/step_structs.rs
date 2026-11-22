@@ -2,8 +2,8 @@
 
 use ph_util_foreach::impl_foreach;
 
-impl_foreach!(range = 0..10::2, body = {
-    pub struct Ix + #;
+impl_foreach!(n in (0..10).step_by(2) {
+    pub struct paste(Ix, n);
 });
 
 #[test]

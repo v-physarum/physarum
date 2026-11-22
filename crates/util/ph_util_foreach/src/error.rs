@@ -24,29 +24,25 @@ pub(crate) enum ErrorKind {
     ExpectedRange,
     #[error("expected `..` or `..=`")]
     ExpectedDots,
-    #[error("expected a step after `::`")]
+    #[error("expected a step in `(range).step_by(step)`")]
     ExpectedStep,
-    #[error("expected a bound")]
-    ExpectedBound,
-    #[error("expected `::`")]
-    ExpectedPathSep,
     #[error("expected exactly one range pattern inside `[]`")]
     OnePattern,
     #[error("unexpected token in range")]
     UnexpectedInRange,
-    #[error("open outer range is unbounded; write `A..B` or `A..=B`, optionally with a `::S` step")]
+    #[error("open outer range is unbounded; write `A..B`, `A..=B`, or `(A..B).step_by(S)`")]
     OpenOuter,
     #[error("range is too large")]
     RangeTooLarge,
     #[error("bound {value} is outside the domain {lo}..={hi}")]
     OutsideDomain { value: i128, lo: i128, hi: i128 },
-    #[error("outer range cannot use `#`")]
+    #[error("outer range cannot use the index or `end`")]
     OuterHash,
     #[error("step must be a positive integer")]
     StepNotPositive,
-    #[error("step must be a positive integer literal or `#±N`")]
+    #[error("step must be a positive integer literal or the index plus or minus an integer")]
     StepLastIndex,
-    #[error("index overflow computing a `#` bound")]
+    #[error("index overflow computing an index bound")]
     IndexOverflow,
     #[error(
         "invalid range {start}{sep}{end}",
@@ -61,23 +57,25 @@ pub(crate) enum ErrorKind {
     UnsuffixedLiteral,
     #[error("integer literal overflows `i128`")]
     LiteralOverflow,
-    #[error("expected an integer literal after `#` `+` or `#` `-`")]
-    MissingAfterSign,
     #[error("fan mode domain `0..=index` is empty because the index is negative")]
     FanEmpty,
-    #[error("write `impl_foreach!(range = .., body = {{ .. }})`")]
+    #[error("write `impl_foreach!(n in 0..10 {{ ... }})`")]
     CallForm,
+    #[error("the loop variable cannot be named `end`")]
+    IndexName,
     #[error("expected a `{{ ... }}` body after the range")]
     ExpectedBody,
     #[error("unexpected token after the body")]
     UnexpectedAfterBody,
-    #[error("write `+` to concatenate; `X Name[..]` is not concatenation")]
+    #[error("write `repeat(Name, range)`, separated by commas; `X Name[..]` is not a list")]
     NotConcat,
+    #[error("write `repeat(Ident, range)` or `repeat((row), range)`")]
+    RepeatForm,
     #[error("cannot paste a negative index into an identifier")]
     NegativePaste,
-    #[error("write `Name + #` to paste an index; `Name #` is not a paste")]
+    #[error("write `paste(Ident, n)` to paste an index")]
     SpacedPaste,
-    #[error("write `$name = Ident + #;` or `$name = #;`")]
+    #[error("write `$name = paste(Ident, n);` or `$name = n;`")]
     BindingForm,
     #[error("unknown index binding")]
     UnknownBinding,

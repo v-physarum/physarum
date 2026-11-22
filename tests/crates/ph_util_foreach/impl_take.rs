@@ -18,17 +18,14 @@ macro_rules! impl_take {
     };
 }
 
-impl_foreach!(
-    range = 0..4,
-    body = {
-        impl_take!(
-            args: (T[..=#]),
-            ix: Ix + #,
-            out: T + #,
-            rest: T[..#] + Off[#] + T[#+1..=#],
-        );
-    }
-);
+impl_foreach!(n in 0..4 {
+    impl_take!(
+        args: (T[..=n]),
+        ix: paste(Ix, n),
+        out: paste(T, n),
+        rest: repeat(T, ..n), Off, repeat(T, n + 1..=n),
+    );
+});
 
 #[test]
 fn fan_take_splits_at_the_outer_index() {
