@@ -26,8 +26,10 @@ pub(crate) enum ErrorKind {
     ExpectedDots,
     #[error("expected a step after `::`")]
     ExpectedStep,
+    #[allow(dead_code)]
     #[error("expected a bound")]
     ExpectedBound,
+    #[allow(dead_code)]
     #[error("expected `::`")]
     ExpectedPathSep,
     #[error("expected exactly one range pattern inside `[]`")]
