@@ -9,11 +9,14 @@ description = "TODO: the owner fills in the project purpose."
 
 [lints.rust]
 unsafe_code = "forbid"
-missing_docs = "warn"
 
 [lints.clippy]
 all = { level = "warn", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
+
+[dependencies]
+ph_beans = { path = "crates/ph_beans" }
+ph_beans_derive = { path = "crates/ph_beans_derive" }
 
 [dev-dependencies]
 ph_bench_build = { path = "crates/benches/ph_bench_build" }
@@ -62,6 +65,8 @@ path = "benches/crates/ph_util_foreach/measure.rs"
 resolver = "3"
 members = [
     "crates/benches/ph_bench_build",
+    "crates/ph_beans",
+    "crates/ph_beans_derive",
     "crates/tests/ph_proc_macro_dylib",
     "crates/tests/ph_test_asm",
     "crates/tests/ph_test_errors",
