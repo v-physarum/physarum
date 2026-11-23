@@ -5,6 +5,7 @@
 //! `injecting_the_target_wraps_the_explicit_proxy`,
 //! `a_chain_nests_wrappers_outer_around_inner`.
 //! Chain emits are `emitting_chain_level_*`, expanded with `impl_foreach`.
+//! A component injects a proxy object only when that proxy lists it in `Provides`.
 
 use core::any::TypeId;
 use core::marker::PhantomData;

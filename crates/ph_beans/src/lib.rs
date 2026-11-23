@@ -40,6 +40,7 @@ mod tests {
         //!
         //! `emitting_the_proxy_runs_the_target` is the manual emit.
         //! `emitting_chain_level_*` repeats it for the chain.
+        //! `the_target_sees_the_proxy_provides` injects `Score` from `Update`'s `Provides`.
 
         use std::fs;
         use std::path::PathBuf;
@@ -50,9 +51,8 @@ mod tests {
         use ph_test_errors::ErrorTester;
 
         use ph_beans::{
-            At, BeanInfo, ClaimVia, Ctx, DefaultProxy, EventInfo, FromChain, FromProxy, Fwd, Get,
-            Init, InitPath, Ix0, Ix1, Live, Marker, More, Mut, Own, Pipe, Proxied, ProxyInfo,
-            Query, Stop, Target, Tick, Via, WithInit,
+            At, BeanInfo, Ctx, DefaultProxy, EventInfo, Fwd, Get, Init, InitPath, Ix0, Ix1, Live,
+            Marker, More, Mut, Pipe, Proxied, ProxyInfo, Query, Stop, Target, Tick, Via, WithInit,
         };
         use ph_util_foreach::impl_foreach;
 
@@ -379,9 +379,41 @@ mod tests {
 
         #[test]
         fn the_target_sees_the_proxy_provides() {
-            fn via_proxy<R: ClaimVia<GameTick, FromProxy>>() {}
-            via_proxy::<Get<Score>>();
             let _surface = GameTick::query().inject_resources(Score::T);
+        }
+
+        #[test]
+        fn a_proxy_object_absent_from_provides_is_rejected() {
+            fail(
+                "
+                use ph_beans::{At, BeanInfo, Get, Ix0, Marker, Proxied, ProxyInfo, Query, Stop, Target};
+                struct Score;
+                struct Update;
+                struct GameTick;
+                impl BeanInfo for Score {
+                    type Provides = (); type Injects = (); type Beans = (); type State = ();
+                }
+                impl Target for Score {}
+                impl Proxied for Score {
+                    type Proxy = ph_beans::DefaultProxy<Score>;
+                    type Link = Get<ph_beans::DefaultProxy<Score>>;
+                }
+                impl BeanInfo for Update {
+                    type Provides = (); type Injects = (); type Beans = (); type State = ();
+                }
+                impl ProxyInfo for Update {
+                    type Targets = GameTick; type Link = Get<Update>; type Chain = Stop;
+                }
+                impl At<Score> for Update { type Ix = Ix0; }
+                impl BeanInfo for GameTick {
+                    type Provides = (); type Injects = (); type Beans = (); type State = ();
+                }
+                impl Target for GameTick {}
+                impl Proxied for GameTick { type Proxy = Update; type Link = Get<Update>; }
+                fn probe() { let _claim = GameTick::query().inject_resources(Score::T); }
+                ",
+                "ClaimVia",
+            );
         }
 
         #[test]
@@ -467,10 +499,6 @@ mod tests {
 
         #[test]
         fn the_bean_sees_provides_on_every_proxy_in_the_chain() {
-            fn at_mid<R: ClaimVia<Core, (FromChain, Own)>>() {}
-            fn at_outer<R: ClaimVia<Core, (FromChain, (FromProxy, Own))>>() {}
-            at_mid::<Get<Prize>>();
-            at_outer::<Get<Bonus>>();
             let _mid = Core::query().inject_resources(Prize::T);
             let _outer = Core::query().inject_resources(Bonus::T);
         }
@@ -684,7 +712,12 @@ mod tests {
             for entry in entries.flatten() {
                 let name = entry.file_name();
                 let name = name.to_string_lossy();
-                if name.starts_with("libph_beans-") && name.ends_with(".rlib") {
+                let meta = entry.metadata().ok();
+                let nonempty = meta.as_ref().is_some_and(|item| item.len() > 0);
+                if nonempty
+                    && name.starts_with("libph_beans-")
+                    && (name.ends_with(".rlib") || name.ends_with(".rmeta"))
+                {
                     found.push(entry.path());
                 }
             }

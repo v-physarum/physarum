@@ -1,7 +1,7 @@
 //! Which beans a resource claim names, and the view the init function sees.
 
-use crate::bean::{ApplyProxy, Marked, More, Proxied, ProxyInfo, Target, Via};
-use crate::borrow::At;
+use crate::bean::{ApplyProxy, BeanInfo, Marked, More, Proxied, ProxyInfo, Target, Via};
+use crate::borrow::{At, Ix0, Ix1, Ix2, Ix3};
 use crate::descriptor::live::{Idle, Live};
 use crate::descriptor::{Dyn, DynView, Get, Mut};
 use crate::filter::And;
@@ -9,11 +9,36 @@ use crate::filter::And;
 /// Own [`At`] on the pipeline bean.
 pub struct Own;
 
-/// [`At`] on the pipeline bean's direct proxy (rule 3).
+/// [`At`] on the direct proxy. The bean is in that proxy's `Provides`.
 pub struct FromProxy;
 
-/// [`At`] on an outer proxy in the chain (rule 3).
+/// [`At`] on an outer proxy. The bean is in that proxy's `Provides`.
 pub struct FromChain;
+
+/// `S` is an item of `Self::Provides`. The shape is an existing index type.
+trait Listed<S, Shape> {}
+
+impl<B, S> Listed<S, ()> for B where B: BeanInfo<Provides = S> {}
+
+impl<B, S> Listed<S, Ix0> for B where B: BeanInfo<Provides = (S,)> {}
+
+impl<B, S, R> Listed<S, (Ix0, R)> for B where B: BeanInfo<Provides = (S, R)> {}
+
+impl<B, S, L> Listed<S, (Ix1, L)> for B where B: BeanInfo<Provides = (L, S)> {}
+
+impl<B, S, A, R> Listed<S, (Ix0, A, R)> for B where B: BeanInfo<Provides = (S, A, R)> {}
+
+impl<B, S, L, R> Listed<S, (Ix1, L, R)> for B where B: BeanInfo<Provides = (L, S, R)> {}
+
+impl<B, S, L, A> Listed<S, (Ix2, L, A)> for B where B: BeanInfo<Provides = (L, A, S)> {}
+
+impl<B, S, A, C, R> Listed<S, (Ix0, A, C, R)> for B where B: BeanInfo<Provides = (S, A, C, R)> {}
+
+impl<B, S, L, C, R> Listed<S, (Ix1, L, C, R)> for B where B: BeanInfo<Provides = (L, S, C, R)> {}
+
+impl<B, S, L, A, R> Listed<S, (Ix2, L, A, R)> for B where B: BeanInfo<Provides = (L, A, S, R)> {}
+
+impl<B, S, L, A, C> Listed<S, (Ix3, L, A, C)> for B where B: BeanInfo<Provides = (L, A, C, S)> {}
 
 /// `At` visible on a proxy or on a proxy further out in its chain.
 #[doc(hidden)]
@@ -22,9 +47,9 @@ pub trait Sees<S, K> {
     type Ix;
 }
 
-impl<P, S> Sees<S, Own> for P
+impl<P, S, Shape> Sees<S, (Own, Shape)> for P
 where
-    P: At<S>,
+    P: At<S> + Listed<S, Shape>,
 {
     type Ix = P::Ix;
 }
@@ -37,8 +62,8 @@ where
     type Ix = <O as Sees<S, K>>::Ix;
 }
 
-/// Resource claim that the pipeline bean can see, either on its own [`At`]
-/// list or on its proxy's [`At`] list.
+/// Resource claim the pipeline bean can see on its own [`At`] list, or on a
+/// proxy that lists the bean in `Provides`.
 pub trait ClaimVia<B, K> {
     /// Absolute indexes of the claimed beans.
     type Indexes;
@@ -74,11 +99,11 @@ where
     type Indexes = B::Ix;
 }
 
-impl<B, P, C> ClaimVia<B, FromProxy> for C
+impl<B, P, C, Shape> ClaimVia<B, (FromProxy, Shape)> for C
 where
     C: Marked,
     B: Proxied<Proxy = P>,
-    P: At<C::Target>,
+    P: At<C::Target> + Listed<C::Target, Shape>,
     C::Target: Target + Proxied,
 {
     type Indexes = P::Ix;
