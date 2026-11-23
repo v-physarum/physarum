@@ -16,7 +16,8 @@ pub trait DynView<T: ?Sized> {}
 /// `C` is [`Get<T>`](Get) or [`Mut<T>`](Mut). `V` is `dyn Trait`.
 /// The bean key stays `T`.
 pub struct Dyn<C, V: ?Sized> {
-    _markers: PhantomData<(C, *const V)>,
+    #[allow(clippy::type_complexity)]
+    _markers: PhantomData<(C, fn() -> *const V)>,
 }
 
 impl<C, V: ?Sized> Dyn<C, V> {
