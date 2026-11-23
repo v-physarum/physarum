@@ -412,7 +412,19 @@ Layout of `crates/ph_beans/src/`. Keep the surface readable: **small files**, **
    .map(on_tick)
    ```
 
-(Rules 8–9: extractors + `CtxConfig` / shallow assoc. Rule 10: role names. Rules 11–16: lists / push / meta / phantom / safety. Rule 17: trait-head bounds. Rule 18: pure systems / `fn` storage.)
+19. **Do not change existing structures without prior owner approval** — public (and crate-visible API) types already in the tree — structs, enums, traits, and their **signatures** (fields, generics, associated items, inherent methods that define the shape) — stay as they are unless the **owner explicitly allows** the change first. Prefer a **new** type / wrapper / view (`Dyn<…>`, seal, config) beside the frozen one. Applies in particular to [`Get`] / [`Mut`] / [`Marker`], [`BeanInfo`] / [`EventInfo`], list carriers, and other landed API. Drive-by “small” renames, extra type params, or field reshuffles are **forbidden** without that OK (stronger than taste: same bar as rule 14 for practical review).
+
+   ```rust
+   // Forbidden without owner OK — reshape a landed type
+   struct Get<T, V = ()>(…);          // was Get<T>
+   trait Marker { const T: …; fn as_dyn… } // growing Marker
+
+   // Required — leave Get/Mut; add a side view
+   struct Dyn<C, V: ?Sized>(…);
+   impl<T> Get<T> { fn as_dyn<V>(self) -> Dyn<Self, V> { … } }
+   ```
+
+(Rules 8–9: extractors + `CtxConfig` / shallow assoc. Rule 10: role names. Rules 11–16: lists / push / meta / phantom / safety. Rule 17: trait-head bounds. Rule 18: pure systems. Rule 19: no silent API shape changes.)
 
 ### How pieces talk
 
@@ -526,37 +538,39 @@ Markers on provide/inject may be `T` (shared / immutable) or `MUT` (exclusive).
 
 ### Inject `&dyn` (not in provides)
 
-**`dyn` / cast forms do not appear in `Provides`.** Parents expose **concrete** beans only. The child asks for a trait view at inject time.
+**`dyn` / cast forms do not appear in `Provides`.** Parents expose **concrete** beans only. The child asks for a trait view at inject / claim time.
 
-**Trait marker** — `#[config(type = dyn)]` on the trait (not the module) emits / implies a **marker trait on that trait** (name illustrative: `DynView`). That is the only under-the-hood hook: gate the cast and choose the `&dyn …` view. Unannotated traits cannot appear after `as`.
+**Call-site (prototype):** keep [`Get`] / [`Mut`] (rule 19). Side view type [`Dyn`]`<C, V>` — `Draw::T.as_dyn::<dyn Painter>()` → `Dyn<Get<Draw>, dyn Painter>` (attribute sugar `Draw::T as Painter` later).
+
+**`DynView` — marker only:** `#[config(type = dyn)]` on the trait emits / implies `impl<T: Painter> DynView<T> for dyn Painter` (name exact in code). **No** `Shared` / `Exclusive` GATs, **no** `shared` / `exclusive` / `Dyn::view` helpers on the marker — `ArgsView` is `&V` / `&mut V`. Unannotated traits cannot be `as_dyn` targets (`V: DynView<T>` fails).
 
 ```rust
-#[config(type = dyn)] // → marker on the trait (DynView / equiv.)
-trait Painter {
-    fn paint(&self);
-}
+#[config(type = dyn)]
+trait Painter { fn paint(&self); }
+
+// derive / manual — marker gate only
+impl<T: Painter> DynView<T> for dyn Painter {}
 
 struct Draw;
 impl Painter for Draw { … }
 
-#[provide(Draw::T)]                    // provide: concrete only
+#[provide(Draw::T)]
 struct App;
 
-#[inject(Draw::T as Painter)]          // inject: same ref, view as &dyn Painter
-struct Ui;
+// claim view (Get/Mut unchanged)
+.inject_resources(Draw::T.as_dyn::<dyn Painter>())
+// later attribute: #[inject(Draw::T as Painter)]
 ```
 
 | Side | Form | Meaning |
 | --- | --- | --- |
-| Provide | `Draw::T` | Concrete bean. **No** `as Trait`, **no** `dyn` in provides. |
-| Inject | `Draw::T as Painter` | Still the **`Draw`** slot from parent; args view is `&dyn Painter` (`::MUT` → `&mut dyn Painter`). |
-| Trait | `#[config(type = dyn)]` | Marker on the trait; allows `… as Painter`. |
+| Provide | `Draw::T` | Concrete only. **No** `as` / `dyn` in provides. |
+| Claim / inject | `Draw::T.as_dyn::<dyn Painter>()` | `Dyn<Get<Draw>, dyn Painter>`; bean key still `Draw`. |
+| Trait | `#[config(type = dyn)]` → `DynView` | Allows the cast. |
 
-**Minimal under the hood:** we already pass a reference. Do **not** invent a parallel inject type (`AsDyn<Draw, dyn Painter>`, extra Beans keys, provide-side dyn). Keep `Injects` / `At` / `FromParent` / `Claim` on the **concrete** `Draw`. The cast + trait marker only switch **`ArgsView`** to `&dyn Painter` (coerce from `&Draw`). Prefer reusing `Get`/`Mut` (or the same leaf) with a `Painter: DynView` bound over new DI matrices.
+**Minimal plumbing:** `Dyn` is a thin ZST (`_markers` / `PhantomData` — rule 15). Wire **`Claim`**, **`ArgsView`** (`&'a V` / `&'a mut V`), and **`OpLeaf`** as needed for `.inject_resources`. **Do not** add `Dyn` to filter ops (`FilterOperand` / `&|/!` / `HasMut`) until a `.filter` cast is required. **Do not** reshape `Get` / `Mut` / `Marker` (rules 19 + Accessors freeze).
 
-**Why `&dyn Trait` in args:** signature is `args: (&dyn Painter, …)`. In simple monomorphized scenarios the coerce + calls **inline** — no meaningful virtualization tax. Not `Box<dyn Trait>`, not an owned fat pointer in `State` (rule 16).
-
-**Mandatory — release ASM tests (no virtual calls):** checked via [`ph_test_asm`](../../../../crates/tests/ph_test_asm) (`crates/tests/ph_test_asm`): **release** probes, `assert_no_virtual_calls()` on the inject/`&dyn` hot path. Unit tests alone are not enough.
+**Why `&dyn Trait` in args:** `ArgsView` → `args: (&dyn Painter, …)`. Simple monomorphized paths **inline** — check with [`ph_test_asm`](../../../../crates/tests/ph_test_asm) `assert_no_virtual_calls()` on release probes. Not `Box<dyn>` (rule 16).
 
 ```rust
 AsmTester::new("dyn_inject_probe.rs")
@@ -566,39 +580,26 @@ AsmTester::new("dyn_inject_probe.rs")
     });
 ```
 
-| Surface | Type-level (minimal) |
+| Surface | Type-level |
 | --- | --- |
-| `#[inject(Draw::T as Painter)]` | `Injects = (Draw,)` — same as concrete inject |
-| Claim / `At` / `FromParent` | `Draw` (unchanged) |
-| `ArgsView` when cast + `Painter: DynView` | `&dyn Painter` / `&mut dyn Painter` |
+| `Draw::T.as_dyn::<dyn Painter>()` | `Dyn<Get<Draw>, dyn Painter>` |
+| `At` / bean key | `Draw` |
+| `ArgsView` | `&dyn Painter` / `&mut dyn Painter` |
+| `BeanInfo::Injects` (module attr later) | concrete `Draw` (cast is claim/view, not a new Beans slot) |
 
 **Forbidden:**
 
 ```rust
-#[provide(Draw::T as Painter)]     // cast / dyn not in provides
+#[provide(Draw::T as Painter)]
 #[provide(dyn Painter)]
-#[inject(dyn Painter::T)]          // must name concrete: Draw::T as Painter
-struct State { p: Box<dyn Painter> } // owned dyn — rule 16
+#[inject(dyn Painter::T)]
+struct Get<T, V>(…);                 // reshaping Get — rule 19
+trait DynView<T> { type Shared<'a>; fn shared(…); }  // heavy marker — keep marker-only
+struct State { p: Box<dyn Painter> } // rule 16
+// Dyn as FilterOperand / BitAnd LHS before filter cast is needed
 ```
 
-```rust
-impl BeanInfo for App {
-    type Provides = (Draw,);
-    type Injects = ();
-    type Beans = (Draw,);
-    type State = …;
-}
-
-impl BeanInfo for Ui {
-    type Provides = ();
-    type Injects = (Draw,); // cast is view-only; key stays Draw
-    type Beans = (Draw,);
-    type State = …;
-}
-// Painter carries the dyn marker; ArgsView(Draw::T as Painter) → &dyn Painter
-```
-
-Derive still emits only `BeanInfo` / `At` / `EventInfo` (and the marker on the annotated trait). No `AsDyn` / `ProvideDyn` in the DI surface.
+Derive still emits only `BeanInfo` / `At` / `EventInfo`, plus the **`DynView` marker impl** for `#[config(type = dyn)]` traits.
 
 ---
 
@@ -730,6 +731,19 @@ Warnings: specialized `#[deprecated]` `.build()` when `Status` is a warning type
 ### Accessors
 
 `Descriptor::Accessors` is the **live** type-level set of resource markers along the chain (`()`, `Get<T>`, `Mut<T>`, tuples). Same composition style as `Claim`: trait-recursive, not a closed table of every `(Mut<_>, Get<_>)` pair.
+
+**Frozen — `Get` / `Mut` / `Marker`:** these types and their public signatures **do not change**.
+
+```rust
+pub struct Get<T>(PhantomData<T>);
+pub struct Mut<T>(PhantomData<T>);
+pub trait Marker: Sized {
+    const T: Get<Self>;
+    const MUT: Mut<Self>;
+}
+```
+
+No extra type params, no new fields, no rename, no wrapping (`Get<AsDyn<…>>`, `Get<T, Dyn<…>>`, …). Features that need another view use **`Dyn<Get<T>, dyn Trait>`** / `as_dyn` (see **Inject `&dyn`**), not a reshape of `Get`/`Mut`. Covered by **rule 19** — prior owner OK required to change these types.
 
 **Model: persist + explicit wait.** Live claims survive a plain `.filter`. A wait filter such as `Main::ON[Keys::MUT]` **clears** that `Mut` claim. Read/read under different filters stays allowed.
 

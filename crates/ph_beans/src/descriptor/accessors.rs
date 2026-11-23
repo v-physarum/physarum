@@ -1,4 +1,8 @@
 //! Resource markers and the stub accessor set.
+//!
+//! [`Get`], [`Mut`], and [`Marker`] are **frozen** (design rule 19 / Accessors):
+//! do not change their shape without prior owner approval. Extra views use a
+//! side type (`Dyn`), not a reshape of these markers.
 
 use core::marker::PhantomData;
 
@@ -10,6 +14,8 @@ use crate::bean::BeanInfo;
 pub struct Accessors;
 
 /// Shared claim on `T`.
+///
+/// Frozen shape — `Get<T>(PhantomData<T>)` only.
 pub struct Get<T>(PhantomData<T>);
 
 impl<T> Get<T> {
@@ -27,6 +33,8 @@ impl<T> Default for Get<T> {
 }
 
 /// Exclusive claim on `T`.
+///
+/// Frozen shape — `Mut<T>(PhantomData<T>)` only.
 pub struct Mut<T>(PhantomData<T>);
 
 impl<T> Mut<T> {
@@ -44,6 +52,8 @@ impl<T> Default for Mut<T> {
 }
 
 /// `T` and `MUT` markers used by [`.inject_resources`](crate::Init::inject_resources).
+///
+/// Frozen — only [`Get`] / [`Mut`] consts; no new associated items without owner OK.
 pub trait Marker: Sized {
     /// Shared claim.
     const T: Get<Self>;

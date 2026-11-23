@@ -10,8 +10,8 @@ This file tracks **what is done**, **what is still open**, and **coding MUST/FOR
 
 | Topic | `design.md` |
 | --- | --- |
-| Rules 1–18 (layout, steps, configs, generics, lists, push, meta, phantom, safety, trait bounds, pure systems) | Crate module structure |
-| DI provide / inject; derive = `BeanInfo` + `At` (+ `EventInfo`); inject cast `Bean::T as Trait` → `&dyn Trait` (not in provides) | Modules (DI) → Derive; Inject `&dyn` |
+| Rules 1–19 (… pure systems; no silent API shape changes) | Crate module structure |
+| DI / inject `&dyn`: thin `Dyn` + marker `DynView`; `Get`/`Mut` frozen (R19) | Modules (DI) → Inject `&dyn`; Accessors; rule 19 |
 | `.inject_resources`, OpDesc L1/L2 | OpDesc; Accessors |
 | Live Accessors, wait, replace | Descriptor → Accessors |
 | Tick, `MAX_MAP_SYSTEMS = 16`, shared `List`/`Leaf`/`Grow` | Context → ContextTick |
@@ -40,6 +40,7 @@ Aligned with `design.md` rules. Prefer these IDs in review notes.
 | **R16** Safety | `#![forbid(unsafe_code)]`; no owned `Box<dyn>`; inject cast → `&dyn` args (may inline). | `unsafe`; `Box<dyn>` in `State`; `dyn` / `as Trait` in **provides**. |
 | **R17** Trait bounds | Shared predicates on the **trait head** (`Update`/`Tick`/`Setup`: `BeanInfo` + `Injects: ArgsView`). `Update` only for `Built`. | Same bounds re-copied on every `fn`; stub `Update for Init`; dropping `injects` from `update` because the body ignores them. |
 | **R18** Pure systems | Systems touch **only** args (+ init return). Bound `Fn`. Call site = **function item**. Under the hood = **pure `fn` / function item** (build speed + future SIMD store). | Capturing closures; `FnMut` / env mutation; storing systems as closure objects “for convenience”. |
+| **R19** Frozen shapes | Leave landed public/crate API types as-is; extend with **new** types beside them. Prior **owner OK** before any field/generic/signature change. | Quiet reshape of `Get`/`Mut`/`Marker`/meta/list carriers; “small” extra type params without OK. |
 
 Also always: Borrowing (`At`/`Ix*`/`TakeMany`); no API `type` aliases; no god modules; one-crate PRs (`ph_beans`); push only when asked.
 
@@ -73,7 +74,8 @@ cargo test -p ph_beans
 | **R14** meta freeze + `Query` / `StartDesc` | **Done** | `BeanInfo` data-only; `context/start.rs` (`StartDesc`); `query/entry.rs` (`Query`) |
 | **R15** one phantom per struct | **Done** | `Ctx` / `MapList` / `SetFilter` use one `_markers` or tuple phantom |
 | **R16** no `unsafe` / no `Box<dyn>` | **Done** | Rule fixed; `&dyn` views documented under Provide / inject `&dyn` |
-| Inject `&dyn` (`Bean::T as Trait`, marker on trait via `#[config(type = dyn)]`) | **Open** | View-only cast; `Injects`/`At` stay concrete; `ph_test_asm` `assert_no_virtual_calls` |
+| Inject `&dyn` (thin `Dyn` + marker-only `DynView`; `as_dyn` on Get/Mut) | **Open** | No Shared/Exclusive; no filter-ops for `Dyn` until needed; `ph_test_asm` |
+| **R19** no silent structure changes | **Done** | Rule fixed; `Get`/`Mut`/`Marker` called out under Accessors |
 | Map cap 16 | **Done** | `MAX_MAP_SYSTEMS`; push refuses 17th |
 | No macros in crate src | **Done** | No `macro_rules!` under `ph_beans/src` |
 | **R8** filter ops / flags | **Done** | `FilterOperand` RHS; per-LHS orphan residual; `OrWith` / `WaitFlag`; `ops_node` removed |
