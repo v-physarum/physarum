@@ -138,4 +138,5 @@ fn a_derived_cast_keeps_the_concrete_bean() {
     fn slot<B: At<Spot, Ix = Ix0>>() {}
     lists::<Hud>();
     slot::<Hud>();
+    assert_eq!(Spot(3).tag(), 3);
 }
