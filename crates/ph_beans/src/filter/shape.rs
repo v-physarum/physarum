@@ -1,6 +1,6 @@
 //! Spine, wait, and parent checks over the filter AST.
 
-use crate::bean::{EventInfo, More, Proxied, ProxyInfo, Via};
+use crate::bean::{EventInfo, Marked, More, Proxied, ProxyInfo, Via};
 use crate::descriptor::{Get, Mut};
 use crate::filter::{And, Not, On, Or};
 
@@ -210,8 +210,8 @@ where
 
 impl<P, C, I, X, K> UnderVia<P, (crate::FromProxy, K)> for On<C, I>
 where
-    C: Proxied<Proxy = X>,
-    X: EventInfo<Parents = P>,
+    C: Proxied<Link: Marked<Target = X>>,
+    X: ProxyInfo<Targets = C> + EventInfo<Parents = P>,
     I: UnderVia<C, K>,
 {
 }
@@ -236,8 +236,8 @@ where
 
 impl<P, C, I, X, Kc, Ki> UnderVia<P, (crate::FromChain, Kc, Ki)> for On<C, I>
 where
-    C: Proxied<Proxy = X>,
-    X: ChainParents<P, Kc>,
+    C: Proxied<Link: Marked<Target = X>>,
+    X: ProxyInfo<Targets = C> + ChainParents<P, Kc>,
     I: UnderVia<C, Ki>,
 {
 }

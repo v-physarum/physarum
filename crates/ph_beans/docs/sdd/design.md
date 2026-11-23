@@ -517,7 +517,7 @@ struct GameTick; // event (or other bean) wrapped by Update
 | `proxy = Update::T` on the target | Target bean/event is **proxied by** `Update`. Marker strength follows `T` / `MUT`. |
 | [`ProxyInfo`] | Meta (rule 14): data-only link proxy ↔ target. Associated types: `Targets` (the wrapped bean or the next inner proxy), `Link` (`Get<Self>` / `Mut<Self>`), `Chain` ([`Stop`] or [`More`] of the next outer proxy). Names pending owner OK. No methods. |
 | [`DefaultProxy`]<`B`> | The proxy a bean or event uses when it has no `proxy = ...`. Ordinary proxy: `Targets = B`, `Link = Get<DefaultProxy<B>>`, `Chain = Stop`, no provides, no parent events. |
-| [`Proxied`] | Manual stand-in for `proxy = ...` on a **bean** (not a reshape of [`BeanInfo`] / [`EventInfo`]). `Proxy` + `Link`. Absent attribute → `Proxy = DefaultProxy<Self>`, `Link = Get<DefaultProxy<Self>>`. A proxy does not write it: `Chain = More<Outer>` means `Proxy = Outer` and `Link = Outer::Link`. |
+| [`Proxied`] | Manual stand-in for `proxy = ...` on a **bean** (not a reshape of [`BeanInfo`] / [`EventInfo`]). `Proxy` is always `DefaultProxy<Self>`. `Link` is `Get<P>` / `Mut<P>` of the named proxy, or `Get<DefaultProxy<Self>>` when absent. A proxy does not write it: `Chain = More<Outer>` sets `Link = Outer::Link`. |
 
 **Rules:**
 

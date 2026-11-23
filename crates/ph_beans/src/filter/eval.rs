@@ -2,7 +2,7 @@
 
 use core::any::TypeId;
 
-use crate::bean::{More, ParentList, Proxied, ProxyInfo, Stop};
+use crate::bean::{Marked, More, ParentList, Proxied, ProxyInfo, Stop};
 use crate::descriptor::{Get, Mut};
 use crate::filter::{And, Not, On, Or};
 
@@ -159,15 +159,14 @@ where
     }
 }
 
-impl<E, I> MatchEmit for On<E, I>
+impl<E, I, P> MatchEmit for On<E, I>
 where
-    E: 'static + Proxied,
-    E::Proxy: ChainEmit<<E::Proxy as ProxyInfo>::Chain>,
+    E: 'static + Proxied<Link: Marked<Target = P>>,
+    P: ProxyInfo<Targets = E> + ChainEmit<P::Chain>,
     I: MatchEmit,
 {
     fn matches(emitted: &[TypeId]) -> bool {
-        (listed(emitted, TypeId::of::<E>())
-            || <E::Proxy as ChainEmit<<E::Proxy as ProxyInfo>::Chain>>::hit(emitted))
+        (listed(emitted, TypeId::of::<E>()) || <P as ChainEmit<P::Chain>>::hit(emitted))
             && I::matches(emitted)
     }
 }

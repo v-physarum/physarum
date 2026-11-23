@@ -41,6 +41,7 @@ mod tests {
         //! `emitting_the_proxy_runs_the_target` is the manual emit.
         //! `emitting_chain_level_*` repeats it for the chain.
         //! `the_target_sees_the_proxy_provides` injects `Score` from `Update`'s `Provides`.
+        //! `GameTick`: `Proxy = DefaultProxy<GameTick>`, `Link = Get<Update>`.
 
         use std::fs;
         use std::path::PathBuf;
@@ -184,7 +185,7 @@ mod tests {
         }
         impl Target for GameTick {}
         impl Proxied for GameTick {
-            type Proxy = Update;
+            type Proxy = DefaultProxy<GameTick>;
             type Link = Get<Update>;
         }
         impl EventInfo for GameTick {
@@ -211,7 +212,7 @@ mod tests {
         }
         impl Target for Loud {}
         impl Proxied for Loud {
-            type Proxy = Gate;
+            type Proxy = DefaultProxy<Loud>;
             type Link = Mut<Gate>;
         }
 
@@ -229,7 +230,7 @@ mod tests {
         }
         impl Target for Core {}
         impl Proxied for Core {
-            type Proxy = Inner;
+            type Proxy = DefaultProxy<Core>;
             type Link = Get<Inner>;
         }
         impl EventInfo for Core {
@@ -371,8 +372,12 @@ mod tests {
         fn link_records_shared_and_exclusive_markers() {
             fn shared<T: Same<Get<Update>>>() {}
             fn exclusive<T: Same<Mut<Gate>>>() {}
+            fn universal<B, T: Same<DefaultProxy<B>>>() {}
             shared::<<GameTick as Proxied>::Link>();
             exclusive::<<Loud as Proxied>::Link>();
+            universal::<GameTick, <GameTick as Proxied>::Proxy>();
+            universal::<Loud, <Loud as Proxied>::Proxy>();
+            universal::<Core, <Core as Proxied>::Proxy>();
             shared::<<Update as ProxyInfo>::Link>();
             exclusive::<<Gate as ProxyInfo>::Link>();
         }
@@ -409,7 +414,7 @@ mod tests {
                     type Provides = (); type Injects = (); type Beans = (); type State = ();
                 }
                 impl Target for GameTick {}
-                impl Proxied for GameTick { type Proxy = Update; type Link = Get<Update>; }
+                impl Proxied for GameTick { type Proxy = ph_beans::DefaultProxy<GameTick>; type Link = Get<Update>; }
                 fn probe() { let _claim = GameTick::query().inject_resources(Score::T); }
                 ",
                 "ClaimVia",
@@ -666,7 +671,7 @@ mod tests {
             impl ProxyInfo for Outer {
                 type Targets = Inner; type Link = Get<Outer>; type Chain = Stop;
             }
-            impl Proxied for Tick { type Proxy = Inner; type Link = Get<Inner>; }
+            impl Proxied for Tick { type Proxy = ph_beans::DefaultProxy<Tick>; type Link = Get<Inner>; }
             impl BeanInfo for App {
                 type Provides = (); type Injects = (); type Beans = (); type State = ();
             }

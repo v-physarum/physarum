@@ -6,6 +6,7 @@
 //! `a_chain_nests_wrappers_outer_around_inner`.
 //! Chain emits are `emitting_chain_level_*`, expanded with `impl_foreach`.
 //! A component injects a proxy object only when that proxy lists it in `Provides`.
+//! `Proxied::Proxy` is always `DefaultProxy<Self>`. `Link` names the real proxy.
 
 use core::any::TypeId;
 use core::marker::PhantomData;
@@ -40,7 +41,7 @@ impl<S> Marked for Mut<S> {
 }
 
 /// `Get<P>` or `Mut<P>`: the `proxy = P::T` / `proxy = P::MUT` marker.
-pub trait LinkMark<P> {}
+pub trait LinkMark<P>: Marked<Target = P> {}
 
 impl<S, C> LinkMark<S> for C where C: Marked<Target = S> {}
 
@@ -61,17 +62,20 @@ pub trait ProxyInfo: crate::BeanInfo {
     type Chain;
 }
 
-/// Bean wrapped by `Proxy`.
-/// No `proxy` is `DefaultProxy<Self>`. `Chain = More<Outer>` sets `Proxy = Outer`.
+/// Bean wrapped by the proxy named in [`Link`](Proxied::Link).
+///
+/// `Proxy` is always [`DefaultProxy<Self>`](DefaultProxy). An explicit proxy
+/// such as `Update` is `Link = Get<Update>` (`T`) or `Mut<Update>` (`MUT`).
+/// No `proxy` attribute keeps `Link = Get<DefaultProxy<Self>>`.
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not a proxied target",
-    note = "inject the target bean; a proxy is not a free-standing key. A missing `proxy = ...` on a bean is `Proxy = DefaultProxy<Self>` and `Link = Get<DefaultProxy<Self>>`"
+    note = "inject the target bean; a proxy is not a free-standing key. `Proxy` is `DefaultProxy<Self>`. `Link` is `Get<P>` or `Mut<P>` of the wrapping proxy"
 )]
 pub trait Proxied: crate::BeanInfo {
-    /// Proxy that wraps `Self`.
+    /// Always [`DefaultProxy<Self>`](DefaultProxy).
     type Proxy: ProxyInfo<Targets = Self>;
-    /// `Get<Self::Proxy>` (`T`) or `Mut<Self::Proxy>` (`MUT`).
-    type Link: LinkMark<Self::Proxy>;
+    /// `Get<P>` or `Mut<P>` of the proxy that wraps `Self`.
+    type Link: Marked<Target: ProxyInfo<Targets = Self>>;
 }
 
 impl<P, O> Proxied for P
@@ -79,7 +83,7 @@ where
     P: ProxyInfo<Chain = More<O>>,
     O: ProxyInfo<Targets = P>,
 {
-    type Proxy = O;
+    type Proxy = DefaultProxy<P>;
     type Link = O::Link;
 }
 
@@ -175,16 +179,13 @@ where
     type Wrapped = <O as Enfold<Via<P, C>, O::Chain>>::Wrapped;
 }
 
-impl<C> ApplyProxy for C
+impl<C, P> ApplyProxy for C
 where
     C: Marked,
-    C::Target: Proxied,
-    <C::Target as Proxied>::Proxy: Enfold<C, <<C::Target as Proxied>::Proxy as ProxyInfo>::Chain>,
+    C::Target: Proxied<Link: Marked<Target = P>>,
+    P: ProxyInfo<Targets = C::Target> + Enfold<C, P::Chain>,
 {
-    type Wrapped = <<C::Target as Proxied>::Proxy as Enfold<
-        C,
-        <<C::Target as Proxied>::Proxy as ProxyInfo>::Chain,
-    >>::Wrapped;
+    type Wrapped = <P as Enfold<C, P::Chain>>::Wrapped;
 }
 
 /// Builds the init wrapper for proxy `Self` around bean `B`, outer around inner.
@@ -269,8 +270,8 @@ where
 impl<P, B, O> EnterAll<B, More<O>> for P
 where
     B: crate::BeanInfo,
-    P: crate::BeanInfo + InitPath<B> + Proxied<Proxy = O>,
-    O: InitPath<P> + EnterAll<P, O::Chain>,
+    P: crate::BeanInfo + InitPath<B> + Proxied<Link: Marked<Target = O>>,
+    O: ProxyInfo<Targets = P> + InitPath<P> + EnterAll<P, O::Chain>,
 {
     fn enter_all() {
         <O as EnterAll<P, O::Chain>>::enter_all();

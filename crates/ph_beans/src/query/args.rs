@@ -102,8 +102,8 @@ where
 impl<B, P, C, Shape> ClaimVia<B, (FromProxy, Shape)> for C
 where
     C: Marked,
-    B: Proxied<Proxy = P>,
-    P: At<C::Target> + Listed<C::Target, Shape>,
+    B: Proxied<Link: Marked<Target = P>>,
+    P: ProxyInfo<Targets = B> + At<C::Target> + Listed<C::Target, Shape>,
     C::Target: Target + Proxied,
 {
     type Indexes = P::Ix;
@@ -112,8 +112,8 @@ where
 impl<B, P, O, K, C> ClaimVia<B, (FromChain, K)> for C
 where
     C: Marked,
-    B: Proxied<Proxy = P>,
-    P: ProxyInfo<Chain = More<O>>,
+    B: Proxied<Link: Marked<Target = P>>,
+    P: ProxyInfo<Targets = B, Chain = More<O>>,
     O: Sees<C::Target, K>,
     C::Target: Target + Proxied,
 {
@@ -142,7 +142,8 @@ trait UnderProxy<P> {}
 impl<P, C> UnderProxy<P> for C
 where
     C: Marked,
-    C::Target: Target + Proxied<Proxy = P>,
+    C::Target: Target + Proxied<Link: Marked<Target = P>>,
+    P: ProxyInfo<Targets = C::Target>,
 {
 }
 
