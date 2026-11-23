@@ -16,8 +16,8 @@ pub mod filter;
 pub mod query;
 
 pub use bean::{
-    BeanInfo, EventInfo, FromParent, InjectAt, Module, OfInject, OfInject0, OfInject1, OfParent,
-    OfProvide, OfProvide0, OfProvide1, ProvideAt,
+    BeanInfo, EventInfo, FromParent, Module, OfInject, OfInject0, OfInject1, OfParent, OfProvide,
+    OfProvide0, OfProvide1,
 };
 pub use borrow::{At, Ix0, Ix1, Ix2, Ix3, Off, Take, TakeMany};
 pub use context::{
@@ -25,9 +25,9 @@ pub use context::{
     WithDefault, WithInit,
 };
 pub use descriptor::{
-    Accessors, Descriptor, Dyn, DynView, ErrBadEvent, ErrConflictAccess, ErrDuplicateResource,
-    ErrInitAlreadySet, ErrNeedWaitFilter, ErrTooManySystems, Get, Idle, Live, Marker, Mut,
-    NeedBuild, NeedInit, OpDesc, OpOk, OpShape, PipelineOk, Valid, WarnUnusedArgs,
+    Accessors, Collected, Descriptor, Dyn, DynView, ErrBadEvent, ErrConflictAccess,
+    ErrDuplicateResource, ErrInitAlreadySet, ErrNeedWaitFilter, ErrTooManySystems, Get, Idle, Live,
+    Marker, Mut, NeedBuild, NeedInit, OpDesc, OpOk, OpShape, PipelineOk, Valid, WarnUnusedArgs,
 };
 pub use filter::{And, ApplyFilter, NestOk, Not, On, Or};
 pub use query::{Built, Init, Query, Setup, Tick, Update};

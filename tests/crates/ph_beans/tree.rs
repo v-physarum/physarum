@@ -7,8 +7,8 @@
 #![allow(missing_docs)]
 
 use ph_beans::{
-    At, BeanInfo, EventInfo, Get, Ix0, Ix1, Marker, Module, Mut, OfInject, OfParent, OfProvide,
-    OfProvide0, OfProvide1, ProvideAt, Query, Setup, Tick,
+    At, BeanInfo, Collected, EventInfo, Get, Init, Ix0, Ix1, Marker, Module, Mut, OfInject,
+    OfParent, OfProvide, OfProvide0, OfProvide1, Query, Setup, StartDesc, Tick,
 };
 
 struct Id(u8);
@@ -124,24 +124,8 @@ impl BeanInfo for TakesKeys {
     type State = ();
 }
 
-struct FlatHost;
-struct TakesLogic;
 struct TakesPair;
 struct TakesFlat;
-
-impl BeanInfo for FlatHost {
-    type Provides = (Get<Id>, Get<Keys>, Mut<Logic>);
-    type Injects = ();
-    type Beans = (Get<Id>, Get<Keys>, Mut<Logic>);
-    type State = ();
-}
-
-impl BeanInfo for TakesLogic {
-    type Provides = ();
-    type Injects = Mut<Logic>;
-    type Beans = Mut<Logic>;
-    type State = ();
-}
 
 impl BeanInfo for TakesPair {
     type Provides = ();
@@ -183,16 +167,20 @@ fn a_child_injects_the_parent_surface() {
     fn from_inject<C: Module<Logic, OfInject>>() {}
     fn from_provide<C: Module<Logic, OfProvide>>() {}
     fn second<C: Module<PairHost, OfProvide1>>() {}
-    fn third<C: Module<FlatHost, ProvideAt<3, 2>>>() {}
     fn pair<C: Module<PairHost, (OfProvide0, OfProvide1)>>() {}
-    fn flat_all<C: Module<FlatHost, (ProvideAt<3, 0>, ProvideAt<3, 1>, ProvideAt<3, 2>)>>() {}
     parent::<Render>();
     from_inject::<UsesApp>();
     from_provide::<UsesRender>();
     second::<TakesKeys>();
-    third::<TakesLogic>();
     pair::<TakesPair>();
-    flat_all::<TakesFlat>();
+}
+
+#[test]
+fn the_descriptor_collects_the_injects() {
+    fn one<D: Collected<Injects = Mut<Logic>>>() {}
+    fn flat<D: Collected<Injects = (Get<Id>, Get<Keys>, Mut<Logic>)>>() {}
+    one::<Init<(), <Render as StartDesc>::Ctx>>();
+    flat::<Init<(), <TakesFlat as StartDesc>::Ctx>>();
 }
 
 #[test]

@@ -17,10 +17,20 @@ pub use status::{
 
 /// Pipeline health and the live accessor set.
 ///
-/// `Accessors` is a stub in this slice. Filter rules fill it later.
+/// Inject claims of the context bean are gathered by [`Collected`], not walked
+/// as a nested tail.
 pub trait Descriptor {
     /// `Valid`, a warning, or a blocking status for the whole chain.
     type Status;
     /// Live resource accessors claimed along the chain.
     type Accessors;
+}
+
+/// Inject claims gathered from the context bean onto the pipeline descriptor.
+///
+/// The set is [`BeanInfo::Injects`](crate::BeanInfo::Injects): one claim, or one
+/// flat tuple of claims. Readers use this associated type.
+pub trait Collected: Descriptor {
+    /// Inject claims of the context bean.
+    type Injects;
 }

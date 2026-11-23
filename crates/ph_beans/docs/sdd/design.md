@@ -93,7 +93,7 @@ Layout of `crates/ph_beans/src/`. Keep the surface readable: **small files**, **
    // …
    ```
 
-   DI (`FromParent`): match through **membership** + `ClaimMark`. **Do not** split Get vs Mut. A provide or inject list is one flat tuple of at most eight claims, `(Get<A>, Get<B>, Get<C>)`. A pair uses `OfProvide0` / `OfProvide1` (and the inject twins). Lengths 3..=8 use `ProvideAt<N, I>` / `InjectAt<N, I>`: the length has to sit in the marker, or two arities overlap (E0119). A nested tail `(Get<A>, (Get<B>, ()))` is not a list. A child inject list is that same flat tuple: each element is a claim, so the tuple impl does not recurse.
+   DI (`FromParent`): match through **membership** + `ClaimMark`. **Do not** split Get vs Mut. A pair uses `OfProvide0` / `OfProvide1` (and the inject twins). The inject tuple is collected on `Collected::Injects` — one associated type on the pipeline descriptor, not an index walk and not a nested tail `(Get<A>, (Get<B>, ()))`. A child inject list is that same flat tuple: each element is a claim, so the tuple impl does not recurse.
 
    ```rust
    // Forbidden — Get×Mut×slot
@@ -565,7 +565,7 @@ Tree: `App` → `Logic` → `Render`. `Render` injects `Logic::MUT`; `Logic` inj
 
 ### `FromParent` impl style
 
-Compile-time “child may take this claim from parent” is **`FromParent`** (and `Module`). Use **`ClaimMark`** + membership on `Provides` / `Injects` — **not** Get×Mut×slot. A list is a flat tuple of at most eight claims. A pair uses `OfProvide0` / `OfProvide1`. Lengths 3..=8 use `ProvideAt<N, I>` / `InjectAt<N, I>`. A nested tail is not a list (rule 8).
+Compile-time “child may take this claim from parent” is **`FromParent`** (and `Module`). Use **`ClaimMark`** + membership on `Provides` / `Injects` — **not** Get×Mut×slot. A pair uses `OfProvide0` / `OfProvide1`. The inject tuple is collected on `Collected::Injects`. A nested tail is not a list (rule 8).
 
 ### `T` vs `MUT`
 

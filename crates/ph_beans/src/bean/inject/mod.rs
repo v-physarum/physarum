@@ -1,12 +1,9 @@
 //! Manual provide / inject against a parent surface.
 //!
-//! Membership is [`ClaimMark`] + a flat tuple of at most eight claims.
-//! Slot markers (`OfProvide0`, …) name the index. A child inject list is the
-//! same flat tuple: each element is a claim, and the tuple impl does not
-//! recurse. A nested tail such as `(Get<T>, (Get<U>, ()))` is not a list.
-//! The markers are not a Get×Mut matrix.
-
-mod flat;
+//! Membership is [`ClaimMark`]. A pair uses `OfProvide0` / `OfProvide1` (and
+//! the inject twins). The inject tuple itself is collected on
+//! [`Collected`](crate::Collected). A nested tail such as
+//! `(Get<T>, (Get<U>, ()))` is not a list. The markers are not a Get×Mut matrix.
 
 use crate::bean::BeanInfo;
 use crate::descriptor::{Get, Mut};
@@ -26,22 +23,11 @@ pub struct OfProvide0;
 /// Second claim of a flat provide pair.
 pub struct OfProvide1;
 
-/// Index `I` in a flat provide list of length `N` (3..=8).
-///
-/// A pair keeps [`OfProvide0`] / [`OfProvide1`]. Longer lists cannot share
-/// those markers: two impls that differ only by tuple length overlap (E0119).
-pub struct ProvideAt<const N: u8, const I: u8>;
-
-/// First claim of a flat inject list (two claims).
+/// First claim of a flat inject pair.
 pub struct OfInject0;
 
-/// Second claim of a flat inject list (two claims).
+/// Second claim of a flat inject pair.
 pub struct OfInject1;
-
-/// Index `I` in a flat inject list of length `N` (3..=8).
-///
-/// A pair keeps [`OfInject0`] / [`OfInject1`].
-pub struct InjectAt<const N: u8, const I: u8>;
 
 /// `Self` may be injected from `P` via `V`.
 ///

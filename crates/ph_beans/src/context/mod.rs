@@ -2,6 +2,8 @@
 
 use core::marker::PhantomData;
 
+use crate::bean::BeanInfo;
+use crate::descriptor::Collected;
 use crate::descriptor::Descriptor;
 use crate::descriptor::live::AccSet;
 
@@ -39,6 +41,14 @@ where
 {
     type Status = S;
     type Accessors = A::Set;
+}
+
+impl<B, A, S, T> Collected for Ctx<B, A, S, T>
+where
+    A: AccSet,
+    B: BeanInfo,
+{
+    type Injects = B::Injects;
 }
 
 /// The context half of a descriptor: which bean, which args, which systems.
