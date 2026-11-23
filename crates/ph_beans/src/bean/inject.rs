@@ -34,40 +34,8 @@ pub struct OfInject1;
 
 /// `Self` may be injected from `P` via `V`.
 ///
-/// ```compile_fail
-/// use ph_beans::{BeanInfo, DefaultProxy, FromParent, Get, Mut, OfProvide, Proxied, Target};
-///
-/// struct Logic;
-/// struct App;
-///
-/// impl BeanInfo for Logic {
-///     type Provides = ();
-///     type Injects = ();
-///     type Beans = ();
-///     type State = ();
-/// }
-///
-/// impl Target for Logic {}
-/// impl Proxied for Logic {
-///     type Proxy = DefaultProxy<Logic>;
-///     type Link = Get<DefaultProxy<Logic>>;
-/// }
-///
-/// impl BeanInfo for App {
-///     type Provides = Get<Logic>;
-///     type Injects = ();
-///     type Beans = Get<Logic>;
-///     type State = ();
-/// }
-///
-/// fn mount<C>()
-/// where
-///     C: FromParent<App, OfProvide>,
-/// {
-/// }
-///
-/// mount::<Mut<Logic>>();
-/// ```
+/// `Mut` against an immutable provide fails.
+/// See `exclusive_against_a_shared_provide_is_rejected`.
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not on `{P}` via `{V}`",
     label = "fix Descriptor::Status",

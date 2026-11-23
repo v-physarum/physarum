@@ -40,36 +40,7 @@ where
 {
     /// Resources, init, then `.build()`.
     ///
-    /// The return type is a [`Tick`] only when its status implements
-    /// [`PipelineOk`](crate::PipelineOk).
-    ///
-    /// ```compile_fail
-    /// use ph_beans::{BeanInfo, DefaultProxy, Get, Proxied, Query, Setup, Target, Tick};
-    ///
-    /// struct App;
-    ///
-    /// impl BeanInfo for App {
-    ///     type Provides = ();
-    ///     type Injects = ();
-    ///     type Beans = ();
-    ///     type State = u8;
-    /// }
-    ///
-    /// impl Target for App {}
-    /// impl Proxied for App {
-    ///     type Proxy = DefaultProxy<App>;
-    ///     type Link = Get<DefaultProxy<App>>;
-    /// }
-    ///
-    /// fn boot(_: ()) -> u8 {
-    ///     1
-    /// }
-    ///
-    /// impl Setup for App {
-    ///     fn setup(self) -> impl Tick<Self> {
-    ///         App::query().init_state(boot)
-    ///     }
-    /// }
-    /// ```
+    /// Returns a [`Tick`] only when status is [`PipelineOk`](crate::PipelineOk).
+    /// A missing `.build()` fails. See `setup_without_build_is_rejected`.
     fn setup(self) -> impl Tick<Self>;
 }

@@ -99,55 +99,8 @@ where
 impl<E, C> Init<E, C> {
     /// Replaces the resource set. The argument is a marker.
     ///
-    /// A live `Mut` refuses this call until a wait filter clears it.
-    ///
-    /// ```compile_fail
-    /// use ph_beans::{At, BeanInfo, DefaultProxy, EventInfo, Get, Ix0, Marker, Proxied, Query, Target};
-    ///
-    /// struct Keys;
-    /// struct Main;
-    /// struct App;
-    ///
-    /// impl BeanInfo for Keys {
-    ///     type Provides = ();
-    ///     type Injects = ();
-    ///     type Beans = ();
-    ///     type State = ();
-    /// }
-    ///
-    /// impl Target for Keys {}
-    /// impl Proxied for Keys {
-    ///     type Proxy = DefaultProxy<Keys>;
-    ///     type Link = Get<DefaultProxy<Keys>>;
-    /// }
-    ///
-    /// impl BeanInfo for Main {
-    ///     type Provides = ();
-    ///     type Injects = ();
-    ///     type Beans = ();
-    ///     type State = ();
-    /// }
-    ///
-    /// impl EventInfo for Main {
-    ///     type Parents = ();
-    /// }
-    ///
-    /// impl BeanInfo for App {
-    ///     type Provides = ();
-    ///     type Injects = ();
-    ///     type Beans = ();
-    ///     type State = ();
-    /// }
-    ///
-    /// impl At<Keys> for App {
-    ///     type Ix = Ix0;
-    /// }
-    ///
-    /// let _blocked = App::query()
-    ///     .inject_resources(Keys::MUT)
-    ///     .filter(Main::ON[Keys::T])
-    ///     .inject_resources(Keys::T);
-    /// ```
+    /// A live `Mut` refuses another inject until a wait clears it.
+    /// See `a_live_mut_blocks_the_next_inject`.
     #[allow(clippy::needless_pass_by_value)]
     pub fn inject_resources<R, K>(self, resources: R) -> <Self as InjectResourcesStep<R, K>>::Out
     where

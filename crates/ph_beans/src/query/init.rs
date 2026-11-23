@@ -219,37 +219,8 @@ where
 impl<E, C> Init<E, C> {
     /// Stores the init system and moves status to [`NeedBuild`](crate::NeedBuild).
     ///
-    /// Pass a **function item**. The system must not capture or mutate outer
-    /// state — only resource args and the returned [`BeanInfo::State`]
-    /// (rule 18). Under the hood handlers stay pure `fn` (build speed and a
-    /// future SIMD store).
-    ///
-    /// A second call fails on this line with status [`ErrInitAlreadySet`](crate::ErrInitAlreadySet).
-    ///
-    /// ```compile_fail
-    /// use ph_beans::{BeanInfo, DefaultProxy, Get, Proxied, Query, Target};
-    ///
-    /// struct App;
-    ///
-    /// impl BeanInfo for App {
-    ///     type Provides = ();
-    ///     type Injects = ();
-    ///     type Beans = ();
-    ///     type State = u8;
-    /// }
-    ///
-    /// impl Target for App {}
-    /// impl Proxied for App {
-    ///     type Proxy = DefaultProxy<App>;
-    ///     type Link = Get<DefaultProxy<App>>;
-    /// }
-    ///
-    /// fn boot(_: ()) -> u8 {
-    ///     1
-    /// }
-    ///
-    /// let _twice = App::query().init_state(boot).init_state(boot);
-    /// ```
+    /// Pass a function item. It must not capture outer state.
+    /// A second call fails. See `a_second_init_state_is_rejected`.
     pub fn init_state<H>(self, handler: H) -> <Self as InitStateStep<H>>::Out
     where
         Self: InitStateStep<H>,
@@ -259,29 +230,7 @@ impl<E, C> Init<E, C> {
 
     /// Stores [`Default`] state and moves status to [`NeedBuild`](crate::NeedBuild).
     ///
-    /// The state is created here, inside the builder, not by a later `init`.
-    /// A second init fails on that call with [`ErrInitAlreadySet`](crate::ErrInitAlreadySet).
-    ///
-    /// ```compile_fail
-    /// use ph_beans::{BeanInfo, DefaultProxy, Get, Proxied, Query, Target};
-    ///
-    /// struct App;
-    ///
-    /// impl BeanInfo for App {
-    ///     type Provides = ();
-    ///     type Injects = ();
-    ///     type Beans = ();
-    ///     type State = u8;
-    /// }
-    ///
-    /// impl Target for App {}
-    /// impl Proxied for App {
-    ///     type Proxy = DefaultProxy<App>;
-    ///     type Link = Get<DefaultProxy<App>>;
-    /// }
-    ///
-    /// let _twice = App::query().init_state_default().init_state_default();
-    /// ```
+    /// A second call fails. See `a_second_default_init_is_rejected`.
     pub fn init_state_default(self) -> <Self as InitStateDefaultStep>::Out
     where
         Self: InitStateDefaultStep,

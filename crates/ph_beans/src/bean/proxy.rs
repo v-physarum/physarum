@@ -1,6 +1,10 @@
 //! Target inject and init go through a proxy chain (`Via`, outer around inner).
 //!
 //! Manual impls. Derive later. `Get`, `Mut`, and `Marker` stay unchanged.
+//! Examples live in the crate tests: `an_unset_proxy_uses_the_default`,
+//! `injecting_the_target_wraps_the_explicit_proxy`,
+//! `a_chain_nests_wrappers_outer_around_inner`.
+//! Chain emits are `emitting_chain_level_*`, expanded with `impl_foreach`.
 
 use core::any::TypeId;
 use core::marker::PhantomData;

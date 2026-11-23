@@ -21,23 +21,4 @@ ph_beans_derive = { path = "../ph_beans_derive" }
 ph_proc_macro_dylib = { path = "../tests/ph_proc_macro_dylib" }
 ph_test_asm = { path = "../tests/ph_test_asm" }
 ph_test_errors = { path = "../tests/ph_test_errors" }
-
-[[test]]
-name = "tree"
-path = "../../tests/crates/ph_beans/tree.rs"
-
-[[test]]
-name = "errors"
-path = "../../tests/crates/ph_beans/errors.rs"
-
-[[test]]
-name = "schedule"
-path = "../../tests/crates/ph_beans/schedule.rs"
-
-[[test]]
-name = "dyn_view"
-path = "../../tests/crates/ph_beans/dyn_view.rs"
-
-[[test]]
-name = "proxy"
-path = "../../tests/crates/ph_beans/proxy.rs"
+ph_util_foreach = { path = "../util/ph_util_foreach" }

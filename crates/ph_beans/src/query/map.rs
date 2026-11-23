@@ -70,15 +70,9 @@ where
 impl<E, C> Init<E, C> {
     /// Stores one map handler under the current filter.
     ///
-    /// Pass a **function item** (`fn system() {}`). Systems must not capture
-    /// or mutate outer state — only args (rule 18). Captures would break a
-    /// future SIMD / packed store; under the hood handlers stay pure `fn`.
-    ///
-    /// A non-capturing closure is also `Fn()`, but monomorphizing it through
-    /// a long `.map` chain is slower to compile than a function item.
-    ///
-    /// The 17th call has no [`PushMap`] impl. The diagnostic names
-    /// [`ErrTooManySystems`](crate::ErrTooManySystems).
+    /// Pass a function item. It must not capture outer state.
+    /// The 17th call has no [`PushMap`] impl.
+    /// The diagnostic names [`ErrTooManySystems`](crate::ErrTooManySystems).
     pub fn map<H>(self, handler: H) -> <Self as MapStep<H>>::Out
     where
         H: Fn(),
