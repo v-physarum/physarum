@@ -50,6 +50,10 @@ impl<T> OpLeaf for crate::descriptor::Mut<T> {
     type Leaf = Valid;
 }
 
+impl<C, V: ?Sized> OpLeaf for crate::descriptor::Dyn<C, V> {
+    type Leaf = Valid;
+}
+
 impl<A, B> OpLeaf for And<A, B>
 where
     A: OpLeaf<Leaf = Valid>,

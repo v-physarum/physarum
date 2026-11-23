@@ -32,3 +32,7 @@ path = "../../tests/crates/ph_beans/errors.rs"
 [[test]]
 name = "schedule"
 path = "../../tests/crates/ph_beans/schedule.rs"
+
+[[test]]
+name = "dyn_view"
+path = "../../tests/crates/ph_beans/dyn_view.rs"

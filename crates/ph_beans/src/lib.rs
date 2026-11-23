@@ -25,9 +25,9 @@ pub use context::{
     WithDefault, WithInit,
 };
 pub use descriptor::{
-    Accessors, Descriptor, ErrBadEvent, ErrConflictAccess, ErrDuplicateResource, ErrInitAlreadySet,
-    ErrNeedWaitFilter, ErrTooManySystems, Get, Idle, Live, Marker, Mut, NeedBuild, NeedInit,
-    OpDesc, OpOk, OpShape, PipelineOk, Valid, WarnUnusedArgs,
+    Accessors, Descriptor, Dyn, DynView, ErrBadEvent, ErrConflictAccess, ErrDuplicateResource,
+    ErrInitAlreadySet, ErrNeedWaitFilter, ErrTooManySystems, Get, Idle, Live, Marker, Mut,
+    NeedBuild, NeedInit, OpDesc, OpOk, OpShape, PipelineOk, Valid, WarnUnusedArgs,
 };
 pub use filter::{And, ApplyFilter, NestOk, Not, On, Or};
 pub use query::{Built, Init, Query, Setup, Tick, Update};
