@@ -1,6 +1,6 @@
 //! Which beans a resource claim names, and the view the init function sees.
 
-use crate::bean::{ApplyProxy, BeanInfo, Marked, More, Proxied, ProxyInfo, Target, Via};
+use crate::bean::{ApplyProxy, BeanInfo, Marked, More, Proxied, Target, Via};
 use crate::borrow::{At, Ix0, Ix1, Ix2, Ix3};
 use crate::descriptor::live::{Idle, Live};
 use crate::descriptor::{Dyn, DynView, Get, Mut};
@@ -56,7 +56,7 @@ where
 
 impl<P, O, S, K> Sees<S, (FromProxy, K)> for P
 where
-    P: ProxyInfo<Chain = More<O>>,
+    P: BeanInfo<Chain = More<O>>,
     O: Sees<S, K>,
 {
     type Ix = <O as Sees<S, K>>::Ix;
@@ -103,7 +103,7 @@ impl<B, P, C, Shape> ClaimVia<B, (FromProxy, Shape)> for C
 where
     C: Marked,
     B: Proxied<Link: Marked<Target = P>>,
-    P: ProxyInfo<Targets = B> + At<C::Target> + Listed<C::Target, Shape>,
+    P: BeanInfo + At<C::Target> + Listed<C::Target, Shape>,
     C::Target: Target + Proxied,
 {
     type Indexes = P::Ix;
@@ -113,7 +113,7 @@ impl<B, P, O, K, C> ClaimVia<B, (FromChain, K)> for C
 where
     C: Marked,
     B: Proxied<Link: Marked<Target = P>>,
-    P: ProxyInfo<Targets = B, Chain = More<O>>,
+    P: BeanInfo<Chain = More<O>>,
     O: Sees<C::Target, K>,
     C::Target: Target + Proxied,
 {
@@ -143,7 +143,7 @@ impl<P, C> UnderProxy<P> for C
 where
     C: Marked,
     C::Target: Target + Proxied<Link: Marked<Target = P>>,
-    P: ProxyInfo<Targets = C::Target>,
+    P: BeanInfo,
 {
 }
 

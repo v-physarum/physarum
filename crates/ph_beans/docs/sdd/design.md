@@ -318,7 +318,7 @@ Layout of `crates/ph_beans/src/`. Keep the surface readable: **small files**, **
 
    **Carriers for coherence:** `Leaf` for flat 0..=8; `Grow` for the growing second group. **`AddItem` is sealed** (only lengths 1..=6) so it cannot apply to a 7-tuple and collide with the 15→16 reshape. Opaque `E0`… / `N` only — no domain type in the push arity table.
 
-14. **Meta traits are frozen** — [`BeanInfo`], [`EventInfo`], [`ProxyInfo`] (and any trait this rule later lists) hold **only** their declared associated types / consts. Do **not** add methods, associated types, supertraits, or default bodies to them without **owner approval**. Pipeline entry and steps live on **separate** traits (`Query`, `Setup`, `InjectResourcesStep`, …). Context tip at start lives on [`StartDesc`], not on `BeanInfo`.
+14. **Meta traits are frozen** — [`BeanInfo`] and [`EventInfo`] (and any trait this rule later lists) hold **only** their declared associated types / consts. Do **not** add methods, associated types, supertraits, or default bodies to them without **owner approval**. Pipeline entry and steps live on **separate** traits (`Query`, `Setup`, `InjectResourcesStep`, …). Context tip at start lives on [`StartDesc`], not on `BeanInfo`. Proxy link and chain live on [`BeanInfo`] (`Link`, `Chain`), not on a second meta trait.
 
    ```rust
    // Forbidden — growing BeanInfo with entry / tip spelling
@@ -328,7 +328,7 @@ Layout of `crates/ph_beans/src/`. Keep the surface readable: **small files**, **
    }
 
    // Required — meta stays data; Query + StartDesc own the tip
-   trait BeanInfo { type Provides; type Injects; type Beans; type State; type Proxy; }
+   trait BeanInfo { type Provides; type Injects; type Beans; type State; type Proxy; type Link; type Chain; }
    trait StartDesc { type Ctx: Context<Bean = Self>; fn start_ctx() -> Self::Ctx; }
    trait Query { type Out; fn query() -> Self::Out; } // Out = Init<(), Ctx>
    ```
@@ -458,7 +458,7 @@ Proc-macro / derive (when owner-allowed under rule 6) **emits only** these trait
 | --- | --- | --- |
 | **Module** (`#[config(type = module)]`) | [`BeanInfo`], one [`At`]`<P>` per entry in `Beans` | `Query`, `Setup`, `StartDesc`, `Module`, `FromParent`, pipeline steps, … |
 | **Event** | [`BeanInfo`] + [`EventInfo`] (`Parents`, `ON`); if `proxy = …`, also the proxied link (see **Proxy**) | same exclusion |
-| **Proxy** (`#[config(type = proxy)]`) | [`BeanInfo`] + [`ProxyInfo`] (+ `At` for its `Beans` / provides) | bare inject of the proxy; pipeline steps |
+| **Proxy** (`#[config(type = proxy)]`) | [`BeanInfo`] (`Link` is `Get<Self>` or `Mut<Self>`, `Chain` is [`Stop`] or [`More`]) + `At` for its `Beans` / provides | bare inject of the proxy; pipeline steps |
 
 Manual impls in the prototype must match this surface so derive is a drop-in.
 
@@ -470,6 +470,9 @@ Manual impls in the prototype must match this surface so derive is a drop-in.
 | `Injects` | ordered list from `#[inject(…)]` — **concrete bean keys** (a cast `Bean::T as Trait` still records `Bean`, not the trait; see **Inject `&dyn`**) |
 | `Beans` | **`Provides` then `Injects`** (stable concat of concrete keys). |
 | `State` | module’s owned state type (field / attribute as the derive defines) |
+| `Proxy` | wrapping proxy. `Proxy<Self>` when the bean names none |
+| `Link` | `Get<Self>` or `Mut<Self>`. A plain bean uses `Get<Self>`; a proxy writes the marker callers use |
+| `Chain` | [`Stop`], or [`More`] of the outer proxy |
 
 **`At` (module):** for each concrete `P` at position `n` in `Beans`, emit `impl At<P> for Module { type Ix = IxN; }`. Membership for claims is `Provides ∪ Injects` (a cast inject still requires the parent to provide/inject that concrete `Bean`). Duplicate concrete `P` is a derive error.
 
@@ -482,13 +485,16 @@ impl BeanInfo for App {
     type Injects = ();
     type Beans = (Logic,); // Provides ++ Injects
     type State = …;
+    type Proxy = Proxy<App>;
+    type Link = Get<App>;
+    type Chain = Stop;
 }
 impl At<Logic> for App {
     type Ix = Ix0;
 }
 
 // Event — derive emits only:
-impl BeanInfo for Update { type Provides = (); type Injects = (); type Beans = (); type State = (); }
+impl BeanInfo for Update { type Provides = (); type Injects = (); type Beans = (); type State = (); type Proxy = Proxy<Update>; type Link = Get<Update>; type Chain = Stop; }
 impl EventInfo for Update {
     type Parents = (); // or (Main,) / (Main, Other)
 }
@@ -513,12 +519,13 @@ struct GameTick; // event (or other bean) wrapped by Update
 
 | Piece | Role |
 | --- | --- |
-| `#[config(type = proxy)]` | This type **is** a proxy. Emits [`BeanInfo`] + [`ProxyInfo`]. May `#[provide]` / `#[inject]` like a module surface. |
-| `proxy = Update::T` on the target | Target bean/event is **proxied by** `Update`. Marker strength follows `T` / `MUT`. |
-| [`ProxyInfo`] | Meta (rule 14): data-only link proxy ↔ target. Associated types: `Targets` (the wrapped bean or the next inner proxy), `Link` (`Get<Self>` / `Mut<Self>`), `Chain` ([`Stop`] or [`More`] of the next outer proxy). Names pending owner OK. No methods. |
-| [`Proxy`]<`B`> | The proxy a bean or event uses when it has no `proxy = ...`. Ordinary proxy: `Targets = B`, `Link = Get<Proxy<B>>`, `Chain = Stop`, no provides, no parent events. |
+| `#[config(type = proxy)]` | This type **is** a proxy. Emits [`BeanInfo`]. `Link` is `Get<Self>` or `Mut<Self>`. `Chain` is [`Stop`] or [`More`] of the outer proxy. May `#[provide]` / `#[inject]` like a module surface. |
+| `proxy = Update::T` on the target | Target bean/event is **proxied by** `Update`. Marker strength follows `T` / `MUT` and is written as that proxy's `Link`. |
+| [`BeanInfo::Link`] | `Get<Self>` or `Mut<Self>` on the proxy. A plain bean still fills `Get<Self>`; the walk reads the proxy's link. |
+| [`BeanInfo::Chain`] | [`Stop`] when nothing wraps this proxy. [`More`] of the outer proxy otherwise. The bean's `Proxy` already names the wrapper, so there is no inverse `Targets` type. |
+| [`Proxy`]<`B`> | The proxy a bean or event uses when it has no `proxy = ...`. `Link = Get<Proxy<B>>`, `Chain = Stop`, no provides, no parent events. |
 | [`BeanInfo::Proxy`] | The wrapping proxy. `Proxy<Self>` when none is named. A named proxy is that type (`Update`, `Gate`). |
-| [`Proxied`] | Blanket for every [`BeanInfo`]. `Link` is [`ProxyInfo::Link`] of `BeanInfo::Proxy`: `Get<Proxy<Self>>`, or the named proxy's `Get` / `Mut`. |
+| [`Proxied`] | Blanket for every [`BeanInfo`]. `Link` is [`BeanInfo::Link`] of `BeanInfo::Proxy`: `Get<Proxy<Self>>`, or the named proxy's `Get` / `Mut`. |
 
 **Rules:**
 
@@ -672,7 +679,7 @@ trait DynView<T> { type Shared<'a>; … }  // keep marker-only
 struct State { p: Box<dyn Painter> }     // rule 16
 ```
 
-Derive still emits only `BeanInfo` / `At` / `EventInfo` / `ProxyInfo` as listed, plus the **`DynView` marker impl** for `#[config(type = dyn)]` traits (and cast encoding in `Injects`).
+Derive still emits only `BeanInfo` / `At` / `EventInfo` as listed, plus the **`DynView` marker impl** for `#[config(type = dyn)]` traits (and cast encoding in `Injects`). A proxy's `Link` and `Chain` are fields of that `BeanInfo` impl.
 
 ---
 

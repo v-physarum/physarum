@@ -5,7 +5,7 @@
 
 use core::marker::PhantomData;
 
-use crate::bean::{BeanInfo, DriveInit, ForwardInit, Marked, Proxied, ProxyInfo};
+use crate::bean::{BeanInfo, DriveInit, ForwardInit, Marked, Proxied};
 use crate::context::Configuration;
 use crate::context::Context;
 use crate::context::Ctx;
@@ -67,7 +67,7 @@ pub struct ProxyInit<B, H> {
 impl<B, H, P> Configuration for ProxyInit<B, H>
 where
     B: Proxied<Link: Marked<Target = P>>,
-    P: ProxyInfo<Targets = B> + ForwardInit<B, H, P::Chain>,
+    P: BeanInfo + ForwardInit<B, H, P::Chain>,
 {
     type Out = WithInit<<P as ForwardInit<B, H, P::Chain>>::Out>;
 

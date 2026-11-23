@@ -1,13 +1,12 @@
 //! Bean and event descriptors.
 //!
 //! This slice uses manual impls. A later derive emits **only** [`BeanInfo`],
-//! [`At`](crate::At) (per `Beans` slot), [`EventInfo`] for events, and
-//! [`ProxyInfo`] for `#[config(type = proxy)]` — never `Query` / `Setup` /
-//! `StartDesc` / `Module` / steps (design: Derive + Proxy).
+//! [`At`](crate::At) (per `Beans` slot), and [`EventInfo`] for events —
+//! never `Query` / `Setup` / `StartDesc` / `Module` / steps.
 //!
-//! [`BeanInfo`] / [`EventInfo`] / [`ProxyInfo`] are **meta** traits (rule 14):
-//! do not add methods or associated types without owner approval. Entry points
-//! such as [`Query`](crate::query::Query) stay on separate traits.
+//! [`BeanInfo`] / [`EventInfo`] are **meta** traits (rule 14): do not add
+//! methods or associated types without owner approval. Entry points such as
+//! [`Query`](crate::query::Query) stay on separate traits.
 
 mod inject;
 mod proxy;
@@ -17,8 +16,7 @@ pub use inject::{
 };
 pub use proxy::Marked;
 pub use proxy::{
-    ApplyProxy, FreeKey, Fwd, InitPath, LinkMark, More, ParentList, Proxied, Proxy, ProxyInfo,
-    Stop, Target, Via,
+    ApplyProxy, FreeKey, Fwd, InitPath, More, ParentList, Proxied, Proxy, Stop, Target, Via,
 };
 pub use proxy::{DriveInit, Enfold, EnterAll, ForwardInit, WrapFwd};
 
@@ -40,7 +38,11 @@ pub trait BeanInfo: Sized {
     /// Owned state of this bean only.
     type State;
     /// Wrapping proxy. [`Proxy<Self>`](crate::Proxy) when none is named.
-    type Proxy: ProxyInfo<Targets = Self>;
+    type Proxy: BeanInfo;
+    /// `Get<Self>` or `Mut<Self>` when `Self` wraps another bean.
+    type Link: Marked<Target = Self>;
+    /// [`Stop`](crate::Stop) when nothing wraps `Self`. [`More`](crate::More) of the outer proxy otherwise.
+    type Chain;
 }
 
 /// Extra descriptor for an event, beside [`BeanInfo`].

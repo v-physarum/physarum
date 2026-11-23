@@ -6,7 +6,7 @@
 //! `a_chain_nests_wrappers_outer_around_inner`.
 //! Chain emits are `emitting_chain_level_*`, expanded with `impl_foreach`.
 //! A component injects a proxy object only when that proxy lists it in `Provides`.
-//! `BeanInfo::Proxy` is that proxy. `Proxied::Link` is the proxy's own link.
+//! `BeanInfo::Proxy` is that proxy. Its `Link` is `Get<Self>` or `Mut<Self>`.
 
 use core::any::TypeId;
 use core::marker::PhantomData;
@@ -40,48 +40,32 @@ impl<S> Marked for Mut<S> {
     type Target = S;
 }
 
-/// `Get<P>` or `Mut<P>`: the `proxy = P::T` / `proxy = P::MUT` marker.
-pub trait LinkMark<P>: Marked<Target = P> {}
-
-impl<S, C> LinkMark<S> for C where C: Marked<Target = S> {}
-
 /// No further proxy. [`Proxy`] ends here too.
 pub struct Stop;
 
 /// Next outer proxy.
 pub struct More<P>(PhantomData<P>);
 
-/// Data-only proxy meta.
-/// `Targets` is the wrapped value, `Link` is `Get` or `Mut`, `Chain` is `Stop` or `More`.
-pub trait ProxyInfo: crate::BeanInfo {
-    /// Bean or proxy this proxy wraps.
-    type Targets: crate::BeanInfo;
-    /// `Get<Self>` or `Mut<Self>`.
-    type Link: LinkMark<Self>;
-    /// [`Stop`] when this proxy is outermost. [`More`] of the outer proxy otherwise.
-    type Chain;
-}
-
 /// Bean wrapped by [`BeanInfo::Proxy`](crate::BeanInfo::Proxy).
 ///
 /// Blanket for every [`BeanInfo`](crate::BeanInfo).
-/// [`Link`](Proxied::Link) is that proxy's [`ProxyInfo::Link`](ProxyInfo::Link).
+/// [`Link`](Proxied::Link) is that proxy's [`BeanInfo::Link`](crate::BeanInfo::Link).
 /// No named proxy: `Proxy<Self>`, so the link is `Get<Proxy<Self>>`.
 /// A named proxy is `BeanInfo::Proxy` (`Get<Update>` or `Mut<Gate>`).
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not a proxied target",
-    note = "inject the target bean; a proxy is not a free-standing key. `Link` is `BeanInfo::Proxy`'s `Get` or `Mut`"
+    note = "inject the target bean; a proxy is not a free-standing key. `Link` is that proxy's `Get<Self>` or `Mut<Self>`"
 )]
 pub trait Proxied: crate::BeanInfo {
     /// `Get<P>` or `Mut<P>` of the wrapping proxy.
-    type Link: Marked<Target: ProxyInfo<Targets = Self>>;
+    type Link: Marked<Target = Self::Proxy>;
 }
 
 impl<T: crate::BeanInfo> Proxied for T {
-    type Link = <T::Proxy as ProxyInfo>::Link;
+    type Link = <T::Proxy as crate::BeanInfo>::Link;
 }
 
-/// Proxy used when a bean names none. `Targets = B`, `Link = Get<Self>`, `Chain = Stop`.
+/// Proxy used when a bean names none. `Link = Get<Self>`, `Chain = Stop`.
 pub struct Proxy<B>(PhantomData<B>);
 
 impl<B: crate::BeanInfo> crate::BeanInfo for Proxy<B> {
@@ -95,11 +79,9 @@ impl<B: crate::BeanInfo> crate::BeanInfo for Proxy<B> {
     type State = ();
     /// The wrapper's own default proxy.
     type Proxy = Proxy<Proxy<B>>;
-}
-
-impl<B: crate::BeanInfo> ProxyInfo for Proxy<B> {
-    type Targets = B;
+    /// Shared claim of this wrapper.
     type Link = Get<Proxy<B>>;
+    /// Nothing wraps the default proxy.
     type Chain = Stop;
 }
 
@@ -132,7 +114,7 @@ impl<P, H> Fwd<P, H> {
 }
 
 /// This proxy initializes its direct target. `enter` runs outer-first, then `default_state`.
-pub trait InitPath<B: crate::BeanInfo>: ProxyInfo<Targets = B> {
+pub trait InitPath<B: crate::BeanInfo>: crate::BeanInfo {
     /// Wraps `handler` in `Fwd`. Override to change the stored init.
     fn install<H>(handler: H) -> Fwd<Self, H> {
         Fwd::new(handler)
@@ -170,7 +152,7 @@ impl<P, C> Enfold<C, Stop> for P {
 
 impl<P, O, C> Enfold<C, More<O>> for P
 where
-    O: ProxyInfo + Enfold<Via<P, C>, O::Chain>,
+    O: crate::BeanInfo + Enfold<Via<P, C>, O::Chain>,
 {
     type Wrapped = <O as Enfold<Via<P, C>, O::Chain>>::Wrapped;
 }
@@ -179,7 +161,7 @@ impl<C, P> ApplyProxy for C
 where
     C: Marked,
     C::Target: Proxied<Link: Marked<Target = P>>,
-    P: ProxyInfo<Targets = C::Target> + Enfold<C, P::Chain>,
+    P: crate::BeanInfo + Enfold<C, P::Chain>,
 {
     type Wrapped = <P as Enfold<C, P::Chain>>::Wrapped;
 }
@@ -218,7 +200,7 @@ impl<P, B, O, H> ForwardInit<B, H, More<O>> for P
 where
     B: crate::BeanInfo,
     P: InitPath<B>,
-    O: ProxyInfo + WrapFwd<Fwd<P, H>, O::Chain>,
+    O: crate::BeanInfo + WrapFwd<Fwd<P, H>, O::Chain>,
 {
     type Out = <O as WrapFwd<Fwd<P, H>, O::Chain>>::Out;
 
@@ -237,7 +219,7 @@ impl<P, H> WrapFwd<H, Stop> for P {
 
 impl<P, O, H> WrapFwd<H, More<O>> for P
 where
-    O: ProxyInfo + WrapFwd<Fwd<P, H>, O::Chain>,
+    O: crate::BeanInfo + WrapFwd<Fwd<P, H>, O::Chain>,
 {
     type Out = <O as WrapFwd<Fwd<P, H>, O::Chain>>::Out;
 
@@ -266,8 +248,8 @@ where
 impl<P, B, O> EnterAll<B, More<O>> for P
 where
     B: crate::BeanInfo,
-    P: InitPath<B> + ProxyInfo<Chain = More<O>>,
-    O: ProxyInfo<Targets = P> + InitPath<P> + EnterAll<P, O::Chain>,
+    P: InitPath<B> + crate::BeanInfo<Chain = More<O>>,
+    O: crate::BeanInfo + InitPath<P> + EnterAll<P, O::Chain>,
 {
     fn enter_all() {
         <O as EnterAll<P, O::Chain>>::enter_all();
