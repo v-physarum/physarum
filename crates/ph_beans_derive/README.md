@@ -1,26 +1,22 @@
 # ph_beans_derive
 
-`#[derive(Component)]` implements [`ph_beans`](../ph_beans/README.md) for a struct.
+`#[derive(Module)]` implements `BeanInfo` for a struct.
 
 ```rust
-use ph_beans::Tick;
-use ph_beans_derive::Component;
+use ph_beans_derive::Module;
 
-#[derive(Component, Default)]
-struct Count(u32);
+#[derive(Module)]
+struct Count(u8);
 
-#[derive(Component)]
-#[inject(Count)]
-struct Child;
-
-#[derive(Component)]
-#[provider(Count, Child)]
-struct Parent;
+#[derive(Module)]
+#[config(type = module)]
+#[module(state = u8)]
+#[provide(Id::T, Keys::MUT)]
+#[inject(App::T)]
+struct Logic;
 ```
 
-A struct with fields is a data bean: its state is itself, and `create` calls `Default`. A unit struct is a module. `#[provider]` owns beans. `#[inject]` receives them from the parent only.
-
-The derive rejects a bean named twice, a bean listed in both attributes, a generic component, a provider list longer than four, and an inject list longer than three. A missing provider is reported by [`ph_beans::At`] when the parent is scheduled.
+A struct with fields is a data bean: `State` is `Self`. A unit struct is a module. `Type::T` is a shared claim and `Type::MUT` is an exclusive claim. Provide accepts at most four claims. Inject accepts at most three. `#[module(state = ...)]` sets the module state; without it the state is `()`.
 
 ## License
 

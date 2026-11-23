@@ -11,14 +11,14 @@ use ph_proc_macro_dylib::proc_macro_library;
 use ph_test_errors::ErrorTester;
 
 #[test]
-fn duplicate_provider_is_rejected() {
+fn duplicate_provide_is_rejected() {
     fail(
         "
-        #[derive(Component)]
-        #[provider(Count, Count)]
+        #[derive(Module)]
+        #[provide(Count::T, Count::T)]
         struct Parent;
         ",
-        "duplicate bean in `provider`",
+        "duplicate bean in `provide`",
     );
 }
 
@@ -26,8 +26,8 @@ fn duplicate_provider_is_rejected() {
 fn duplicate_inject_is_rejected() {
     fail(
         "
-        #[derive(Component)]
-        #[inject(Count, Count)]
+        #[derive(Module)]
+        #[inject(Count::T, Count::MUT)]
         struct Child;
         ",
         "duplicate bean in `inject`",
@@ -38,21 +38,21 @@ fn duplicate_inject_is_rejected() {
 fn a_bean_in_both_lists_is_rejected() {
     fail(
         "
-        #[derive(Component)]
-        #[provider(Count)]
-        #[inject(Count)]
+        #[derive(Module)]
+        #[provide(Count::T)]
+        #[inject(Count::MUT)]
         struct Child;
         ",
-        "bean is in both `provider` and `inject`",
+        "bean is in both `provide` and `inject`",
     );
 }
 
 #[test]
-fn five_providers_are_rejected() {
+fn five_provides_are_rejected() {
     fail(
         "
-        #[derive(Component)]
-        #[provider(A, B, C, D, E)]
+        #[derive(Module)]
+        #[provide(A::T, B::T, C::T, D::T, E::T)]
         struct Parent;
         ",
         "accepts at most 4 beans",
@@ -60,10 +60,10 @@ fn five_providers_are_rejected() {
 }
 
 #[test]
-fn a_generic_component_is_rejected() {
+fn a_generic_module_is_rejected() {
     fail(
         "
-        #[derive(Component)]
+        #[derive(Module)]
         struct Holder<T>(T);
         ",
         "does not support generic",
@@ -74,16 +74,52 @@ fn a_generic_component_is_rejected() {
 fn four_injects_are_rejected() {
     fail(
         "
-        #[derive(Component)]
-        #[inject(A, B, C, D)]
+        #[derive(Module)]
+        #[inject(A::T, B::T, C::T, D::T)]
         struct Child;
         ",
         "accepts at most 3 beans",
     );
 }
 
+#[test]
+fn a_bare_type_is_rejected() {
+    fail(
+        "
+        #[derive(Module)]
+        #[provide(Count)]
+        struct Parent;
+        ",
+        "expected Type::T or Type::MUT",
+    );
+}
+
+#[test]
+fn the_old_mut_marker_is_rejected() {
+    fail(
+        "
+        #[derive(Module)]
+        #[provide(Keys::Mut)]
+        struct Parent;
+        ",
+        "expected Type::T or Type::MUT",
+    );
+}
+
+#[test]
+fn provide_on_a_data_bean_is_rejected() {
+    fail(
+        "
+        #[derive(Module)]
+        #[provide(Count::T)]
+        struct Holder(u8);
+        ",
+        "a module is a unit struct",
+    );
+}
+
 fn fail(body: &str, description: &str) {
-    let source = format!("use ph_beans_derive::Component;\n{body}\n");
+    let source = format!("use ph_beans_derive::Module;\n{body}\n");
     ErrorTester::source(source)
         .extern_crate("ph_beans_derive", proc_macro_library("ph_beans_derive"))
         .assert_description(description);

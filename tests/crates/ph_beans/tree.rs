@@ -10,6 +10,7 @@ use ph_beans::{
     At, BeanInfo, EventInfo, Get, Ix0, Ix1, Marker, Module, Mut, OfInject, OfParent, OfProvide,
     OfProvide1, Query, Setup, Tick,
 };
+use ph_beans_derive::Module as DeriveModule;
 
 struct Id(u8);
 struct Keys(u8);
@@ -160,4 +161,59 @@ fn a_child_injects_the_parent_surface() {
 fn an_event_lists_its_parents() {
     fn parents<E: EventInfo>() {}
     parents::<Update>();
+}
+
+#[derive(DeriveModule)]
+struct DerivedCount(u8);
+
+#[derive(DeriveModule)]
+#[config(type = module)]
+#[module(state = u8)]
+#[provide(Id::T, Keys::T)]
+struct DerivedApp;
+
+#[derive(DeriveModule)]
+#[module(state = u8)]
+struct DerivedReady;
+
+#[derive(DeriveModule)]
+#[config(type = module)]
+#[provide(Render::T)]
+struct DerivedLogic;
+
+#[derive(DeriveModule)]
+#[inject(Render::T)]
+struct DerivedUses;
+
+fn derived_boot(args: (&Id, &mut Keys)) -> u8 {
+    let (id, keys) = args;
+    id.0.wrapping_add(keys.0)
+}
+
+#[test]
+fn a_derived_data_bean_is_a_descriptor() {
+    fn is_bean<B: BeanInfo<State = B>>() {}
+    let count = DerivedCount(1);
+    let _ = count.0;
+    is_bean::<DerivedCount>();
+}
+
+#[test]
+fn a_derived_module_stores_a_function_item() {
+    let _built = DerivedApp::query()
+        .inject_resources(Id::T & Keys::MUT)
+        .init_state(derived_boot)
+        .build();
+}
+
+#[test]
+fn a_derived_module_defaults_its_state() {
+    let built = DerivedReady::query().init_state_default().build();
+    assert_eq!(*built.state(), 0);
+}
+
+#[test]
+fn a_derived_child_sees_the_provide() {
+    fn from_provide<C: Module<DerivedLogic, OfProvide>>() {}
+    from_provide::<DerivedUses>();
 }
