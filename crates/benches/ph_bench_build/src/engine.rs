@@ -9,8 +9,13 @@ use std::process::{Command, Output};
 use crate::Plan;
 use crate::cases::Case;
 use crate::error::{ErrorKind, Result};
+use crate::growth::Group;
 use crate::json::{CargoMessage, WallClock};
-use crate::manifest::UserManifest;
+use crate::manifest::{DepSpec, UserManifest};
+use crate::workspace::SeriesHome;
+
+/// Hyperfine runs timed for one case, besides the untimed warmup run.
+pub(crate) const DEFAULT_REPEATS: u32 = 3;
 
 const TARGET_DIR: &str = "target";
 const USER_DIR: &str = "user";
@@ -51,20 +56,27 @@ struct TimedCargo<'a> {
     incremental: bool,
 }
 
+struct MeasureDirs<'a> {
+    user: &'a Path,
+    logs: &'a Path,
+    target: &'a Path,
+    repeats: u32,
+}
+
 impl<'a> TimedCargo<'a> {
     fn new(label: &'a str, prepare: Option<&'a str>, command: &'a str, incremental: bool) -> Self {
         Self { label, prepare, command, incremental }
     }
 
-    fn time(self, layout: &Layout<'_>) -> Result<Timing> {
+    fn time(self, dirs: &MeasureDirs<'_>) -> Result<Timing> {
         let label = self.label;
-        let json = layout.logs.join(format!("{label}{JSON_EXT}"));
-        let log = layout.logs.join(format!("{label}{HYPERFINE_LOG_EXT}"));
-        let cargo_log = layout.logs.join(format!("{label}{CARGO_LOG_EXT}"));
-        let repeats = layout.plan.repeats.to_string();
+        let json = dirs.logs.join(format!("{label}{JSON_EXT}"));
+        let log = dirs.logs.join(format!("{label}{HYPERFINE_LOG_EXT}"));
+        let cargo_log = dirs.logs.join(format!("{label}{CARGO_LOG_EXT}"));
+        let repeats = dirs.repeats.to_string();
         let mut command = Command::new("hyperfine");
-        command.apply_measure_env(&layout.target, self.incremental);
-        command.current_dir(&layout.user);
+        command.apply_measure_env(dirs.target, self.incremental);
+        command.current_dir(dirs.user);
         command.args([
             "--style",
             "basic",
@@ -146,6 +158,227 @@ impl<'a> ReportDocument<'a> {
     }
 }
 
+/// One rendered series, already pointed at its user crate directory.
+pub(crate) struct SeriesBuild<'a> {
+    pub(crate) name: &'a str,
+    pub(crate) group: Group,
+    pub(crate) scales: &'a [crate::Scale],
+    pub(crate) sources: &'a [String],
+    pub(crate) home: &'a SeriesHome,
+}
+
+/// Writes `src/lib.rs` for each scale, times the build, and returns medians.
+///
+/// The first source is built once untimed so the path dependency is compiled
+/// before hyperfine starts.
+///
+/// # Errors
+///
+/// Returns an error when a directory cannot be prepared or a build fails.
+pub(crate) fn measure_series(build: &SeriesBuild<'_>) -> Result<Vec<f64>> {
+    let output = &build.home.output;
+    if output.exists() {
+        fs::remove_dir_all(output)?;
+    }
+    let user = output.join(USER_DIR);
+    let logs = output.join(LOGS_DIR);
+    let target = output.join(TARGET_DIR);
+    fs::create_dir_all(user.join(SRC_DIR))?;
+    fs::create_dir_all(&logs)?;
+    let specs: Vec<DepSpec<'_>> = build
+        .home
+        .dependencies
+        .iter()
+        .map(|dep| DepSpec { name: dep.name(), path: dep.directory() })
+        .collect();
+    let manifest = UserManifest::new(&build.home.package, &specs).to_toml()?;
+    fs::write(user.join(CARGO_TOML), manifest)?;
+    let lib = user.join(SRC_DIR).join(LIB_RS);
+    let warmup_source = build.sources.first().map_or("", String::as_str);
+    fs::write(&lib, warmup_source)?;
+    warmup_build(build.group, &user, &target, &logs)?;
+    let mut seconds = Vec::with_capacity(build.sources.len());
+    for (scale, source) in build.scales.iter().zip(build.sources) {
+        fs::write(&lib, source)?;
+        let label = format!("{}_{}", build.name, scale.count());
+        let timing = time_scale(
+            build.group,
+            &label,
+            &build.home.package,
+            &MeasureDirs { user: &user, logs: &logs, target: &target, repeats: DEFAULT_REPEATS },
+        )?;
+        println!(
+            "{} {label} median {:.3}s stddev {:.3}s",
+            build.group, timing.median, timing.stddev
+        );
+        seconds.push(timing.median);
+    }
+    Ok(seconds)
+}
+
+fn warmup_build(group: Group, user: &Path, target: &Path, logs: &Path) -> Result<()> {
+    let incremental = group == Group::Incremental;
+    let mut command = Command::cargo(user, target, incremental);
+    let args: &[&str] = match group {
+        Group::Release => &["build", "--release", "--offline"],
+        Group::Debug | Group::Incremental => &["build", "--offline"],
+    };
+    command.args(args);
+    let log = logs.join(format!("warmup{LOG_EXT}"));
+    command.run_combined(&log, "series warmup")
+}
+
+fn time_scale(group: Group, label: &str, package: &str, dirs: &MeasureDirs<'_>) -> Result<Timing> {
+    let clean_debug = format!("cargo clean -p {package}");
+    let clean_release = format!("cargo clean -p {package} --release");
+    let (prepare, command, incremental) = match group {
+        Group::Debug => (Some(clean_debug.as_str()), "cargo build --offline", false),
+        Group::Incremental => (None, "cargo build --offline", true),
+        Group::Release => (
+            Some(clean_release.as_str()),
+            "cargo build --release --offline",
+            false,
+        ),
+    };
+    TimedCargo::new(label, prepare, command, incremental).time(dirs)
+}
+
+const NIGHTLY_TOOLCHAIN: &str = "nightly";
+
+/// One series timed by nightly `-Ztime-passes` instead of hyperfine.
+pub(crate) struct PassBuild<'a> {
+    pub(crate) name: &'a str,
+    pub(crate) group: Group,
+    pub(crate) scales: &'a [crate::Scale],
+    pub(crate) sources: &'a [String],
+    pub(crate) home: &'a SeriesHome,
+    pub(crate) pass: &'a str,
+    pub(crate) rustc_args: &'a [&'static str],
+}
+
+/// Writes each source, asks nightly rustc for `pass`, and returns those seconds.
+///
+/// The dependency is built once, untimed. Each timed run cleans only the user
+/// package. The pass time is the line after `Compiling {package}`.
+///
+/// # Errors
+///
+/// Returns an error when nightly rustc is missing, a build fails, or the pass
+/// line is absent.
+pub(crate) fn measure_passes(build: &PassBuild<'_>) -> Result<Vec<f64>> {
+    require_nightly()?;
+    let output = &build.home.output;
+    if output.exists() {
+        fs::remove_dir_all(output)?;
+    }
+    let user = output.join(USER_DIR);
+    let logs = output.join(LOGS_DIR);
+    let target = output.join(TARGET_DIR);
+    fs::create_dir_all(user.join(SRC_DIR))?;
+    fs::create_dir_all(&logs)?;
+    let specs: Vec<DepSpec<'_>> = build
+        .home
+        .dependencies
+        .iter()
+        .map(|dep| DepSpec { name: dep.name(), path: dep.directory() })
+        .collect();
+    let manifest = UserManifest::new(&build.home.package, &specs).to_toml()?;
+    fs::write(user.join(CARGO_TOML), manifest)?;
+    let lib = user.join(SRC_DIR).join(LIB_RS);
+    let warmup_source = build.sources.first().map_or("", String::as_str);
+    fs::write(&lib, warmup_source)?;
+    nightly_warmup(build.group, &user, &target, &logs)?;
+    let mut seconds = Vec::with_capacity(build.sources.len());
+    for (scale, source) in build.scales.iter().zip(build.sources) {
+        fs::write(&lib, source)?;
+        let label = format!("{}_{}", build.name, scale.count());
+        let timing = time_pass(
+            &label,
+            &PassDirs {
+                user: &user,
+                logs: &logs,
+                target: &target,
+                package: &build.home.package,
+                pass: build.pass,
+                rustc_args: build.rustc_args,
+                group: build.group,
+            },
+        )?;
+        println!("{} {label} {} {:.3}s", build.group, build.pass, timing);
+        seconds.push(timing);
+    }
+    Ok(seconds)
+}
+
+struct PassDirs<'a> {
+    user: &'a Path,
+    logs: &'a Path,
+    target: &'a Path,
+    package: &'a str,
+    pass: &'a str,
+    rustc_args: &'a [&'static str],
+    group: Group,
+}
+
+fn require_nightly() -> Result<()> {
+    let output = Command::new("rustup")
+        .args(["run", "nightly", "rustc", "--version"])
+        .output();
+    let Ok(output) = output else {
+        return Err(ErrorKind::NightlyMissing.into());
+    };
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(ErrorKind::NightlyMissing.into())
+    }
+}
+
+fn nightly_cargo(cwd: &Path, target_dir: &Path, incremental: bool) -> Command {
+    let mut command = Command::new("cargo");
+    command.current_dir(cwd);
+    command.apply_measure_env(target_dir, incremental);
+    command.env("RUSTUP_TOOLCHAIN", NIGHTLY_TOOLCHAIN);
+    command
+}
+
+fn nightly_warmup(group: Group, user: &Path, target: &Path, logs: &Path) -> Result<()> {
+    let incremental = group == Group::Incremental;
+    let mut command = nightly_cargo(user, target, incremental);
+    let args: &[&str] = match group {
+        Group::Release => &["build", "--release", "--offline"],
+        Group::Debug | Group::Incremental => &["build", "--offline"],
+    };
+    command.args(args);
+    let log = logs.join(format!("pass-warmup{LOG_EXT}"));
+    command.run_combined(&log, "pass warmup")
+}
+
+fn time_pass(label: &str, dirs: &PassDirs<'_>) -> Result<f64> {
+    if dirs.group != Group::Incremental {
+        let mut clean = nightly_cargo(dirs.user, dirs.target, false);
+        clean.arg("clean").arg("-p").arg(dirs.package);
+        if dirs.group == Group::Release {
+            clean.arg("--release");
+        }
+        let clean_log = dirs.logs.join(format!("{label}.clean{LOG_EXT}"));
+        clean.run_combined(&clean_log, label)?;
+    }
+    let incremental = dirs.group == Group::Incremental;
+    let mut command = nightly_cargo(dirs.user, dirs.target, incremental);
+    command.args(["rustc", "--offline", "--lib"]);
+    if dirs.group == Group::Release {
+        command.arg("--release");
+    }
+    command.arg("--");
+    command.args(dirs.rustc_args);
+    let log = dirs.logs.join(format!("{label}.pass{LOG_EXT}"));
+    command.run_combined(&log, label)?;
+    let bytes = fs::read(&log)?;
+    let text = String::from_utf8_lossy(&bytes);
+    crate::passes::user_pass_seconds(&text, dirs.package, dirs.pass)
+}
+
 /// Creates the downstream crate and runs the selected scenarios.
 pub(crate) fn execute(plan: &Plan) -> Result<()> {
     let layout = Layout::create(plan)?;
@@ -178,12 +411,8 @@ impl<'a> Layout<'a> {
         let logs = out.join(LOGS_DIR);
         fs::create_dir_all(user.join(SRC_DIR))?;
         fs::create_dir_all(&logs)?;
-        let manifest = UserManifest::new(
-            &plan.package,
-            plan.dependency.name(),
-            plan.dependency.directory(),
-        )
-        .to_toml()?;
+        let dep = DepSpec { name: plan.dependency.name(), path: plan.dependency.directory() };
+        let manifest = UserManifest::new(&plan.package, &[dep]).to_toml()?;
         fs::write(user.join(CARGO_TOML), manifest)?;
         let target = out.join(TARGET_DIR);
         Ok(Self { root, out, user, logs, target, plan })
@@ -192,6 +421,15 @@ impl<'a> Layout<'a> {
     fn write_case(&self, case: &Case) -> Result<()> {
         fs::write(self.user.join(SRC_DIR).join(LIB_RS), &case.source)?;
         Ok(())
+    }
+
+    fn dirs(&self) -> MeasureDirs<'_> {
+        MeasureDirs {
+            user: &self.user,
+            logs: &self.logs,
+            target: &self.target,
+            repeats: self.plan.repeats,
+        }
     }
 
     fn compile_dependency(&self) -> Result<()> {
@@ -266,7 +504,7 @@ impl Report {
             let label = format!("debug_full_{name}");
             let prepare = format!("cargo clean -p {}", layout.plan.package);
             let timing = TimedCargo::new(&label, Some(&prepare), "cargo build --offline", false)
-                .time(layout)?;
+                .time(&layout.dirs())?;
             println!(
                 "debug_full {name} median {:.3}s stddev {:.3}s",
                 timing.median, timing.stddev
@@ -281,8 +519,8 @@ impl Report {
             layout.write_case(case)?;
             let name = &case.name;
             let label = format!("debug_incremental_{name}");
-            let timing =
-                TimedCargo::new(&label, None, "cargo build --offline", true).time(layout)?;
+            let timing = TimedCargo::new(&label, None, "cargo build --offline", true)
+                .time(&layout.dirs())?;
             println!(
                 "debug_incremental {name} median {:.3}s stddev {:.3}s",
                 timing.median, timing.stddev
@@ -304,7 +542,7 @@ impl Report {
                 "cargo build --release --offline",
                 false,
             )
-            .time(layout)?;
+            .time(&layout.dirs())?;
             println!(
                 "release_full {name} median {:.3}s stddev {:.3}s",
                 timing.median, timing.stddev

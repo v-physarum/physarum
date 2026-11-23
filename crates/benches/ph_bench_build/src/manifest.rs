@@ -7,17 +7,22 @@ use serde::Serialize;
 
 use crate::error::Result;
 
+/// One path dependency of the downstream crate.
+pub(crate) struct DepSpec<'a> {
+    pub(crate) name: &'a str,
+    pub(crate) path: &'a Path,
+}
+
 /// Downstream `Cargo.toml` written before a measured build.
 pub(crate) struct UserManifest<'a> {
     package: &'a str,
-    dependency: &'a str,
-    path: &'a Path,
+    dependencies: &'a [DepSpec<'a>],
 }
 
 impl<'a> UserManifest<'a> {
-    /// `package` is the downstream crate. `dependency` is the path dependency's name.
-    pub(crate) fn new(package: &'a str, dependency: &'a str, path: &'a Path) -> Self {
-        Self { package, dependency, path }
+    /// `package` is the downstream crate. `dependencies` are path dependencies.
+    pub(crate) fn new(package: &'a str, dependencies: &'a [DepSpec<'a>]) -> Self {
+        Self { package, dependencies }
     }
 
     /// Serializes this manifest as TOML.
@@ -26,8 +31,15 @@ impl<'a> UserManifest<'a> {
     ///
     /// Returns an error when the document cannot be serialized.
     pub(crate) fn to_toml(&self) -> Result<String> {
-        let path = self.path.display().to_string();
-        let document = Document::new(self.package, self.dependency, &path);
+        let mut owned = Vec::with_capacity(self.dependencies.len());
+        for dep in self.dependencies {
+            owned.push((dep.name, dep.path.display().to_string()));
+        }
+        let mut dependencies = BTreeMap::new();
+        for (name, path) in &owned {
+            dependencies.insert(*name, PathDep::new(path));
+        }
+        let document = Document::new(self.package, dependencies);
         Ok(toml::to_string(&document)?)
     }
 }
@@ -36,13 +48,12 @@ impl<'a> UserManifest<'a> {
 struct Document<'a> {
     workspace: BTreeMap<&'a str, &'a str>,
     package: Package<'a>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     dependencies: BTreeMap<&'a str, PathDep<'a>>,
 }
 
 impl<'a> Document<'a> {
-    fn new(package: &'a str, dependency: &'a str, path: &'a str) -> Self {
-        let mut dependencies = BTreeMap::new();
-        dependencies.insert(dependency, PathDep::new(path));
+    fn new(package: &'a str, dependencies: BTreeMap<&'a str, PathDep<'a>>) -> Self {
         Self { workspace: BTreeMap::new(), package: Package::new(package), dependencies }
     }
 }
@@ -80,18 +91,25 @@ mod tests {
 
     #[test]
     fn writes_a_workspace_package_and_path_dependency() {
-        let text = UserManifest::new(
-            "ph_util_foreach_user",
-            "ph_util_foreach",
-            Path::new("/tmp/macro"),
-        )
-        .to_toml()
-        .unwrap();
+        let path = Path::new("/tmp/macro");
+        let deps = [super::DepSpec { name: "ph_util_foreach", path }];
+        let text = UserManifest::new("ph_util_foreach_user", &deps)
+            .to_toml()
+            .unwrap();
         assert!(text.contains("[workspace]"), "{text}");
         assert!(text.contains("name = \"ph_util_foreach_user\""), "{text}");
         assert!(text.contains("edition = \"2024\""), "{text}");
         assert!(text.contains("publish = false"), "{text}");
         assert!(text.contains("ph_util_foreach"), "{text}");
         assert!(text.contains("/tmp/macro"), "{text}");
+    }
+
+    #[test]
+    fn an_empty_dependency_list_omits_the_table() {
+        let text = UserManifest::new("hand_structs_user", &[])
+            .to_toml()
+            .unwrap();
+        assert!(!text.contains("[dependencies]"), "{text}");
+        assert!(text.contains("[workspace]"), "{text}");
     }
 }

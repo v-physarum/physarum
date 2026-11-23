@@ -35,9 +35,6 @@ pub(crate) enum ErrorKind {
     /// The downstream manifest could not be written.
     #[error(transparent)]
     Manifest(#[from] toml::ser::Error),
-    /// A required [`crate::Bench`] setter was skipped.
-    #[error("{label} is unset")]
-    Unset { label: &'static str },
     /// `case` is not a name this bench knows.
     #[error("unknown case {case}")]
     UnknownCase { case: String },
@@ -95,6 +92,99 @@ pub(crate) enum ErrorKind {
     /// The runtime bench printed no `runtime_seconds` line.
     #[error("runtime bench did not print runtime_seconds")]
     MissingRuntimeSeconds,
+    /// A growth series has an empty name.
+    #[error("series name is empty")]
+    SeriesName,
+    /// A growth series has no group.
+    #[error("series {series} group is unset")]
+    SeriesGroup { series: String },
+    /// A growth series has too few scales to show growth.
+    #[error("{series} needs at least {min} scales")]
+    SeriesTooFew { series: String, min: usize },
+    /// A scale is zero, so it has no logarithm.
+    #[error("{series} scale {scale} is not a positive size")]
+    SeriesScale { series: String, scale: u32 },
+    /// The same scale was declared twice.
+    #[error("{series} scale {scale} is duplicated")]
+    SeriesDuplicate { series: String, scale: u32 },
+    /// A growth series has no claim.
+    #[error("series {series} expectation is unset")]
+    SeriesExpect { series: String },
+    /// The generator returned an empty source.
+    #[error("series {series} scale {scale} rendered an empty source")]
+    SeriesSource { series: String, scale: u32 },
+    /// [`crate::Series::render`] was not called, or the scales changed after it.
+    #[error("series {series} has no rendered sources")]
+    SeriesSources { series: String },
+    /// The time slice length does not match the scales.
+    #[error("{series} has {scales} scales but {times} times")]
+    SeriesTimeCount {
+        series: String,
+        scales: usize,
+        times: usize,
+    },
+    /// A measured time is not a positive finite number.
+    #[error("{series} scale {scale} time is not a positive finite number")]
+    SeriesTime { series: String, scale: u32 },
+    /// The log-log fit is not a finite exponent.
+    #[error("{series} scales are not distinguishable on a log axis")]
+    SeriesLog { series: String },
+    /// A linear claim missed [`crate::LINEAR_LIMIT`].
+    #[error("{series} is not linear: exponent {exponent}, linear limit {limit}")]
+    NotLinear {
+        series: String,
+        exponent: f64,
+        limit: f64,
+    },
+    /// A not-quadratic claim hit [`crate::QUADRATIC_LIMIT`].
+    #[error("{series} is quadratic: exponent {exponent}, quadratic limit {limit}")]
+    QuadraticGrowth {
+        series: String,
+        exponent: f64,
+        limit: f64,
+    },
+    /// No workspace `Cargo.toml` was found walking up from `start`.
+    #[error("workspace root was not found from {start}")]
+    WorkspaceMissing { start: String },
+    /// `path` is not valid TOML.
+    #[error("{path} is not a readable manifest: {source}")]
+    ManifestRead {
+        path: String,
+        #[source]
+        source: toml::de::Error,
+    },
+    /// `package` is not a member of the workspace.
+    #[error("package {package} is not a workspace member")]
+    MemberMissing { package: String },
+    /// The rendered source uses a crate that is not in the workspace.
+    #[error("{series} uses {crate_name}, which is not a workspace member")]
+    SeriesCrate { series: String, crate_name: String },
+    /// A series sets both a growth claim and a pass ceiling.
+    #[error("{series} sets both a growth claim and a pass ceiling")]
+    SeriesBothClaims { series: String },
+    /// The ceiling scale is not one of the series scales.
+    #[error("{series} ceiling scale {scale} is not in the series")]
+    PassScale { series: String, scale: u32 },
+    /// Nightly rustc is required for `-Ztime-passes`.
+    #[error("nightly rustc is required for -Ztime-passes")]
+    NightlyMissing,
+    /// The user crate's `-Ztime-passes` log has no line for this pass.
+    #[error("no {pass} time after compiling {package}")]
+    PassMissing { pass: String, package: String },
+    /// A pass line did not contain a finite number of seconds.
+    #[error("{pass} time is not a number of seconds")]
+    PassText { pass: String },
+    /// A pass time is not a finite non-negative number.
+    #[error("{pass} at scale {scale} time is not a finite non-negative number")]
+    PassTime { pass: String, scale: u32 },
+    /// A pass took longer than its ceiling.
+    #[error("{pass} at scale {scale} took {elapsed_ms} ms, limit is {limit_ms} ms")]
+    PassSlow {
+        pass: String,
+        scale: u32,
+        elapsed_ms: u128,
+        limit_ms: u128,
+    },
 }
 
 impl Error {

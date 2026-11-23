@@ -1,18 +1,27 @@
 //! Runs hyperfine scenarios against a downstream crate.
 //!
-//! A bench points [`Bench`] at a case directory. Group folders and the Rust
-//! files under them select the warmup, debug, incremental, and release cases
-//! and supply each case's source. The dependency compile is paid once, before
-//! the case times.
+//! [`Bench`] reads directory cases. The workspace root, the path dependency,
+//! the user package, and the output directory are taken from the workspace
+//! when the bench does not set them. [`Series`] renders a generator at several
+//! scales and checks the measured builds from a test.
+#![forbid(unsafe_code)]
 
 mod cases;
 mod engine;
 mod error;
+mod growth;
 mod json;
 mod manifest;
+mod passes;
 mod source;
+mod workspace;
 
 pub use error::{Error, Result};
+pub use growth::{
+    Character, Fit, Group, Growth, LINEAR_EXPONENT, LINEAR_LIMIT, MIN_SCALE, MIN_SCALES,
+    NOISE_ALLOWANCE, PassCeiling, PassSample, Point, QUADRATIC_EXPONENT, QUADRATIC_LIMIT,
+    RustcPass, Scale, Series, Solver, TYPE_CHECK_CRATE_LIMIT, Verdict,
+};
 
 use std::path::{Path, PathBuf};
 
@@ -66,7 +75,7 @@ impl Bench {
             dependency: None,
             cases: None,
             runtime: None,
-            repeats: 3,
+            repeats: engine::DEFAULT_REPEATS,
         }
     }
 
@@ -117,27 +126,30 @@ impl Bench {
 
     /// Builds the warmup cases, then runs the selected scenarios.
     ///
+    /// Unset paths come from the workspace: the case directory is
+    /// `benches/crates/{name}/cases`, the path dependency is the member named
+    /// `name`, the user package is `{name}_user`, and the output directory is
+    /// `{name}-expand`.
+    ///
     /// # Errors
     ///
-    /// Returns an error when a required setter was skipped, the case directory
-    /// cannot be read, or a measured command fails.
+    /// Returns an error when `name` is not a workspace member, the case
+    /// directory cannot be read, or a measured command fails.
     pub fn run(self) -> Result<()> {
-        let directory = required(self.cases, "case directory")?;
+        let layout = workspace::bench_layout(&self.name)?;
+        let directory = self.cases.unwrap_or(layout.cases);
+        let cases = cases::load(&directory)?;
         let plan = Plan {
             summary: format!("{} user compile time", self.name),
-            output: required(self.output, "output directory")?,
-            package: required(self.package, "user package")?,
-            dependency: required(self.dependency, "dependency")?,
-            cases: cases::load(&directory)?,
+            output: self.output.unwrap_or(layout.output),
+            package: self.package.unwrap_or(layout.package),
+            dependency: self.dependency.unwrap_or(layout.dependency),
+            cases,
             runtime: self.runtime,
             repeats: self.repeats,
         };
         engine::execute(&plan)
     }
-}
-
-fn required<T>(value: Option<T>, label: &'static str) -> Result<T> {
-    value.ok_or(crate::error::ErrorKind::Unset { label }.into())
 }
 
 /// One filled-in [`Bench`].
