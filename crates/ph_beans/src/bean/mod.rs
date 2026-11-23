@@ -15,6 +15,7 @@ mod proxy;
 pub use inject::{
     FromParent, Module, OfInject, OfInject0, OfInject1, OfParent, OfProvide, OfProvide0, OfProvide1,
 };
+pub use proxy::Marked;
 pub use proxy::{
     ApplyProxy, DefaultProxy, FreeKey, Fwd, InitPath, LinkMark, More, ParentList, Proxied,
     ProxyInfo, Stop, Target, Via,

@@ -1,6 +1,6 @@
 //! Which beans a resource claim names, and the view the init function sees.
 
-use crate::bean::{ApplyProxy, More, Proxied, ProxyInfo, Target, Via};
+use crate::bean::{ApplyProxy, Marked, More, Proxied, ProxyInfo, Target, Via};
 use crate::borrow::At;
 use crate::descriptor::live::{Idle, Live};
 use crate::descriptor::{Dyn, DynView, Get, Mut};
@@ -56,74 +56,43 @@ impl<B> Claim<B> for () {
     type Indexes = ();
 }
 
-impl<B, P> Claim<B> for Get<P>
+impl<B, C> Claim<B> for C
 where
-    B: At<P>,
-    P: Target + Proxied,
+    C: Marked,
+    B: At<C::Target>,
+    C::Target: Target + Proxied,
 {
     type Indexes = B::Ix;
 }
 
-impl<B, P> Claim<B> for Mut<P>
+impl<B, C> ClaimVia<B, Own> for C
 where
-    B: At<P>,
-    P: Target + Proxied,
+    C: Marked,
+    B: At<C::Target>,
+    C::Target: Target + Proxied,
 {
     type Indexes = B::Ix;
 }
 
-impl<B, S> ClaimVia<B, Own> for Get<S>
+impl<B, P, C> ClaimVia<B, FromProxy> for C
 where
-    B: At<S>,
-    S: Target + Proxied,
-{
-    type Indexes = B::Ix;
-}
-
-impl<B, S> ClaimVia<B, Own> for Mut<S>
-where
-    B: At<S>,
-    S: Target + Proxied,
-{
-    type Indexes = B::Ix;
-}
-
-impl<B, S, P> ClaimVia<B, FromProxy> for Get<S>
-where
+    C: Marked,
     B: Proxied<Proxy = P>,
-    P: At<S>,
-    S: Target + Proxied,
+    P: At<C::Target>,
+    C::Target: Target + Proxied,
 {
     type Indexes = P::Ix;
 }
 
-impl<B, S, P> ClaimVia<B, FromProxy> for Mut<S>
+impl<B, P, O, K, C> ClaimVia<B, (FromChain, K)> for C
 where
-    B: Proxied<Proxy = P>,
-    P: At<S>,
-    S: Target + Proxied,
-{
-    type Indexes = P::Ix;
-}
-
-impl<B, S, P, O, K> ClaimVia<B, (FromChain, K)> for Get<S>
-where
+    C: Marked,
     B: Proxied<Proxy = P>,
     P: ProxyInfo<Chain = More<O>>,
-    O: Sees<S, K>,
-    S: Target + Proxied,
+    O: Sees<C::Target, K>,
+    C::Target: Target + Proxied,
 {
-    type Indexes = <O as Sees<S, K>>::Ix;
-}
-
-impl<B, S, P, O, K> ClaimVia<B, (FromChain, K)> for Mut<S>
-where
-    B: Proxied<Proxy = P>,
-    P: ProxyInfo<Chain = More<O>>,
-    O: Sees<S, K>,
-    S: Target + Proxied,
-{
-    type Indexes = <O as Sees<S, K>>::Ix;
+    type Indexes = <O as Sees<C::Target, K>>::Ix;
 }
 
 impl<B, A, C, Ka, Kc> ClaimVia<B, (Ka, Kc)> for And<A, C>
@@ -142,23 +111,23 @@ where
     type Indexes = (A::Indexes, C::Indexes);
 }
 
-impl<B, P, S> Claim<B> for Via<P, Get<S>>
+/// Body that may sit under `Via<P, _>`.
+///
+/// One blanket covers `Get` and `Mut`. A nested [`Via`] recurses on the inner body.
+trait UnderProxy<P> {}
+
+impl<P, C> UnderProxy<P> for C
 where
-    S: Target + Proxied<Proxy = P>,
+    C: Marked,
+    C::Target: Target + Proxied<Proxy = P>,
 {
-    type Indexes = ();
 }
 
-impl<B, P, S> Claim<B> for Via<P, Mut<S>>
-where
-    S: Target + Proxied<Proxy = P>,
-{
-    type Indexes = ();
-}
+impl<P, Q, C> UnderProxy<P> for Via<Q, C> where C: UnderProxy<Q> {}
 
-impl<B, P, Q, C> Claim<B> for Via<P, Via<Q, C>>
+impl<B, P, C> Claim<B> for Via<P, C>
 where
-    Via<Q, C>: Claim<B>,
+    C: UnderProxy<P>,
 {
     type Indexes = ();
 }
@@ -171,16 +140,10 @@ impl<A: ApplyProxy, B: ApplyProxy> ApplyProxy for (A, B) {
     type Wrapped = (A::Wrapped, B::Wrapped);
 }
 
-impl<B, P, V: ?Sized> Claim<B> for Dyn<Get<P>, V>
+impl<B, M, V: ?Sized> Claim<B> for Dyn<M, V>
 where
-    B: At<P>,
-{
-    type Indexes = B::Ix;
-}
-
-impl<B, P, V: ?Sized> Claim<B> for Dyn<Mut<P>, V>
-where
-    B: At<P>,
+    M: Marked,
+    B: At<M::Target>,
 {
     type Indexes = B::Ix;
 }

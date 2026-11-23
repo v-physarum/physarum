@@ -198,12 +198,32 @@ use crate::descriptor::{Get, Mut};
 )]
 pub trait Target: crate::BeanInfo {}
 
+mod marked_seal {
+    pub trait Seal {}
+    impl<S> Seal for crate::Get<S> {}
+    impl<S> Seal for crate::Mut<S> {}
+}
+
+/// `Get<S>` or `Mut<S>`, projecting the inner type.
+///
+/// Sealed. [`LinkMark`] and the `Via` claim blanket are written once against it.
+pub trait Marked: marked_seal::Seal {
+    /// Inner type.
+    type Target;
+}
+
+impl<S> Marked for Get<S> {
+    type Target = S;
+}
+
+impl<S> Marked for Mut<S> {
+    type Target = S;
+}
+
 /// `Get<P>` or `Mut<P>`: the `proxy = P::T` / `proxy = P::MUT` marker.
 pub trait LinkMark<P> {}
 
-impl<P> LinkMark<P> for Get<P> {}
-
-impl<P> LinkMark<P> for Mut<P> {}
+impl<S, C> LinkMark<S> for C where C: Marked<Target = S> {}
 
 /// Outermost link of a proxy chain. This proxy has no further proxy.
 ///
@@ -389,18 +409,16 @@ where
     type Wrapped = <O as Enfold<Via<P, C>, O::Chain>>::Wrapped;
 }
 
-impl<B: Proxied> ApplyProxy for Get<B>
+impl<C> ApplyProxy for C
 where
-    B::Proxy: Enfold<Get<B>, <B::Proxy as ProxyInfo>::Chain>,
+    C: Marked,
+    C::Target: Proxied,
+    <C::Target as Proxied>::Proxy: Enfold<C, <<C::Target as Proxied>::Proxy as ProxyInfo>::Chain>,
 {
-    type Wrapped = <B::Proxy as Enfold<Get<B>, <B::Proxy as ProxyInfo>::Chain>>::Wrapped;
-}
-
-impl<B: Proxied> ApplyProxy for Mut<B>
-where
-    B::Proxy: Enfold<Mut<B>, <B::Proxy as ProxyInfo>::Chain>,
-{
-    type Wrapped = <B::Proxy as Enfold<Mut<B>, <B::Proxy as ProxyInfo>::Chain>>::Wrapped;
+    type Wrapped = <<C::Target as Proxied>::Proxy as Enfold<
+        C,
+        <<C::Target as Proxied>::Proxy as ProxyInfo>::Chain,
+    >>::Wrapped;
 }
 
 /// Builds the init wrapper for proxy `Self` around bean `B`, outer around inner.
@@ -528,9 +546,12 @@ where
 )]
 pub trait FreeKey {}
 
-impl<B: Target + Proxied> FreeKey for Get<B> {}
-
-impl<B: Target + Proxied> FreeKey for Mut<B> {}
+impl<C> FreeKey for C
+where
+    C: Marked,
+    C::Target: Target + Proxied,
+{
+}
 
 /// Events of a proxy, walked when the target is scheduled.
 ///
