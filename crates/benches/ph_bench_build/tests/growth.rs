@@ -224,6 +224,64 @@ fn an_unfinished_series_is_rejected() {
 }
 
 #[test]
+fn an_incremental_series_needs_a_real_edit() {
+    let missing = Series::new("touch")
+        .group(Group::Incremental)
+        .scales([8, 16])
+        .expect(Growth::Linear)
+        .render(source);
+    let error = missing.check_seconds(&[0.1, 0.2]).unwrap_err().to_string();
+    assert!(error.contains("no edit"), "{error}");
+
+    let same = Series::new("touch")
+        .group(Group::Incremental)
+        .scales([8, 16])
+        .expect(Growth::Linear)
+        .render(source)
+        .edit(str::to_owned);
+    let error = same.check_seconds(&[0.1, 0.2]).unwrap_err().to_string();
+    assert!(error.contains("does not change"), "{error}");
+
+    let empty = Series::new("touch")
+        .group(Group::Incremental)
+        .scales([8, 16])
+        .expect(Growth::Linear)
+        .render(source)
+        .edit(|_| String::new());
+    let error = empty.check_seconds(&[0.1, 0.2]).unwrap_err().to_string();
+    assert!(error.contains("edit is empty"), "{error}");
+}
+
+#[test]
+fn an_incremental_edit_is_accepted_before_the_build() {
+    let series = Series::new("touch")
+        .group(Group::Incremental)
+        .scales([8, 16])
+        .expect(Growth::Linear)
+        .render(source)
+        .edit(|text| format!("{text}fn marker() {{}}\n"));
+    let fit = series.check_seconds(&[0.1, 0.2]).unwrap();
+    assert!((fit.exponent() - 1.0).abs() < 1e-9, "{}", fit.exponent());
+}
+
+#[test]
+fn changing_scales_drops_a_previous_edit() {
+    let series = Series::new("touch")
+        .group(Group::Incremental)
+        .scales([8, 16])
+        .expect(Growth::Linear)
+        .render(source)
+        .edit(|text| format!("{text}fn marker() {{}}\n"))
+        .scales([8, 16]);
+    let error = series
+        .render(source)
+        .check_seconds(&[0.1, 0.2])
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("no edit"), "{error}");
+}
+
+#[test]
 fn check_seconds_requires_a_time_per_scale() {
     let series = Series::new("items")
         .group(Group::Debug)

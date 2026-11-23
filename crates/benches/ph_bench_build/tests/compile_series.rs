@@ -32,6 +32,27 @@ fn flat_structs_grow_linearly_in_release() {
     flat(Group::Release, [1024, 8192]).check().unwrap();
 }
 
+#[test]
+fn an_incremental_edit_stays_linear() {
+    Series::new("incremental_touch")
+        .group(Group::Incremental)
+        .scales([8, 32])
+        .expect(Growth::Linear)
+        .render(hand_structs)
+        .edit(append_marker)
+        .check()
+        .unwrap();
+}
+
+fn append_marker(source: &str) -> String {
+    let mut edited = String::with_capacity(source.len() + MARKER.len());
+    edited.push_str(source);
+    edited.push_str(MARKER);
+    edited
+}
+
+const MARKER: &str = "pub fn marker() {}\n";
+
 fn flat<const LEN: usize>(group: Group, scales: [u32; LEN]) -> Series {
     Series::new("flat_structs")
         .group(group)
