@@ -34,11 +34,7 @@ pub trait Configuration {
     fn install(self) -> Self::Out;
 }
 
-/// The init slot is still [`NoSystems`].
-///
-/// A second `init_state` fails this bound. Stable Rust rejects two inherent
-/// `init_state` impls that differ only by a where-clause (`E0592`), so the
-/// status is named here instead of a second impl whose body is unreachable.
+/// Init slot is still `NoSystems`. A second `init_state` fails this bound.
 #[doc(hidden)]
 #[diagnostic::on_unimplemented(
     message = "pipeline not ready: Descriptor::Status = `ErrInitAlreadySet` (tip `{Self}`)",

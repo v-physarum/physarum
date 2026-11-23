@@ -111,9 +111,7 @@ where
     type Indexes = (A::Indexes, C::Indexes);
 }
 
-/// Body that may sit under `Via<P, _>`.
-///
-/// One blanket covers `Get` and `Mut`. A nested [`Via`] recurses on the inner body.
+/// Body of `Via<P, _>`: a marker whose proxy is `P`, or a nested `Via`.
 trait UnderProxy<P> {}
 
 impl<P, C> UnderProxy<P> for C
