@@ -16,7 +16,9 @@ pub use list::{Grow, Leaf, List};
 pub use maps::{MAX_MAP_SYSTEMS, MapList};
 pub use patch::CtxConfig;
 pub use start::StartDesc;
-pub use tick::{ContextTick, DefaultState, FreshInit, NoSystems, Pipe, WithDefault, WithInit};
+pub use tick::{
+    Configuration, ContextTick, DefaultState, FreshInit, NoSystems, Pipe, WithDefault, WithInit,
+};
 
 /// Bean, resource args, pipeline status, and the systems.
 ///

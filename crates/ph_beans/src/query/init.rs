@@ -6,6 +6,7 @@
 use core::marker::PhantomData;
 
 use crate::bean::{BeanInfo, DriveInit, ForwardInit, Proxied, ProxyInfo};
+use crate::context::Configuration;
 use crate::context::Context;
 use crate::context::Ctx;
 use crate::context::CtxConfig;
@@ -54,24 +55,36 @@ pub trait SealInit<H>: Sized {
     fn seal_init(self, handler: H) -> Self::Out;
 }
 
+/// Init handler after the proxy chain of `B`.
+#[doc(hidden)]
+pub struct ProxyInit<B, H> {
+    handler: H,
+    _bean: PhantomData<B>,
+}
+
+impl<B, H> Configuration for ProxyInit<B, H>
+where
+    B: Proxied,
+    B::Proxy: ProxyInfo + ForwardInit<B, H, <B::Proxy as ProxyInfo>::Chain>,
+{
+    type Out = <B::Proxy as ForwardInit<B, H, <B::Proxy as ProxyInfo>::Chain>>::Out;
+
+    fn install(self) -> Self::Out {
+        <B::Proxy as ForwardInit<B, H, <B::Proxy as ProxyInfo>::Chain>>::forward(self.handler)
+    }
+}
+
 impl<B, A, S, T, H> SealInit<H> for Ctx<B, A, S, T>
 where
     A: AccSet,
     T: FreshInit,
-    B: Proxied,
-    B::Proxy: ForwardInit<B, H, <B::Proxy as ProxyInfo>::Chain>,
+    ProxyInit<B, H>: Configuration,
 {
-    type Out = Ctx<
-        B,
-        A,
-        NeedBuild,
-        T::WithInit<<B::Proxy as ForwardInit<B, H, <B::Proxy as ProxyInfo>::Chain>>::Out>,
-    >;
+    type Out = Ctx<B, A, NeedBuild, T::Config<ProxyInit<B, H>>>;
 
     fn seal_init(self, handler: H) -> Self::Out {
-        let handler =
-            <B::Proxy as ForwardInit<B, H, <B::Proxy as ProxyInfo>::Chain>>::forward(handler);
-        Ctx::new(FreshInit::install_init(self.tick, handler))
+        let cfg = ProxyInit { handler, _bean: PhantomData };
+        Ctx::new(self.tick.install_config(cfg))
     }
 }
 
@@ -148,8 +161,7 @@ where
     Self: ApplyPatch<SetInit<H>>,
     C: Context,
     C::Bean: Proxied,
-    <C::Bean as Proxied>::Proxy:
-        ForwardInit<C::Bean, H, <<C::Bean as Proxied>::Proxy as ProxyInfo>::Chain>,
+    ProxyInit<C::Bean, H>: Configuration,
     C::Tick: FreshInit,
     C::Args: Claim<C::Bean> + ArgsView + OpShape<Status: OpOk>,
     H: for<'a> Fn(<C::Args as ArgsView>::View<'a>) -> <C::Bean as BeanInfo>::State,

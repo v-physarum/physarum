@@ -25,6 +25,15 @@ pub struct WithDefault<S> {
 /// Systems live on the context, not on the operators.
 pub trait ContextTick {}
 
+/// Payload a [`FreshInit::Config`] stores in the init slot.
+#[doc(hidden)]
+pub trait Configuration {
+    /// Value placed in [`WithInit`].
+    type Out;
+    /// Builds that value.
+    fn install(self) -> Self::Out;
+}
+
 /// The init slot is still [`NoSystems`].
 ///
 /// A second `init_state` fails this bound. Stable Rust rejects two inherent
@@ -41,8 +50,12 @@ pub trait FreshInit: ContextTick {
     type WithInit<H>: ContextTick;
     /// Tick after `init_state_default`.
     type WithDefault<S>: ContextTick;
+    /// Tick after configuration `C`.
+    type Config<C: Configuration>: ContextTick;
     /// Stores the init function item.
     fn install_init<H>(self, handler: H) -> Self::WithInit<H>;
+    /// Stores the value produced by `cfg`.
+    fn install_config<C: Configuration>(self, cfg: C) -> Self::Config<C>;
     /// Stores default state.
     fn install_default<S>(self, state: S) -> Self::WithDefault<S>;
 }
@@ -53,9 +66,14 @@ where
 {
     type WithInit<H> = Pipe<WithInit<H>, L>;
     type WithDefault<S> = Pipe<WithDefault<S>, L>;
+    type Config<C: Configuration> = Pipe<WithInit<C::Out>, L>;
 
     fn install_init<H>(self, handler: H) -> Self::WithInit<H> {
         Pipe::new(WithInit::new(handler), self.list)
+    }
+
+    fn install_config<C: Configuration>(self, cfg: C) -> Self::Config<C> {
+        self.install_init(cfg.install())
     }
 
     fn install_default<S>(self, state: S) -> Self::WithDefault<S> {
