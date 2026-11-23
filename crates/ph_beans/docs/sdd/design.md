@@ -93,7 +93,7 @@ Layout of `crates/ph_beans/src/`. Keep the surface readable: **small files**, **
    // …
    ```
 
-   DI (`FromParent`): match through **membership** + `ClaimMark`. **Do not** split Get vs Mut. A provide or inject list is one flat tuple of at most eight claims, `(Get<A>, Get<B>, Get<C>)`. A pair uses `OfProvide0` / `OfProvide1` (and the inject twins). Lengths 3..=8 use `ProvideAt<N, I>` / `InjectAt<N, I>`: the length has to sit in the marker, or two arities overlap (E0119). A nested tail `(Get<A>, (Get<B>, ()))` is not a list.
+   DI (`FromParent`): match through **membership** + `ClaimMark`. **Do not** split Get vs Mut. A provide or inject list is one flat tuple of at most eight claims, `(Get<A>, Get<B>, Get<C>)`. A pair uses `OfProvide0` / `OfProvide1` (and the inject twins). Lengths 3..=8 use `ProvideAt<N, I>` / `InjectAt<N, I>`: the length has to sit in the marker, or two arities overlap (E0119). A nested tail `(Get<A>, (Get<B>, ()))` is not a list. A child inject list is that same flat tuple: each element is a claim, so the tuple impl does not recurse.
 
    ```rust
    // Forbidden — Get×Mut×slot
