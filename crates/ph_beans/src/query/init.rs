@@ -195,7 +195,7 @@ impl<E, C> Init<E, C> {
     /// A second call fails on this line with status [`ErrInitAlreadySet`](crate::ErrInitAlreadySet).
     ///
     /// ```compile_fail
-    /// use ph_beans::{BeanInfo, Get, Pass, Proxied, Query, Target};
+    /// use ph_beans::{BeanInfo, Get, Proxy, Proxied, Query, Target};
     ///
     /// struct App;
     ///
@@ -208,8 +208,8 @@ impl<E, C> Init<E, C> {
     ///
     /// impl Target for App {}
     /// impl Proxied for App {
-    ///     type Proxy = Pass<App>;
-    ///     type Link = Get<Pass<App>>;
+    ///     type Proxy = Proxy<App>;
+    ///     type Link = Get<Proxy<App>>;
     /// }
     ///
     /// fn boot(_: ()) -> u8 {
@@ -231,7 +231,7 @@ impl<E, C> Init<E, C> {
     /// A second init fails on that call with [`ErrInitAlreadySet`](crate::ErrInitAlreadySet).
     ///
     /// ```compile_fail
-    /// use ph_beans::{BeanInfo, Get, Pass, Proxied, Query, Target};
+    /// use ph_beans::{BeanInfo, Get, Proxy, Proxied, Query, Target};
     ///
     /// struct App;
     ///
@@ -244,8 +244,8 @@ impl<E, C> Init<E, C> {
     ///
     /// impl Target for App {}
     /// impl Proxied for App {
-    ///     type Proxy = Pass<App>;
-    ///     type Link = Get<Pass<App>>;
+    ///     type Proxy = Proxy<App>;
+    ///     type Link = Get<Proxy<App>>;
     /// }
     ///
     /// let _twice = App::query().init_state_default().init_state_default();

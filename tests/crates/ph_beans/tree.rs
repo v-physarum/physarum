@@ -8,7 +8,7 @@
 
 use ph_beans::{
     At, BeanInfo, EventInfo, Get, Ix0, Ix1, Marker, Module, Mut, OfInject, OfParent, OfProvide,
-    OfProvide1, Pass, Proxied, Query, Setup, Target, Tick,
+    OfProvide1, Proxied, Proxy, Query, Setup, Target, Tick,
 };
 
 struct Id(u8);
@@ -50,28 +50,28 @@ impl EventInfo for Update {
 
 impl Target for Id {}
 impl Proxied for Id {
-    type Proxy = Pass<Id>;
-    type Link = Get<Pass<Id>>;
+    type Proxy = Proxy<Id>;
+    type Link = Get<Proxy<Id>>;
 }
 impl Target for Keys {}
 impl Proxied for Keys {
-    type Proxy = Pass<Keys>;
-    type Link = Get<Pass<Keys>>;
+    type Proxy = Proxy<Keys>;
+    type Link = Get<Proxy<Keys>>;
 }
 impl Target for App {}
 impl Proxied for App {
-    type Proxy = Pass<App>;
-    type Link = Get<Pass<App>>;
+    type Proxy = Proxy<App>;
+    type Link = Get<Proxy<App>>;
 }
 impl Target for Logic {}
 impl Proxied for Logic {
-    type Proxy = Pass<Logic>;
-    type Link = Get<Pass<Logic>>;
+    type Proxy = Proxy<Logic>;
+    type Link = Get<Proxy<Logic>>;
 }
 impl Target for Render {}
 impl Proxied for Render {
-    type Proxy = Pass<Render>;
-    type Link = Get<Pass<Render>>;
+    type Proxy = Proxy<Render>;
+    type Link = Get<Proxy<Render>>;
 }
 
 impl At<Id> for App {

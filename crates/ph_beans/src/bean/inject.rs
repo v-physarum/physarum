@@ -35,7 +35,7 @@ pub struct OfInject1;
 /// `Self` may be injected from `P` via `V`.
 ///
 /// ```compile_fail
-/// use ph_beans::{BeanInfo, FromParent, Get, Mut, OfProvide, Pass, Proxied, Target};
+/// use ph_beans::{BeanInfo, FromParent, Get, Mut, OfProvide, Proxy, Proxied, Target};
 ///
 /// struct Logic;
 /// struct App;
@@ -49,8 +49,8 @@ pub struct OfInject1;
 ///
 /// impl Target for Logic {}
 /// impl Proxied for Logic {
-///     type Proxy = Pass<Logic>;
-///     type Link = Get<Pass<Logic>>;
+///     type Proxy = Proxy<Logic>;
+///     type Link = Get<Proxy<Logic>>;
 /// }
 ///
 /// impl BeanInfo for App {

@@ -211,7 +211,7 @@ impl<P> LinkMark<P> for Mut<P> {}
 
 /// Outermost link of a proxy chain. This proxy has no further proxy.
 ///
-/// Name pending owner approval. [`Pass`] uses this too: it is not stacked
+/// Name pending owner approval. [`Proxy`] uses this too: it is not stacked
 /// outside an explicit proxy.
 pub struct Stop;
 
@@ -247,16 +247,13 @@ pub trait ProxyInfo: crate::BeanInfo {
 /// pending owner approval. A bean or a proxy may implement this, so chains
 /// type-check. Injecting a proxy still fails: proxy types are not [`Target`].
 ///
-/// No `proxy = ...` on a bean is the manual impl whose [`Proxy`] is [`Pass`]
-/// and whose [`Link`] is `Get<Pass<Self>>`. [`Pass`] is not [`Proxied`], so
-/// that chain stops. An explicit proxy that names no further proxy is not
-/// [`Proxied`] either: [`Pass`] is not wrapped around it.
-///
-/// [`Link`]: Proxied::Link
-/// [`Proxy`]: Proxied::Proxy
+/// No `proxy = ...` on a bean is the manual impl `Proxy = Proxy<Self>` and
+/// `Link = Get<Proxy<Self>>`. The identity proxy is not [`Proxied`], so that
+/// chain stops. An explicit proxy that names no further proxy is not
+/// [`Proxied`] either: the identity proxy is not wrapped around it.
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not a proxied target",
-    note = "inject the target bean; a proxy is not a free-standing key. A missing `proxy = ...` on a bean is `Proxy = Pass<Self>` and `Link = Get<Pass<Self>>`"
+    note = "inject the target bean; a proxy is not a free-standing key. A missing `proxy = ...` on a bean is `Proxy = Proxy<Self>` and `Link = Get<Proxy<Self>>`"
 )]
 pub trait Proxied: crate::BeanInfo {
     /// Proxy that wraps `Self`.
@@ -267,26 +264,25 @@ pub trait Proxied: crate::BeanInfo {
 
 /// Identity proxy. A bean with no `proxy = ...` names this as [`Proxied::Proxy`].
 ///
-/// Pass-through: no provides, no events, and it is not itself proxied, so a
-/// chain that reaches [`Pass`] stops. [`Pass`] is only for a [`Target`]. It
-/// does not wrap a proxy and it is not placed outside an explicit proxy.
-/// The name and the `Pass<B>` shape are pending owner approval.
-pub struct Pass<B>(PhantomData<B>);
+/// No provides, no events, and it is not itself proxied, so a chain that
+/// reaches [`Proxy`] stops. It is only for a [`Target`]. It does not wrap a
+/// proxy and it is not placed outside an explicit proxy.
+pub struct Proxy<B>(PhantomData<B>);
 
-impl<B: Target> crate::BeanInfo for Pass<B> {
+impl<B: Target> crate::BeanInfo for Proxy<B> {
     /// Pass-through proxies expose no beans of their own.
     type Provides = ();
     /// Pass-through proxies inject nothing.
     type Injects = ();
     /// No provides and no injects.
     type Beans = ();
-    /// The target keeps its own state. Pass does not store a second copy.
+    /// The target keeps its own state. Proxy does not store a second copy.
     type State = ();
 }
 
-impl<B: Target> ProxyInfo for Pass<B> {
+impl<B: Target> ProxyInfo for Proxy<B> {
     type Targets = B;
-    type Link = Get<Pass<B>>;
+    type Link = Get<Proxy<B>>;
     type Chain = Stop;
 }
 
@@ -342,9 +338,9 @@ pub trait InitPath<B: crate::BeanInfo>: ProxyInfo<Targets = B> {
     fn enter() {}
 }
 
-impl<B> InitPath<B> for Pass<B>
+impl<B> InitPath<B> for Proxy<B>
 where
-    B: Target + Proxied<Proxy = Pass<B>>,
+    B: Target + Proxied<Proxy = Proxy<B>>,
 {
     fn install<H>(handler: H) -> Fwd<Self, H> {
         Fwd::new(handler)
@@ -527,14 +523,14 @@ impl<B: Target + Proxied> FreeKey for Mut<B> {}
 
 /// Events of a proxy, walked when the target is scheduled.
 ///
-/// [`Pass`] contributes nothing. A proxy that is an event contributes its
+/// [`Proxy`] contributes nothing. A proxy that is an event contributes its
 /// [`crate::EventInfo::Parents`] and its own id is matched separately.
 pub trait ParentList {
     /// `true` when `emitted` contains one of these parent events.
     fn listed(emitted: &[TypeId]) -> bool;
 }
 
-impl<B: Target> ParentList for Pass<B> {
+impl<B: Target> ParentList for Proxy<B> {
     fn listed(_emitted: &[TypeId]) -> bool {
         false
     }

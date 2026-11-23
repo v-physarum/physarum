@@ -17,8 +17,8 @@ pub mod query;
 
 pub use bean::{
     ApplyProxy, BeanInfo, EventInfo, FreeKey, FromParent, Fwd, InitPath, LinkMark, Module, More,
-    OfInject, OfInject0, OfInject1, OfParent, OfProvide, OfProvide0, OfProvide1, ParentList, Pass,
-    Proxied, ProxyInfo, Stop, Target, Via,
+    OfInject, OfInject0, OfInject1, OfParent, OfProvide, OfProvide0, OfProvide1, ParentList,
+    Proxied, Proxy, ProxyInfo, Stop, Target, Via,
 };
 pub use borrow::{At, Ix0, Ix1, Ix2, Ix3, Off, Take, TakeMany};
 pub use context::{

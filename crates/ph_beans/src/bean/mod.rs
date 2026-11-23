@@ -16,8 +16,8 @@ pub use inject::{
     FromParent, Module, OfInject, OfInject0, OfInject1, OfParent, OfProvide, OfProvide0, OfProvide1,
 };
 pub use proxy::{
-    ApplyProxy, FreeKey, Fwd, InitPath, LinkMark, More, ParentList, Pass, Proxied, ProxyInfo, Stop,
-    Target, Via,
+    ApplyProxy, FreeKey, Fwd, InitPath, LinkMark, More, ParentList, Proxied, Proxy, ProxyInfo,
+    Stop, Target, Via,
 };
 pub use proxy::{DriveInit, Enfold, EnterAll, ForwardInit, WrapFwd};
 

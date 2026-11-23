@@ -6,7 +6,7 @@
 use core::cell::Cell;
 
 use ph_beans::{
-    At, BeanInfo, Ctx, EventInfo, Get, Init, Ix0, Marker, Pass, Pipe, Proxied, Query, Target, Tick,
+    At, BeanInfo, Ctx, EventInfo, Get, Init, Ix0, Marker, Pipe, Proxied, Proxy, Query, Target, Tick,
 };
 
 thread_local! {
@@ -75,28 +75,28 @@ impl At<Keys> for Sched {
 
 impl Target for Sched {}
 impl Proxied for Sched {
-    type Proxy = Pass<Sched>;
-    type Link = Get<Pass<Sched>>;
+    type Proxy = Proxy<Sched>;
+    type Link = Get<Proxy<Sched>>;
 }
 impl Target for Keys {}
 impl Proxied for Keys {
-    type Proxy = Pass<Keys>;
-    type Link = Get<Pass<Keys>>;
+    type Proxy = Proxy<Keys>;
+    type Link = Get<Proxy<Keys>>;
 }
 impl Target for Update {}
 impl Proxied for Update {
-    type Proxy = Pass<Update>;
-    type Link = Get<Pass<Update>>;
+    type Proxy = Proxy<Update>;
+    type Link = Get<Proxy<Update>>;
 }
 impl Target for Graphics {}
 impl Proxied for Graphics {
-    type Proxy = Pass<Graphics>;
-    type Link = Get<Pass<Graphics>>;
+    type Proxy = Proxy<Graphics>;
+    type Link = Get<Proxy<Graphics>>;
 }
 impl Target for Main {}
 impl Proxied for Main {
-    type Proxy = Pass<Main>;
-    type Link = Get<Pass<Main>>;
+    type Proxy = Proxy<Main>;
+    type Link = Get<Proxy<Main>>;
 }
 
 fn graphics_under_update<A, S, P>(_pipeline: &Init<(Graphics, Update), Ctx<Sched, A, S, P>>) {}
