@@ -7,6 +7,7 @@ use crate::context::Context;
 use crate::context::ContextTick;
 use crate::context::Ctx;
 use crate::context::CtxConfig;
+use crate::descriptor::LevelDesc;
 use crate::descriptor::live::AccSet;
 use crate::descriptor::live::{Idle, Live};
 use crate::filter::shape::HasMut;
@@ -14,7 +15,6 @@ use crate::filter::shape::No;
 use crate::query::apply::ApplyPatch;
 use crate::query::args::ClaimVia;
 use crate::query::init::Init;
-use crate::query::overlap::DistinctBeans;
 
 /// Replaces resource args on a concrete [`Ctx`] (hides `B`/`O`/`S`/`T` from [`CtxConfig`]).
 #[doc(hidden)]
@@ -104,13 +104,14 @@ impl<E, C> Init<E, C> {
     ///
     /// A bean that is an item of the module's `Beans` and of a proxy's
     /// `Provides` fails here: `bean is already on the proxy`.
+    /// The proxy levels are [`LevelDesc::Rows`](crate::LevelDesc::Rows).
     #[allow(clippy::needless_pass_by_value)]
     pub fn inject_resources<R, K>(self, resources: R) -> <Self as InjectResourcesStep<R, K>>::Out
     where
-        C: Context<Bean: DistinctBeans>,
+        C: Context<Bean: LevelDesc>,
         Self: InjectResourcesStep<R, K>,
     {
-        let _ = <C::Bean as DistinctBeans>::OK;
+        let _ = <C::Bean as LevelDesc>::OK;
         InjectResourcesStep::inject_resources(self, resources)
     }
 }

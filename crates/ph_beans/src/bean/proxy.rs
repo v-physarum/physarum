@@ -41,10 +41,9 @@ impl<S> Marked for Mut<S> {
 }
 
 /// No further proxy. [`Proxy`] ends here too.
+///
+/// A longer chain is a tuple of the outer proxies, nearest first: `(Mid, Outer)`.
 pub struct Stop;
-
-/// Next outer proxy.
-pub struct More<P>(PhantomData<P>);
 
 /// Bean wrapped by [`BeanInfo::Proxy`](crate::BeanInfo::Proxy).
 ///
@@ -139,7 +138,7 @@ pub trait ApplyProxy {
     type Wrapped;
 }
 
-/// Nests `C` through proxy `Self` according to `Link` ([`Stop`] or [`More`]).
+/// Nests `C` through proxy `Self`. `Link` is [`Stop`] or a tuple of outers.
 #[doc(hidden)]
 pub trait Enfold<C, Link> {
     /// Fully wrapped claim.
@@ -148,13 +147,6 @@ pub trait Enfold<C, Link> {
 
 impl<P, C> Enfold<C, Stop> for P {
     type Wrapped = Via<P, C>;
-}
-
-impl<P, O, C> Enfold<C, More<O>> for P
-where
-    O: crate::BeanInfo + Enfold<Via<P, C>, O::Chain>,
-{
-    type Wrapped = <O as Enfold<Via<P, C>, O::Chain>>::Wrapped;
 }
 
 impl<C, P> ApplyProxy for C
@@ -196,35 +188,11 @@ where
     }
 }
 
-impl<P, B, O, H> ForwardInit<B, H, More<O>> for P
-where
-    B: crate::BeanInfo,
-    P: InitPath<B>,
-    O: crate::BeanInfo + WrapFwd<Fwd<P, H>, O::Chain>,
-{
-    type Out = <O as WrapFwd<Fwd<P, H>, O::Chain>>::Out;
-
-    fn forward(handler: H) -> Self::Out {
-        O::wrap_fwd(<P as InitPath<B>>::install(handler))
-    }
-}
-
 impl<P, H> WrapFwd<H, Stop> for P {
     type Out = Fwd<P, H>;
 
     fn wrap_fwd(handler: H) -> Self::Out {
         Fwd::new(handler)
-    }
-}
-
-impl<P, O, H> WrapFwd<H, More<O>> for P
-where
-    O: crate::BeanInfo + WrapFwd<Fwd<P, H>, O::Chain>,
-{
-    type Out = <O as WrapFwd<Fwd<P, H>, O::Chain>>::Out;
-
-    fn wrap_fwd(handler: H) -> Self::Out {
-        O::wrap_fwd(Fwd::<P, H>::new(handler))
     }
 }
 
@@ -241,18 +209,6 @@ where
     P: InitPath<B>,
 {
     fn enter_all() {
-        <P as InitPath<B>>::enter();
-    }
-}
-
-impl<P, B, O> EnterAll<B, More<O>> for P
-where
-    B: crate::BeanInfo,
-    P: InitPath<B> + crate::BeanInfo<Chain = More<O>>,
-    O: crate::BeanInfo + InitPath<P> + EnterAll<P, O::Chain>,
-{
-    fn enter_all() {
-        <O as EnterAll<P, O::Chain>>::enter_all();
         <P as InitPath<B>>::enter();
     }
 }

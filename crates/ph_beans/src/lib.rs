@@ -16,9 +16,9 @@ pub mod filter;
 pub mod query;
 
 pub use bean::{
-    ApplyProxy, BeanInfo, EventInfo, FreeKey, FromParent, Fwd, InitPath, Marked, Module, More,
-    OfInject, OfInject0, OfInject1, OfParent, OfProvide, OfProvide0, OfProvide1, ParentList,
-    Proxied, Proxy, Stop, Target, Via,
+    ApplyProxy, BeanInfo, EventInfo, FreeKey, FromParent, Fwd, InitPath, Marked, Module, OfInject,
+    OfInject0, OfInject1, OfParent, OfProvide, OfProvide0, OfProvide1, ParentList, Proxied, Proxy,
+    Stop, Target, Via,
 };
 pub use borrow::{At, Ix0, Ix1, Ix2, Ix3, Off, Take, TakeMany};
 pub use context::{
@@ -27,8 +27,8 @@ pub use context::{
 };
 pub use descriptor::{
     Accessors, Descriptor, Dyn, DynView, ErrBadEvent, ErrConflictAccess, ErrDuplicateResource,
-    ErrInitAlreadySet, ErrNeedWaitFilter, ErrTooManySystems, Get, Idle, Live, Marker, Mut,
-    NeedBuild, NeedInit, OpDesc, OpOk, OpShape, PipelineOk, Valid, WarnUnusedArgs,
+    ErrInitAlreadySet, ErrNeedWaitFilter, ErrTooManySystems, Get, Idle, LevelDesc, Live, Marker,
+    Mut, NeedBuild, NeedInit, OpDesc, OpOk, OpShape, PipelineOk, Valid, WarnUnusedArgs,
 };
 pub use filter::{And, ApplyFilter, NestOk, Not, On, Or};
 pub use query::{
@@ -55,8 +55,9 @@ mod tests {
         use ph_test_errors::ErrorTester;
 
         use ph_beans::{
-            At, BeanInfo, Ctx, EventInfo, Fwd, Get, Init, InitPath, Ix0, Ix1, Live, Marker, More,
-            Mut, Pipe, Proxied, Proxy, Query, Stop, Target, Tick, Via, WithInit,
+            At, BeanInfo, Ctx, EventInfo, Fwd, Get, Init, InitPath, Ix0, Ix1, Leaf, LevelDesc,
+            List, Live, Marker, Mut, Pipe, Proxied, Proxy, Query, Stop, Target, Tick, Via,
+            WithInit,
         };
         use ph_util_foreach::impl_foreach;
 
@@ -254,7 +255,7 @@ mod tests {
             type Proxy = Proxy<Inner>;
 
             type Link = Get<Inner>;
-            type Chain = More<Mid>;
+            type Chain = (Mid, Outer);
         }
         impl EventInfo for Inner {
             type Parents = ();
@@ -278,7 +279,7 @@ mod tests {
             type Proxy = Proxy<Mid>;
 
             type Link = Get<Mid>;
-            type Chain = More<Outer>;
+            type Chain = (Outer,);
         }
         impl EventInfo for Mid {
             type Parents = ();
@@ -402,6 +403,12 @@ mod tests {
         #[test]
         fn the_target_sees_the_proxy_provides() {
             let _surface = GameTick::query().inject_resources(Score::T);
+        }
+
+        #[test]
+        fn proxy_levels_are_one_leaf() {
+            fn rows<B: LevelDesc<Rows = List<Leaf<(Inner, Mid, Outer)>>>>() {}
+            rows::<Core>();
         }
 
         #[test]
@@ -735,7 +742,7 @@ mod tests {
         fn injecting_an_inner_proxy_is_rejected() {
             fail(
                 "
-            use ph_beans::{At, BeanInfo, Get, Ix0, Marker, More, Proxied, Proxy, Query, Stop};
+            use ph_beans::{At, BeanInfo, Get, Ix0, Marker, Proxied, Proxy, Query, Stop};
             struct Tick;
             struct Inner;
             struct Outer;
@@ -753,7 +760,7 @@ mod tests {
             
             type Proxy = Proxy<Inner>;
             type Link = Get<Inner>;
-            type Chain = More<Outer>;
+            type Chain = (Outer,);
 }
             impl BeanInfo for Outer {
                 type Provides = (); type Injects = (); type Beans = (); type State = ();

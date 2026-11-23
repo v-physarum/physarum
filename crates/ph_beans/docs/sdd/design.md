@@ -458,7 +458,7 @@ Proc-macro / derive (when owner-allowed under rule 6) **emits only** these trait
 | --- | --- | --- |
 | **Module** (`#[config(type = module)]`) | [`BeanInfo`], one [`At`]`<P>` per entry in `Beans` | `Query`, `Setup`, `StartDesc`, `Module`, `FromParent`, pipeline steps, … |
 | **Event** | [`BeanInfo`] + [`EventInfo`] (`Parents`, `ON`); if `proxy = …`, also the proxied link (see **Proxy**) | same exclusion |
-| **Proxy** (`#[config(type = proxy)]`) | [`BeanInfo`] (`Link` is `Get<Self>` or `Mut<Self>`, `Chain` is [`Stop`] or [`More`]) + `At` for its `Beans` / provides | bare inject of the proxy; pipeline steps |
+| **Proxy** (`#[config(type = proxy)]`) | [`BeanInfo`] (`Link` is `Get<Self>` or `Mut<Self>`, `Chain` is [`Stop`] or a tuple of outer proxies) + `At` for its `Beans` / provides | bare inject of the proxy; pipeline steps |
 
 Manual impls in the prototype must match this surface so derive is a drop-in.
 
@@ -472,7 +472,7 @@ Manual impls in the prototype must match this surface so derive is a drop-in.
 | `State` | module’s owned state type (field / attribute as the derive defines) |
 | `Proxy` | wrapping proxy. `Proxy<Self>` when the bean names none |
 | `Link` | `Get<Self>` or `Mut<Self>`. A plain bean uses `Get<Self>`; a proxy writes the marker callers use |
-| `Chain` | [`Stop`], or [`More`] of the outer proxy |
+| `Chain` | [`Stop`], or a tuple of the outer proxies, nearest first |
 
 **`At` (module):** for each concrete `P` at position `n` in `Beans`, emit `impl At<P> for Module { type Ix = IxN; }`. Membership for claims is `Provides ∪ Injects` (a cast inject still requires the parent to provide/inject that concrete `Bean`). Duplicate concrete `P` is a derive error.
 
@@ -519,10 +519,10 @@ struct GameTick; // event (or other bean) wrapped by Update
 
 | Piece | Role |
 | --- | --- |
-| `#[config(type = proxy)]` | This type **is** a proxy. Emits [`BeanInfo`]. `Link` is `Get<Self>` or `Mut<Self>`. `Chain` is [`Stop`] or [`More`] of the outer proxy. May `#[provide]` / `#[inject]` like a module surface. |
+| `#[config(type = proxy)]` | This type **is** a proxy. Emits [`BeanInfo`]. `Link` is `Get<Self>` or `Mut<Self>`. `Chain` is [`Stop`] or a tuple of the outer proxies, nearest first. May `#[provide]` / `#[inject]` like a module surface. |
 | `proxy = Update::T` on the target | Target bean/event is **proxied by** `Update`. Marker strength follows `T` / `MUT` and is written as that proxy's `Link`. |
 | [`BeanInfo::Link`] | `Get<Self>` or `Mut<Self>` on the proxy. A plain bean still fills `Get<Self>`; the walk reads the proxy's link. |
-| [`BeanInfo::Chain`] | [`Stop`] when nothing wraps this proxy. [`More`] of the outer proxy otherwise. The bean's `Proxy` already names the wrapper, so there is no inverse `Targets` type. |
+| [`BeanInfo::Chain`] | [`Stop`] when nothing wraps this proxy. A tuple of the outer proxies, nearest first, otherwise (`(Mid, Outer)`). The bean's `Proxy` already names the direct wrapper, so there is no inverse `Targets` type. [`LevelDesc::Rows`] is that direct proxy plus the tuple, as one `List<Leaf<...>>`. |
 | [`Proxy`]<`B`> | The proxy a bean or event uses when it has no `proxy = ...`. `Link = Get<Proxy<B>>`, `Chain = Stop`, no provides, no parent events. |
 | [`BeanInfo::Proxy`] | The wrapping proxy. `Proxy<Self>` when none is named. A named proxy is that type (`Update`, `Gate`). |
 | [`Proxied`] | Blanket for every [`BeanInfo`]. `Link` is [`BeanInfo::Link`] of `BeanInfo::Proxy`: `Get<Proxy<Self>>`, or the named proxy's `Get` / `Mut`. |
@@ -536,7 +536,7 @@ struct GameTick; // event (or other bean) wrapped by Update
 5. **Default proxy** — a bean or event with no `proxy = ...` uses [`Proxy`]. `BeanInfo::Proxy` is `Proxy<Self>`, and [`Proxied::Link`] is `Get` of that type. A named proxy sets `BeanInfo::Proxy` to it, and the link is that proxy's `Get` or `Mut`. Injection, init, and scheduling go through it the same way. The default proxy adds no provides and no parent events.
 6. **Init goes through the proxy** — the init stage ([`Init`] / [`InitStateStep`] / `init_state` / `init_state_default`) of a proxied bean runs through its whole proxy chain, outer then inner. The stored handler is `Fwd<Outer, Fwd<Inner, H>>`. The direct proxy produces default state. [`Update`] stays on [`Built`] only (rule 17).
 7. **Proxy events apply to the target** — [`EventInfo`], `Parents`, and emit/schedule wiring on any proxy in the chain also cover the proxied bean (an explicit proxy or [`Proxy`]). This does **not** write those parents into the target's [`EventInfo::Parents`].
-8. **Proxies are multi-level** — a proxy may itself declare `proxy = ...`. The chain is a finite list of wrappers, outer around inner, in the style of layered advice. Injecting any proxy in the chain alone is still a **compile error** (proxy types are not injectable beans). An explicit outermost proxy that names no further proxy ends the chain with `Chain = Stop`. [`Proxy`] is not added outside that chain.
+8. **Proxies are multi-level** — a proxy may itself declare `proxy = ...`. The levels are one linear tuple on `Chain`, nearest outer first, in the style of layered advice. Injecting any proxy in the chain alone is still a **compile error** (proxy types are not injectable beans). An explicit outermost proxy that names no further proxy ends the chain with `Chain = Stop`. [`Proxy`] is not added outside that chain.
 
 ```rust
 // Forbidden — inject proxy by itself

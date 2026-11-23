@@ -2,7 +2,7 @@
 
 use core::any::TypeId;
 
-use crate::bean::{BeanInfo, Marked, More, ParentList, Proxied, Stop};
+use crate::bean::{BeanInfo, Marked, ParentList, Proxied, Stop};
 use crate::descriptor::{Get, Mut};
 use crate::filter::{And, Not, On, Or};
 
@@ -149,13 +149,51 @@ where
     }
 }
 
-impl<P, O> ChainEmit<More<O>> for P
+impl<P, O0> ChainEmit<(O0,)> for P
 where
     P: ParentList + 'static,
-    O: BeanInfo + ChainEmit<O::Chain>,
+    O0: ParentList + 'static,
 {
     fn hit(emitted: &[TypeId]) -> bool {
-        listed(emitted, TypeId::of::<P>()) || P::listed(emitted) || O::hit(emitted)
+        listed(emitted, TypeId::of::<P>())
+            || P::listed(emitted)
+            || listed(emitted, TypeId::of::<O0>())
+            || O0::listed(emitted)
+    }
+}
+
+impl<P, O0, O1> ChainEmit<(O0, O1)> for P
+where
+    P: ParentList + 'static,
+    O0: ParentList + 'static,
+    O1: ParentList + 'static,
+{
+    fn hit(emitted: &[TypeId]) -> bool {
+        listed(emitted, TypeId::of::<P>())
+            || P::listed(emitted)
+            || listed(emitted, TypeId::of::<O0>())
+            || O0::listed(emitted)
+            || listed(emitted, TypeId::of::<O1>())
+            || O1::listed(emitted)
+    }
+}
+
+impl<P, O0, O1, O2> ChainEmit<(O0, O1, O2)> for P
+where
+    P: ParentList + 'static,
+    O0: ParentList + 'static,
+    O1: ParentList + 'static,
+    O2: ParentList + 'static,
+{
+    fn hit(emitted: &[TypeId]) -> bool {
+        listed(emitted, TypeId::of::<P>())
+            || P::listed(emitted)
+            || listed(emitted, TypeId::of::<O0>())
+            || O0::listed(emitted)
+            || listed(emitted, TypeId::of::<O1>())
+            || O1::listed(emitted)
+            || listed(emitted, TypeId::of::<O2>())
+            || O2::listed(emitted)
     }
 }
 

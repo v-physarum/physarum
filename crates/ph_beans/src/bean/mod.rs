@@ -9,6 +9,7 @@
 //! [`Query`](crate::query::Query) stay on separate traits.
 
 mod inject;
+mod levels;
 mod proxy;
 
 pub use inject::{
@@ -16,7 +17,7 @@ pub use inject::{
 };
 pub use proxy::Marked;
 pub use proxy::{
-    ApplyProxy, FreeKey, Fwd, InitPath, More, ParentList, Proxied, Proxy, Stop, Target, Via,
+    ApplyProxy, FreeKey, Fwd, InitPath, ParentList, Proxied, Proxy, Stop, Target, Via,
 };
 pub use proxy::{DriveInit, Enfold, EnterAll, ForwardInit, WrapFwd};
 
@@ -41,7 +42,7 @@ pub trait BeanInfo: Sized {
     type Proxy: BeanInfo;
     /// `Get<Self>` or `Mut<Self>` when `Self` wraps another bean.
     type Link: Marked<Target = Self>;
-    /// [`Stop`](crate::Stop) when nothing wraps `Self`. [`More`](crate::More) of the outer proxy otherwise.
+    /// [`Stop`](crate::Stop) when nothing wraps `Self`. A tuple of outer proxies, nearest first, otherwise.
     type Chain;
 }
 

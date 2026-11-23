@@ -1,15 +1,17 @@
 //! A bean listed on the module and on a proxy.
 //!
 //! [`Beans`](crate::BeanInfo::Beans) is the module list. Each proxy's
-//! [`Provides`](crate::BeanInfo::Provides) is that proxy's list. `.inject_resources`
-//! reads [`DistinctBeans::OK`]. The same id on both sides fails const-eval:
-//! `bean is already on the proxy`.
+//! [`Provides`](crate::BeanInfo::Provides) is that proxy's list. [`LevelDesc`]
+//! is that chain as one leaf. `.inject_resources` reads [`LevelDesc::OK`].
+//! The same id on both sides fails const-eval: `bean is already on the proxy`.
 //!
 //! Empty on either side skips the id check, so a provide that lives only on
 //! the proxy still resolves. Two [`At`](crate::At) impls with no repeated list
 //! entry stay ambiguous; this gate is the repeated entry.
 
-use crate::bean::{BeanInfo, More, Stop};
+use crate::bean::{BeanInfo, Stop};
+use crate::descriptor::{LevelDesc, Valid};
+use crate::query::args::Host;
 
 /// Id of one bean type.
 ///
@@ -141,33 +143,52 @@ impl<Beans> ChainClear<Beans> for Stop {
     const OK: u8 = CLEAR;
 }
 
-impl<Beans, O> ChainClear<Beans> for More<O>
+impl<Beans, O0> ChainClear<Beans> for (O0,)
 where
-    O: BeanInfo,
-    Beans: Cross<O::Provides>,
-    O::Chain: ChainClear<Beans>,
+    O0: BeanInfo,
+    Beans: Cross<O0::Provides>,
+{
+    const OK: u8 = <Beans as Cross<O0::Provides>>::OK;
+}
+
+impl<Beans, O0, O1> ChainClear<Beans> for (O0, O1)
+where
+    O0: BeanInfo,
+    O1: BeanInfo,
+    Beans: Cross<O0::Provides> + Cross<O1::Provides>,
 {
     const OK: u8 = {
-        let _ = <Beans as Cross<O::Provides>>::OK;
-        let _ = <O::Chain as ChainClear<Beans>>::OK;
+        let _ = <Beans as Cross<O0::Provides>>::OK;
+        let _ = <Beans as Cross<O1::Provides>>::OK;
         CLEAR
     };
 }
 
-/// Module [`Beans`](crate::BeanInfo::Beans) share no id with the proxy chain.
-#[doc(hidden)]
-pub trait DistinctBeans {
-    /// `1` when the lists are disjoint. Panics when a bean is on both.
-    const OK: u8;
+impl<Beans, O0, O1, O2> ChainClear<Beans> for (O0, O1, O2)
+where
+    O0: BeanInfo,
+    O1: BeanInfo,
+    O2: BeanInfo,
+    Beans: Cross<O0::Provides> + Cross<O1::Provides> + Cross<O2::Provides>,
+{
+    const OK: u8 = {
+        let _ = <Beans as Cross<O0::Provides>>::OK;
+        let _ = <Beans as Cross<O1::Provides>>::OK;
+        let _ = <Beans as Cross<O2::Provides>>::OK;
+        CLEAR
+    };
 }
 
-impl<B> DistinctBeans for B
+impl<B, U> LevelDesc for B
 where
-    B: BeanInfo,
+    B: BeanInfo + Host<Proxies = U>,
     B::Proxy: BeanInfo,
     B::Beans: Cross<<B::Proxy as BeanInfo>::Provides>,
     <B::Proxy as BeanInfo>::Chain: ChainClear<B::Beans>,
 {
+    type Rows = U;
+    type Status = Valid;
+
     const OK: u8 = {
         let _ = <B::Beans as Cross<<B::Proxy as BeanInfo>::Provides>>::OK;
         let _ = <<B::Proxy as BeanInfo>::Chain as ChainClear<B::Beans>>::OK;

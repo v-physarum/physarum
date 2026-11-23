@@ -1,6 +1,6 @@
 //! Spine, wait, and parent checks over the filter AST.
 
-use crate::bean::{BeanInfo, EventInfo, Marked, More, Proxied, Via};
+use crate::bean::{BeanInfo, EventInfo, Marked, Proxied, Via};
 use crate::descriptor::{Get, Mut};
 use crate::filter::{And, Not, On, Or};
 
@@ -220,17 +220,25 @@ where
 #[doc(hidden)]
 pub trait ChainParents<P, K> {}
 
-impl<X, O, P> ChainParents<P, crate::Own> for X
-where
-    X: BeanInfo<Chain = More<O>>,
-    O: EventInfo<Parents = P>,
+trait TailParents<P, K> {}
+
+impl<O0, P> TailParents<P, crate::Own> for (O0,) where O0: EventInfo<Parents = P> {}
+
+impl<O0, O1, P> TailParents<P, crate::Own> for (O0, O1) where O0: EventInfo<Parents = P> {}
+
+impl<O0, O1, P, K> TailParents<P, (crate::FromProxy, K)> for (O0, O1) where (O1,): TailParents<P, K> {}
+
+impl<O0, O1, O2, P> TailParents<P, crate::Own> for (O0, O1, O2) where O0: EventInfo<Parents = P> {}
+
+impl<O0, O1, O2, P, K> TailParents<P, (crate::FromProxy, K)> for (O0, O1, O2) where
+    (O1, O2): TailParents<P, K>
 {
 }
 
-impl<X, O, P, K> ChainParents<P, (crate::FromProxy, K)> for X
+impl<X, L, P, K> ChainParents<P, K> for X
 where
-    X: BeanInfo<Chain = More<O>>,
-    O: ChainParents<P, K>,
+    X: BeanInfo<Chain = L>,
+    L: TailParents<P, K>,
 {
 }
 

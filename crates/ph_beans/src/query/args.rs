@@ -2,7 +2,7 @@
 
 use core::marker::PhantomData;
 
-use crate::bean::{ApplyProxy, BeanInfo, Marked, More, Proxied, Stop, Target, Via};
+use crate::bean::{ApplyProxy, BeanInfo, Marked, Proxied, Stop, Target, Via};
 use crate::borrow::{At, Ix0, Ix1, Ix2, Ix3};
 use crate::context::{Leaf, List};
 use crate::descriptor::live::{Idle, Live};
@@ -48,9 +48,9 @@ impl<B, S, L, A, C> Listed<S, (Ix3, L, A, C)> for B where B: BeanInfo<Provides =
 /// `W` is that inner's path. Callers do not name it.
 pub struct Surface<P, M, W>(PhantomData<(P, M, W)>);
 
-/// This proxy's [`Chain`](crate::BeanInfo::Chain), as a [`List`].
+/// This proxy plus the outer tuple on [`Chain`](crate::BeanInfo::Chain), as one leaf.
 trait ProxyRows<L> {
-    /// Nested groups, direct proxy first.
+    /// Direct proxy first, then each outer.
     type Rows;
 }
 
@@ -58,15 +58,20 @@ impl<P> ProxyRows<Stop> for P {
     type Rows = List<Leaf<(P,)>>;
 }
 
-impl<P, O, U> ProxyRows<More<O>> for P
-where
-    O: BeanInfo + ProxyRows<O::Chain, Rows = U>,
-{
-    type Rows = List<(List<Leaf<(P,)>>, U)>;
+impl<P, O0> ProxyRows<(O0,)> for P {
+    type Rows = List<Leaf<(P, O0)>>;
+}
+
+impl<P, O0, O1> ProxyRows<(O0, O1)> for P {
+    type Rows = List<Leaf<(P, O0, O1)>>;
+}
+
+impl<P, O0, O1, O2> ProxyRows<(O0, O1, O2)> for P {
+    type Rows = List<Leaf<(P, O0, O1, O2)>>;
 }
 
 /// Pipeline bean: its proxy chain and itself as the module list.
-trait Host: BeanInfo {
+pub(crate) trait Host: BeanInfo {
     /// Proxies from the direct one out to the end of [`Chain`](crate::BeanInfo::Chain).
     type Proxies;
     /// The pipeline bean. A longer module list uses the same [`List`] shape.
@@ -119,25 +124,67 @@ where
     type Ix = <E as At<S>>::Ix;
 }
 
-impl<S, E, R, G> Find<S, (Hit, G), InProvides> for List<(List<Leaf<(E,)>>, R)>
+impl<S, E0, E1, G> Find<S, (Hit, G), InProvides> for List<Leaf<(E0, E1)>>
 where
-    E: At<S> + Listed<S, G>,
+    E0: At<S> + Listed<S, G>,
 {
-    type Ix = <E as At<S>>::Ix;
+    type Ix = <E0 as At<S>>::Ix;
 }
 
-impl<S, E, R> Find<S, Hit, InAt> for List<(List<Leaf<(E,)>>, R)>
+impl<S, E0, E1> Find<S, Hit, InAt> for List<Leaf<(E0, E1)>>
 where
-    E: At<S>,
+    E0: At<S>,
 {
-    type Ix = <E as At<S>>::Ix;
+    type Ix = <E0 as At<S>>::Ix;
 }
 
-impl<S, E, R, D, K> Find<S, Skip<K>, D> for List<(List<Leaf<(E,)>>, R)>
+impl<S, E0, E1, D, K> Find<S, Skip<K>, D> for List<Leaf<(E0, E1)>>
 where
-    R: Find<S, K, D>,
+    List<Leaf<(E1,)>>: Find<S, K, D>,
 {
-    type Ix = <R as Find<S, K, D>>::Ix;
+    type Ix = <List<Leaf<(E1,)>> as Find<S, K, D>>::Ix;
+}
+
+impl<S, E0, E1, E2, G> Find<S, (Hit, G), InProvides> for List<Leaf<(E0, E1, E2)>>
+where
+    E0: At<S> + Listed<S, G>,
+{
+    type Ix = <E0 as At<S>>::Ix;
+}
+
+impl<S, E0, E1, E2> Find<S, Hit, InAt> for List<Leaf<(E0, E1, E2)>>
+where
+    E0: At<S>,
+{
+    type Ix = <E0 as At<S>>::Ix;
+}
+
+impl<S, E0, E1, E2, D, K> Find<S, Skip<K>, D> for List<Leaf<(E0, E1, E2)>>
+where
+    List<Leaf<(E1, E2)>>: Find<S, K, D>,
+{
+    type Ix = <List<Leaf<(E1, E2)>> as Find<S, K, D>>::Ix;
+}
+
+impl<S, E0, E1, E2, E3, G> Find<S, (Hit, G), InProvides> for List<Leaf<(E0, E1, E2, E3)>>
+where
+    E0: At<S> + Listed<S, G>,
+{
+    type Ix = <E0 as At<S>>::Ix;
+}
+
+impl<S, E0, E1, E2, E3> Find<S, Hit, InAt> for List<Leaf<(E0, E1, E2, E3)>>
+where
+    E0: At<S>,
+{
+    type Ix = <E0 as At<S>>::Ix;
+}
+
+impl<S, E0, E1, E2, E3, D, K> Find<S, Skip<K>, D> for List<Leaf<(E0, E1, E2, E3)>>
+where
+    List<Leaf<(E1, E2, E3)>>: Find<S, K, D>,
+{
+    type Ix = <List<Leaf<(E1, E2, E3)>> as Find<S, K, D>>::Ix;
 }
 
 /// `W` is `(OnProxy, _)` or `(OnModule, _)`.
