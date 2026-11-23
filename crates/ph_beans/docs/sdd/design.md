@@ -206,10 +206,10 @@ Layout of `crates/ph_beans/src/`. Keep the surface readable: **small files**, **
 
    ```rust
    // Forbidden
-   FreshInit::install_default(self.tick, <B as BeanInfo>::State::default())
+   self.tick.install_config(DefaultInit { state: <B as BeanInfo>::State::default() })
 
-   // Required
-   FreshInit::install_default(self.tick, Default::default())
+   // Required — one `FreshInit::Config` GAT; the slot wrapper lives in the config
+   self.tick.install_config(DefaultInit { state: Default::default() })
    ```
 
    **Target shape** for ordinary bounds (like root `Args` + `TakeMany` / `At`):

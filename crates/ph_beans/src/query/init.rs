@@ -11,6 +11,8 @@ use crate::context::Context;
 use crate::context::Ctx;
 use crate::context::CtxConfig;
 use crate::context::FreshInit;
+use crate::context::WithDefault;
+use crate::context::WithInit;
 use crate::descriptor::Descriptor;
 use crate::descriptor::NeedBuild;
 use crate::descriptor::OpOk;
@@ -67,10 +69,28 @@ where
     B: Proxied,
     B::Proxy: ProxyInfo + ForwardInit<B, H, <B::Proxy as ProxyInfo>::Chain>,
 {
-    type Out = <B::Proxy as ForwardInit<B, H, <B::Proxy as ProxyInfo>::Chain>>::Out;
+    type Out = WithInit<<B::Proxy as ForwardInit<B, H, <B::Proxy as ProxyInfo>::Chain>>::Out>;
 
     fn install(self) -> Self::Out {
-        <B::Proxy as ForwardInit<B, H, <B::Proxy as ProxyInfo>::Chain>>::forward(self.handler)
+        WithInit::new(<B::Proxy as ForwardInit<
+            B,
+            H,
+            <B::Proxy as ProxyInfo>::Chain,
+        >>::forward(self.handler))
+    }
+}
+
+/// Default state placed in the init slot.
+#[doc(hidden)]
+pub struct DefaultInit<S> {
+    state: S,
+}
+
+impl<S> Configuration for DefaultInit<S> {
+    type Out = WithDefault<S>;
+
+    fn install(self) -> Self::Out {
+        WithDefault { state: self.state }
     }
 }
 
@@ -124,11 +144,11 @@ where
     B::Proxy: DriveInit<B>,
     B::State: Default,
 {
-    type Out = Ctx<B, A, NeedBuild, T::WithDefault<B::State>>;
+    type Out = Ctx<B, A, NeedBuild, T::Config<DefaultInit<B::State>>>;
 
     fn seal_default(self) -> Self::Out {
         let state = <B::Proxy as DriveInit<B>>::drive();
-        Ctx::new(FreshInit::install_default(self.tick, state))
+        Ctx::new(self.tick.install_config(DefaultInit { state }))
     }
 }
 
