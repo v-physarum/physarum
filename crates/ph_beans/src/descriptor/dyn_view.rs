@@ -28,10 +28,7 @@ impl<C, V: ?Sized> Dyn<C, V> {
     /// Type-level marker (not an inject call-site API).
     #[must_use]
     pub const fn new() -> Self {
-        Self {
-            _claim: PhantomData,
-            _view: PhantomData,
-        }
+        Self { _claim: PhantomData, _view: PhantomData }
     }
 }
 
