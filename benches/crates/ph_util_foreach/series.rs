@@ -1,8 +1,10 @@
-//! Scale series for `ph_util_foreach`: debug and release build time versus `N`.
+//! Scale series for `ph_util_foreach`: debug, release, and incremental
+//! build time versus `N`.
 //!
 //! Each series renders one source per scale, times `cargo build` with
 //! hyperfine, and checks the log-log exponent. `hand_structs` and
-//! `flat_structs` claim linear growth.
+//! `flat_structs` claim linear growth. The incremental series rebuilds
+//! an edited `hand_structs` source.
 
 use std::process::ExitCode;
 
@@ -36,8 +38,24 @@ fn run() -> Result<()> {
         .check()?;
     flat(Group::Debug, [64, 1024, 8192]).check()?;
     flat(Group::Release, [1024, 8192]).check()?;
+    Series::new("incremental_touch")
+        .group(Group::Incremental)
+        .scales([8, 32])
+        .expect(Growth::Linear)
+        .render(hand_structs)
+        .edit(append_marker)
+        .check()?;
     Ok(())
 }
+
+fn append_marker(source: &str) -> String {
+    let mut edited = String::with_capacity(source.len() + MARKER.len());
+    edited.push_str(source);
+    edited.push_str(MARKER);
+    edited
+}
+
+const MARKER: &str = "pub fn marker() {}\n";
 
 fn flat<const LEN: usize>(group: Group, scales: [u32; LEN]) -> Series {
     Series::new("flat_structs")

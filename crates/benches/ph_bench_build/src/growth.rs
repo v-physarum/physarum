@@ -59,7 +59,10 @@ pub const MIN_SCALE: u32 = 1;
 pub enum Group {
     /// Full debug build. The package is cleaned before each run.
     Debug,
-    /// Incremental debug build. The package is not cleaned first.
+    /// Incremental debug rebuild of an edited source.
+    ///
+    /// The rendered source is built first. Each run restores that source,
+    /// rebuilds it, then times the rebuild of the source from [`Series::edit`].
     Incremental,
     /// Full release build. The package is cleaned before each run.
     Release,
@@ -376,6 +379,7 @@ pub struct Series {
     ceiling: Option<PassCeiling>,
     solver: Solver,
     sources: Vec<String>,
+    edits: Vec<String>,
     rendered: bool,
 }
 
@@ -390,6 +394,7 @@ impl Series {
             ceiling: None,
             solver: Solver::Default,
             sources: Vec::new(),
+            edits: Vec::new(),
             rendered: false,
         }
     }
@@ -407,6 +412,7 @@ impl Series {
         self.scales.clear();
         self.scales.extend(scales.into_iter().map(Scale::new));
         self.sources.clear();
+        self.edits.clear();
         self.rendered = false;
         self
     }
@@ -441,14 +447,36 @@ impl Series {
     ///
     /// The source is stored on the series. [`Self::check`] writes it to the
     /// downstream crate. Call [`Self::group`], [`Self::scales`], and either
-    /// [`Self::expect`] or [`Self::ceiling`] before [`Self::check`].
+    /// [`Self::expect`] or [`Self::ceiling`] before [`Self::check`]. An
+    /// incremental series also calls [`Self::edit`] after [`Self::render`].
     pub fn render(mut self, mut generate: impl FnMut(Scale) -> String) -> Self {
         self.sources.clear();
+        self.edits.clear();
         self.sources.reserve(self.scales.len());
         for scale in &self.scales {
             self.sources.push(generate(*scale));
         }
         self.rendered = true;
+        self
+    }
+
+    /// Edited source timed by an incremental rebuild.
+    ///
+    /// Call this after [`Self::render`]. `change` receives each rendered
+    /// source and returns the file the incremental build compiles. [`Group::Incremental`]
+    /// builds the rendered source, restores it before every run, and times
+    /// `cargo build` of the edited source. Debug and release builds ignore the
+    /// edit and compile the rendered source from a clean package.
+    ///
+    /// [`Self::check`] rejects an incremental series whose edit is missing,
+    /// empty, or identical to the rendered source. An unchanged file would
+    /// time a no-op rebuild.
+    pub fn edit(mut self, mut change: impl FnMut(&str) -> String) -> Self {
+        self.edits.clear();
+        self.edits.reserve(self.sources.len());
+        for source in &self.sources {
+            self.edits.push(change(source));
+        }
         self
     }
 
@@ -505,6 +533,7 @@ impl Series {
             group,
             scales: &self.scales,
             sources: &self.sources,
+            edits: &self.edits,
             home: &home,
         })?;
         let fit = self.check_seconds(&seconds)?;
@@ -535,6 +564,7 @@ impl Series {
             group,
             scales: &self.scales,
             sources: &self.sources,
+            edits: &self.edits,
             home: &home,
             pass: ceiling.pass.name(),
             rustc_args: self.solver.rustc_args(),
@@ -630,8 +660,37 @@ impl Series {
                 .into());
             }
         }
-        self.group
-            .ok_or_else(|| Error::from(ErrorKind::SeriesGroup { series: self.name.clone() }))
+        let group = self
+            .group
+            .ok_or_else(|| Error::from(ErrorKind::SeriesGroup { series: self.name.clone() }))?;
+        if group == Group::Incremental {
+            self.ensure_edits()?;
+        }
+        Ok(group)
+    }
+
+    fn ensure_edits(&self) -> Result<()> {
+        if self.edits.len() != self.scales.len() {
+            return Err(ErrorKind::SeriesEdit { series: self.name.clone() }.into());
+        }
+        for (scale, (source, edit)) in self.scales.iter().zip(self.sources.iter().zip(&self.edits))
+        {
+            if edit.is_empty() {
+                return Err(ErrorKind::SeriesEditEmpty {
+                    series: self.name.clone(),
+                    scale: scale.count(),
+                }
+                .into());
+            }
+            if edit == source {
+                return Err(ErrorKind::SeriesEditSame {
+                    series: self.name.clone(),
+                    scale: scale.count(),
+                }
+                .into());
+            }
+        }
+        Ok(())
     }
 
     fn ensure_growth(&self) -> Result<(Group, Growth)> {
