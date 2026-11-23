@@ -8,6 +8,8 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use ph_beans::{At, BeanInfo, DynView, Ix0, Marker, Query};
+use ph_derive::Module as DeriveModule;
+use ph_derive::config;
 use ph_test_asm::AsmTester;
 
 struct Draw(u8);
@@ -110,4 +112,31 @@ fn write_probe(name: &str, source: &str) -> PathBuf {
     let path = dir.join(name);
     fs::write(&path, source).expect("probe");
     path
+}
+
+#[config(type = r#dyn)]
+trait Label {
+    fn tag(&self) -> u8;
+}
+
+#[derive(DeriveModule)]
+struct Spot(u8);
+
+impl Label for Spot {
+    fn tag(&self) -> u8 {
+        self.0
+    }
+}
+
+#[derive(DeriveModule)]
+#[inject(Spot::T as Label)]
+struct Hud;
+
+#[test]
+fn a_derived_cast_keeps_the_concrete_bean() {
+    fn lists<B: BeanInfo<Provides = (), Injects = (Spot,), Beans = (Spot,)>>() {}
+    fn slot<B: At<Spot, Ix = Ix0>>() {}
+    lists::<Hud>();
+    slot::<Hud>();
+    assert_eq!(Spot(3).tag(), 3);
 }
