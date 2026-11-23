@@ -16,9 +16,9 @@ pub mod filter;
 pub mod query;
 
 pub use bean::{
-    ApplyProxy, BeanInfo, EventInfo, FreeKey, FromParent, Fwd, InitPath, Marked, Module, OfInject,
-    OfInject0, OfInject1, OfParent, OfProvide, OfProvide0, OfProvide1, ParentList, Proxied, Proxy,
-    Stop, Target, Via,
+    ApplyProxy, BeanInfo, Corresponds, EventInfo, FreeKey, FromParent, Fwd, InitPath, Marked,
+    Module, OfInject, OfInject0, OfInject1, OfParent, OfProvide, OfProvide0, OfProvide1,
+    ParentList, Proxied, Proxy, Stop, Target,
 };
 pub use borrow::{At, Ix0, Ix1, Ix2, Ix3, Off, Take, TakeMany};
 pub use context::{
@@ -55,8 +55,8 @@ mod tests {
         use ph_test_errors::ErrorTester;
 
         use ph_beans::{
-            At, BeanInfo, Ctx, EventInfo, Fwd, Get, Init, InitPath, Ix0, Ix1, Leaf, LevelDesc,
-            List, Live, Marker, Mut, Pipe, Proxied, Proxy, Query, Stop, Target, Tick, Via,
+            At, BeanInfo, Corresponds, Ctx, EventInfo, Fwd, Get, Init, InitPath, Ix0, Ix1, Leaf,
+            LevelDesc, List, Live, Marker, Mut, Pipe, Proxied, Proxy, Query, Stop, Target, Tick,
             WithInit,
         };
         use ph_util_foreach::impl_foreach;
@@ -336,13 +336,14 @@ mod tests {
         impl<T> Same<T> for T {}
 
         trait Through<P> {}
-        impl<H, P, L> Through<P> for Pipe<WithInit<Fwd<P, H>>, L> {}
+        impl<H, P, L> Through<P> for Pipe<WithInit<Fwd<List<Leaf<(P,)>>, H>>, L> {}
 
-        type DefaultWrap<S, T> = Init<(), Ctx<Shell, Live<Via<Proxy<Id>, Get<Id>>>, S, T>>;
-        type UpdateWrap<S, T> = Init<(), Ctx<Shell, Live<Via<Update, Get<GameTick>>>, S, T>>;
-        type ChainClaim = Via<Outer, Via<Mid, Via<Inner, Get<Core>>>>;
+        type DefaultWrap<S, T> = Init<(), Ctx<Shell, Live<List<Leaf<(Proxy<Id>, Get<Id>)>>>, S, T>>;
+        type UpdateWrap<S, T> =
+            Init<(), Ctx<Shell, Live<List<Leaf<(Update, Get<GameTick>)>>>, S, T>>;
+        type ChainClaim = List<Leaf<(Inner, Mid, Outer, Get<Core>)>>;
         type ChainWrap<S, T> = Init<(), Ctx<Room, Live<ChainClaim>, S, T>>;
-        type ChainFwd<H> = Fwd<Outer, Fwd<Mid, Fwd<Inner, H>>>;
+        type ChainFwd<H> = Fwd<List<Leaf<(Inner, Mid, Outer)>>, H>;
 
         fn assert_default<S, T>(_: &DefaultWrap<S, T>) {}
 
@@ -409,6 +410,46 @@ mod tests {
         fn proxy_levels_are_one_leaf() {
             fn rows<B: LevelDesc<Rows = List<Leaf<(Inner, Mid, Outer)>>>>() {}
             rows::<Core>();
+        }
+
+        #[test]
+        fn a_config_route_matches_the_proxy_levels() {
+            fn check<B: Corresponds<R>, R>(_: R) {}
+            check::<GameTick, _>(Update::T);
+            check::<Core, _>(Inner::T << Mid::T << Outer::T);
+        }
+
+        #[test]
+        fn a_config_route_must_match_the_proxy_levels() {
+            fail(
+                "
+                use ph_beans::{BeanInfo, Corresponds, Get, Marker, Proxy, Stop};
+                struct Score;
+                struct Update;
+                struct GameTick;
+                impl BeanInfo for Score {
+                    type Provides = (); type Injects = (); type Beans = (); type State = ();
+                    type Proxy = Proxy<Score>;
+                    type Link = Get<Score>;
+                    type Chain = Stop;
+                }
+                impl BeanInfo for Update {
+                    type Provides = (); type Injects = (); type Beans = (); type State = ();
+                    type Proxy = Proxy<Update>;
+                    type Link = Get<Update>;
+                    type Chain = Stop;
+                }
+                impl BeanInfo for GameTick {
+                    type Provides = (); type Injects = (); type Beans = (); type State = ();
+                    type Proxy = Update;
+                    type Link = Get<GameTick>;
+                    type Chain = Stop;
+                }
+                fn check<B: Corresponds<R>, R>(_: R) {}
+                fn call() { check::<GameTick, _>(Score::T << Update::T); }
+                ",
+                "is not a config route",
+            );
         }
 
         #[test]

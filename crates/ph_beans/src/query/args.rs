@@ -2,9 +2,10 @@
 
 use core::marker::PhantomData;
 
-use crate::bean::{ApplyProxy, BeanInfo, Marked, Proxied, Stop, Target, Via};
+use crate::bean::{ApplyProxy, BeanInfo, Marked, Proxied, Stop, Target};
 use crate::borrow::{At, Ix0, Ix1, Ix2, Ix3};
 use crate::context::{Leaf, List};
+use crate::descriptor::LevelDesc;
 use crate::descriptor::live::{Idle, Live};
 use crate::descriptor::{Dyn, DynView, Get, Mut};
 use crate::filter::And;
@@ -281,22 +282,34 @@ where
     type Indexes = (A::Indexes, C::Indexes);
 }
 
-/// Body of `Via<P, _>`: a marker whose proxy is `P`, or a nested `Via`.
-trait UnderProxy<P> {}
-
-impl<P, C> UnderProxy<P> for C
+impl<B, P, C> Claim<B> for List<Leaf<(P, C)>>
 where
     C: Marked,
-    C::Target: Target + Proxied<Link: Marked<Target = P>>,
-    P: BeanInfo,
+    C::Target: LevelDesc<Rows = List<Leaf<(P,)>>>,
 {
+    type Indexes = ();
 }
 
-impl<P, Q, C> UnderProxy<P> for Via<Q, C> where C: UnderProxy<Q> {}
-
-impl<B, P, C> Claim<B> for Via<P, C>
+impl<B, P, O, C> Claim<B> for List<Leaf<(P, O, C)>>
 where
-    C: UnderProxy<P>,
+    C: Marked,
+    C::Target: LevelDesc<Rows = List<Leaf<(P, O)>>>,
+{
+    type Indexes = ();
+}
+
+impl<B, P, O0, O1, C> Claim<B> for List<Leaf<(P, O0, O1, C)>>
+where
+    C: Marked,
+    C::Target: LevelDesc<Rows = List<Leaf<(P, O0, O1)>>>,
+{
+    type Indexes = ();
+}
+
+impl<B, P, O0, O1, O2, C> Claim<B> for List<Leaf<(P, O0, O1, O2, C)>>
+where
+    C: Marked,
+    C::Target: LevelDesc<Rows = List<Leaf<(P, O0, O1, O2)>>>,
 {
     type Indexes = ();
 }
@@ -376,7 +389,37 @@ impl<T> ArgsView for Mut<T> {
         Self: 'a;
 }
 
-impl<P, C> ArgsView for Via<P, C>
+impl<P, C> ArgsView for List<Leaf<(P, C)>>
+where
+    C: ArgsView,
+{
+    type View<'a>
+        = C::View<'a>
+    where
+        Self: 'a;
+}
+
+impl<P, O, C> ArgsView for List<Leaf<(P, O, C)>>
+where
+    C: ArgsView,
+{
+    type View<'a>
+        = C::View<'a>
+    where
+        Self: 'a;
+}
+
+impl<P, O0, O1, C> ArgsView for List<Leaf<(P, O0, O1, C)>>
+where
+    C: ArgsView,
+{
+    type View<'a>
+        = C::View<'a>
+    where
+        Self: 'a;
+}
+
+impl<P, O0, O1, O2, C> ArgsView for List<Leaf<(P, O0, O1, O2, C)>>
 where
     C: ArgsView,
 {

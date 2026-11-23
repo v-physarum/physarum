@@ -1,4 +1,4 @@
-//! Target inject and init go through a proxy chain (`Via`, outer around inner).
+//! Target inject and init go through a linear list of proxy levels.
 //!
 //! Manual impls. Derive later. `Get`, `Mut`, and `Marker` stay unchanged.
 //! Examples live in the crate tests: `an_unset_proxy_uses_the_default`,
@@ -89,10 +89,7 @@ impl<B: crate::BeanInfo> crate::EventInfo for Proxy<B> {
     type Parents = ();
 }
 
-/// Claim `C` wrapped by proxy `P`. A chain is `Via<Outer, Via<Inner, Get<T>>>`.
-pub struct Via<P, C>(PhantomData<(P, C)>);
-
-/// Init handler `H` through proxy `P`. A chain is `Fwd<Outer, Fwd<Inner, H>>`.
+/// Init handler `H` through a linear list of proxy levels.
 pub struct Fwd<P, H> {
     handler: H,
     _markers: PhantomData<P>,
@@ -109,6 +106,12 @@ impl<P, H> Fwd<P, H> {
     #[must_use]
     pub const fn handler(&self) -> &H {
         &self.handler
+    }
+
+    /// Drops the level list and returns the stored function.
+    #[must_use]
+    pub fn into_handler(self) -> H {
+        self.handler
     }
 }
 
@@ -132,9 +135,9 @@ pub trait InitPath<B: crate::BeanInfo>: crate::BeanInfo {
 
 impl<B: crate::BeanInfo> InitPath<B> for Proxy<B> {}
 
-/// Projects a call-site claim onto its proxy wrapper.
+/// Projects a call-site claim onto its proxy levels.
 pub trait ApplyProxy {
-    /// [`Via`] around the target, nested through the chain.
+    /// One leaf: the proxy levels, then the claim.
     type Wrapped;
 }
 
@@ -146,7 +149,7 @@ pub trait Enfold<C, Link> {
 }
 
 impl<P, C> Enfold<C, Stop> for P {
-    type Wrapped = Via<P, C>;
+    type Wrapped = crate::context::List<crate::context::Leaf<(P, C)>>;
 }
 
 impl<C, P> ApplyProxy for C
@@ -181,10 +184,10 @@ where
     B: crate::BeanInfo,
     P: InitPath<B>,
 {
-    type Out = Fwd<P, H>;
+    type Out = Fwd<crate::context::List<crate::context::Leaf<(P,)>>, H>;
 
     fn forward(handler: H) -> Self::Out {
-        <P as InitPath<B>>::install(handler)
+        Fwd::new(<P as InitPath<B>>::install(handler).into_handler())
     }
 }
 

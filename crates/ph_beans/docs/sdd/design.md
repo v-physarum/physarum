@@ -530,13 +530,13 @@ struct GameTick; // event (or other bean) wrapped by Update
 **Rules:**
 
 1. **Cannot inject the proxy alone** — `Update::T` / `Update::MUT` as a claim / `#[inject(Update::…)]` / `.inject_resources(Update::T)` is a **compile error** (Descriptor / `FromParent` / claim gate). The proxy is not a free-standing inject key.
-2. **Inject the target → proxy comes as wrapper** — injecting the ordinary proxied bean (`GameTick`, …) **defaults** to injecting through its proxy: the stored claim is a **wrapper** (proxy around the bean), not a bare target-only slot. A chain nests wrappers, outer around inner: `Via<Outer, Via<Inner, Get<T>>>`. Call sites still name the **bean** (`GameTick::T`), not the proxy. The system argument stays the target reference; each proxy forwards it.
+2. **Inject the target → proxy comes as wrapper** — injecting the ordinary proxied bean (`GameTick`, …) **defaults** to injecting through its proxy: the stored claim is a **list** of the proxy levels and then the bean, not a bare target-only slot. A chain is one leaf, nearest config first: `List<Leaf<(Inner, Mid, Outer, Get<T>)>>`. Call sites still name the **bean** (`GameTick::T`), not the proxy. The system argument stays the target reference; each proxy forwards it.
 3. **Target sees proxy providers** — a bean that has a proxy has access to that proxy’s **`Provides`**, and to the provides of every outer proxy in the chain (union into the target’s usable surface / `At` membership for those beans). The claim asks [`At`] on one [`Surface`] of the proxy list and the module list. That [`At`] forwards to the inner structure that already has [`At`] (a proxy must also list the bean in `Provides`). A blanket `impl At<S> for Target` is not expressible next to hand-written [`At`] impls (coherence). Two inners that both [`At`] the same bean stay ambiguous: the forward does not pick one. A bean that is an item of the module's `Beans` and of a proxy's `Provides` fails `.inject_resources`: `bean is already on the proxy`.
 4. **Emit from proxy → bean** — from the proxy you can **reach the proxied bean via emit** (proxy emit / schedule path activates the target). Exact emit sugar stays on the emit / event channel; the proxy does not replace `EventInfo::Parents`.
 5. **Default proxy** — a bean or event with no `proxy = ...` uses [`Proxy`]. `BeanInfo::Proxy` is `Proxy<Self>`, and [`Proxied::Link`] is `Get` of that type. A named proxy sets `BeanInfo::Proxy` to it, and the link is that proxy's `Get` or `Mut`. Injection, init, and scheduling go through it the same way. The default proxy adds no provides and no parent events.
 6. **Init goes through the proxy** — the init stage ([`Init`] / [`InitStateStep`] / `init_state` / `init_state_default`) of a proxied bean runs through its whole proxy chain, outer then inner. The stored handler is `Fwd<Outer, Fwd<Inner, H>>`. The direct proxy produces default state. [`Update`] stays on [`Built`] only (rule 17).
 7. **Proxy events apply to the target** — [`EventInfo`], `Parents`, and emit/schedule wiring on any proxy in the chain also cover the proxied bean (an explicit proxy or [`Proxy`]). This does **not** write those parents into the target's [`EventInfo::Parents`].
-8. **Proxies are multi-level** — a proxy may itself declare `proxy = ...`. The levels are one linear tuple on `Chain`, nearest outer first, in the style of layered advice. Injecting any proxy in the chain alone is still a **compile error** (proxy types are not injectable beans). An explicit outermost proxy that names no further proxy ends the chain with `Chain = Stop`. [`Proxy`] is not added outside that chain.
+8. **Proxies are multi-level** — a proxy may itself declare `proxy = ...`. The levels are one linear tuple on `Chain`, nearest outer first. The attribute form is `#[config(proxy = Cfg0::T << Cfg1::T)]`: `Cfg0` is the direct proxy, each `<<` names the next outer config, and [`Corresponds`] rejects a route that is not those levels. Injecting any proxy in the chain alone is still a **compile error** (proxy types are not injectable beans). An explicit outermost proxy that names no further proxy ends the chain with `Chain = Stop`. [`Proxy`] is not added outside that chain.
 
 ```rust
 // Forbidden — inject proxy by itself
@@ -547,8 +547,9 @@ struct GameTick; // event (or other bean) wrapped by Update
 #[inject(GameTick::T)]   // wrapper: Update around GameTick
 .inject_resources(GameTick::T)
 
-// A chain nests outer around inner. The default proxy is not added outside it.
-// Via<Outer, Via<Inner, Get<Bean>>>
+// A chain is one leaf, nearest config first. The default proxy is not added outside it.
+// #[config(proxy = Inner::T << Mid::T << Outer::T)]
+// List<Leaf<(Inner, Mid, Outer, Get<Bean>)>>
 
 // Target may use beans from Update’s #[provide(…)]
 // From Update’s pipeline / emit path → activate GameTick

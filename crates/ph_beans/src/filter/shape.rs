@@ -1,6 +1,7 @@
 //! Spine, wait, and parent checks over the filter AST.
 
-use crate::bean::{BeanInfo, EventInfo, Marked, Proxied, Via};
+use crate::bean::{BeanInfo, EventInfo, Marked, Proxied};
+use crate::context::{Leaf, List};
 use crate::descriptor::{Get, Mut};
 use crate::filter::{And, Not, On, Or};
 
@@ -27,7 +28,28 @@ impl<T> HasMut for Mut<T> {
     type Mut = Yes;
 }
 
-impl<P, C> HasMut for Via<P, C>
+impl<P, C> HasMut for List<Leaf<(P, C)>>
+where
+    C: HasMut,
+{
+    type Mut = C::Mut;
+}
+
+impl<P, O, C> HasMut for List<Leaf<(P, O, C)>>
+where
+    C: HasMut,
+{
+    type Mut = C::Mut;
+}
+
+impl<P, O0, O1, C> HasMut for List<Leaf<(P, O0, O1, C)>>
+where
+    C: HasMut,
+{
+    type Mut = C::Mut;
+}
+
+impl<P, O0, O1, O2, C> HasMut for List<Leaf<(P, O0, O1, O2, C)>>
 where
     C: HasMut,
 {

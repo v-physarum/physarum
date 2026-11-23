@@ -2,7 +2,7 @@
 
 use core::marker::PhantomData;
 
-use crate::bean::Via;
+use crate::context::{Leaf, List};
 use crate::descriptor::Mut;
 use crate::descriptor::Valid;
 use crate::descriptor::live::{Idle, Live};
@@ -52,7 +52,28 @@ impl<T> OpLeaf for Mut<T> {
     type Leaf = Valid;
 }
 
-impl<P, C> OpLeaf for Via<P, C>
+impl<P, C> OpLeaf for List<Leaf<(P, C)>>
+where
+    C: OpLeaf,
+{
+    type Leaf = C::Leaf;
+}
+
+impl<P, O, C> OpLeaf for List<Leaf<(P, O, C)>>
+where
+    C: OpLeaf,
+{
+    type Leaf = C::Leaf;
+}
+
+impl<P, O0, O1, C> OpLeaf for List<Leaf<(P, O0, O1, C)>>
+where
+    C: OpLeaf,
+{
+    type Leaf = C::Leaf;
+}
+
+impl<P, O0, O1, O2, C> OpLeaf for List<Leaf<(P, O0, O1, O2, C)>>
 where
     C: OpLeaf,
 {

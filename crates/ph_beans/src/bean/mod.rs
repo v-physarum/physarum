@@ -11,15 +11,15 @@
 mod inject;
 mod levels;
 mod proxy;
+mod route;
 
 pub use inject::{
     FromParent, Module, OfInject, OfInject0, OfInject1, OfParent, OfProvide, OfProvide0, OfProvide1,
 };
 pub use proxy::Marked;
-pub use proxy::{
-    ApplyProxy, FreeKey, Fwd, InitPath, ParentList, Proxied, Proxy, Stop, Target, Via,
-};
+pub use proxy::{ApplyProxy, FreeKey, Fwd, InitPath, ParentList, Proxied, Proxy, Stop, Target};
 pub use proxy::{DriveInit, Enfold, EnterAll, ForwardInit, WrapFwd};
+pub use route::Corresponds;
 
 use crate::filter::On;
 
