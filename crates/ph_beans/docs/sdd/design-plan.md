@@ -76,7 +76,7 @@ cargo test -p ph_beans
 | **R15** one phantom per struct | **Done** | `Ctx` / `MapList` / `SetFilter` use one `_markers` or tuple phantom |
 | **R16** no `unsafe` / no `Box<dyn>` | **Done** | Rule fixed; `&dyn` views documented under Provide / inject `&dyn` |
 | Inject `&dyn` (`as Trait`; claim `Bean::T`; only ArgsView is `&dyn`) | **Open** | No `as_dyn` on Get/Mut; marker-only `DynView`; `ph_test_asm` |
-| **Proxy** (`type = proxy`, wrap on target inject) | **Open** | Manual prototype in `ph_beans`; `Link` and `Chain` on `BeanInfo`. Derive still needs owner OK |
+| **Proxy** (`type = proxy`, wrap on target inject) | **Open** | Manual prototype in `ph_beans`. `Link` and `Chain` on `BeanInfo`. Claims use `Surface` (proxy list, module list) and forward to an inner `At`. Derive still needs owner OK |
 | **R19** no silent structure changes | **Done** | Rule fixed; `Get`/`Mut`/`Marker` called out under Accessors |
 | Map cap 16 | **Done** | `MAX_MAP_SYSTEMS`; push refuses 17th |
 | No macros in crate src | **Done** | No `macro_rules!` under `ph_beans/src` |

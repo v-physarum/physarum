@@ -31,7 +31,9 @@ pub use descriptor::{
     NeedBuild, NeedInit, OpDesc, OpOk, OpShape, PipelineOk, Valid, WarnUnusedArgs,
 };
 pub use filter::{And, ApplyFilter, NestOk, Not, On, Or};
-pub use query::{Built, ClaimVia, FromChain, FromProxy, Init, Own, Query, Setup, Tick, Update};
+pub use query::{
+    Built, ClaimVia, FromChain, FromProxy, Init, Own, Query, Setup, Surface, Tick, Update,
+};
 
 #[cfg(test)]
 mod tests {
@@ -402,6 +404,42 @@ mod tests {
         }
 
         #[test]
+        fn the_same_bean_on_the_module_and_the_proxy_is_ambiguous() {
+            fail(
+                "
+                use ph_beans::{At, BeanInfo, Get, Ix0, Marker, Proxy, Query, Stop, Target};
+                struct Score;
+                struct Update;
+                struct GameTick;
+                impl BeanInfo for Score {
+                    type Provides = (); type Injects = (); type Beans = (); type State = ();
+                    type Proxy = Proxy<Score>;
+                    type Link = ph_beans::Get<Score>;
+                    type Chain = Stop;
+                }
+                impl Target for Score {}
+                impl BeanInfo for Update {
+                    type Provides = (Score,); type Injects = (); type Beans = (Score,); type State = ();
+                    type Proxy = Proxy<Update>;
+                    type Link = Get<Update>;
+                    type Chain = Stop;
+                }
+                impl At<Score> for Update { type Ix = Ix0; }
+                impl BeanInfo for GameTick {
+                    type Provides = (); type Injects = (); type Beans = (); type State = ();
+                    type Proxy = Update;
+                    type Link = ph_beans::Get<GameTick>;
+                    type Chain = Stop;
+                }
+                impl At<Score> for GameTick { type Ix = Ix0; }
+                impl Target for GameTick {}
+                fn probe() { let _claim = GameTick::query().inject_resources(Score::T); }
+                ",
+                "type annotations needed",
+            );
+        }
+
+        #[test]
         fn a_proxy_object_absent_from_provides_is_rejected() {
             fail(
                 "
@@ -435,7 +473,7 @@ mod tests {
                 impl Target for GameTick {}
                 fn probe() { let _claim = GameTick::query().inject_resources(Score::T); }
                 ",
-                "ClaimVia",
+                "not on the proxy list",
             );
         }
 
@@ -612,7 +650,7 @@ mod tests {
             impl At<Update> for App { type Ix = Ix0; }
             fn probe() { let _claim = App::query().inject_resources(Update::MUT); }
             ",
-                "ClaimVia",
+                "not an injectable bean",
             );
         }
 
@@ -732,7 +770,7 @@ mod tests {
             impl At<Inner> for App { type Ix = Ix0; }
             fn probe() { let _claim = App::query().inject_resources(Inner::T); }
             ",
-                "ClaimVia",
+                "not an injectable bean",
             );
         }
 
@@ -1517,7 +1555,7 @@ mod tests {
 }
             fn probe() { let _claim = App::query().inject_resources(Id::T); }
             ",
-                "ClaimVia",
+                "not on the proxy list",
             );
         }
 

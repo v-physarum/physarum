@@ -1,7 +1,10 @@
 //! Which beans a resource claim names, and the view the init function sees.
 
-use crate::bean::{ApplyProxy, BeanInfo, Marked, More, Proxied, Target, Via};
+use core::marker::PhantomData;
+
+use crate::bean::{ApplyProxy, BeanInfo, Marked, More, Proxied, Stop, Target, Via};
 use crate::borrow::{At, Ix0, Ix1, Ix2, Ix3};
+use crate::context::{Leaf, List};
 use crate::descriptor::live::{Idle, Live};
 use crate::descriptor::{Dyn, DynView, Get, Mut};
 use crate::filter::And;
@@ -40,26 +43,141 @@ impl<B, S, L, A, R> Listed<S, (Ix2, L, A, R)> for B where B: BeanInfo<Provides =
 
 impl<B, S, L, A, C> Listed<S, (Ix3, L, A, C)> for B where B: BeanInfo<Provides = (L, A, C, S)> {}
 
-/// `At` visible on a proxy or on a proxy further out in its chain.
+/// Proxy list `P` and module list `M`. [`At`] forwards to one inner.
+///
+/// `W` is that inner's path. Callers do not name it.
+pub struct Surface<P, M, W>(PhantomData<(P, M, W)>);
+
+/// This proxy's [`Chain`](crate::BeanInfo::Chain), as a [`List`].
+trait ProxyRows<L> {
+    /// Nested groups, direct proxy first.
+    type Rows;
+}
+
+impl<P> ProxyRows<Stop> for P {
+    type Rows = List<Leaf<(P,)>>;
+}
+
+impl<P, O, U> ProxyRows<More<O>> for P
+where
+    O: BeanInfo + ProxyRows<O::Chain, Rows = U>,
+{
+    type Rows = List<(List<Leaf<(P,)>>, U)>;
+}
+
+/// Pipeline bean: its proxy chain and itself as the module list.
+trait Host: BeanInfo {
+    /// Proxies from the direct one out to the end of [`Chain`](crate::BeanInfo::Chain).
+    type Proxies;
+    /// The pipeline bean. A longer module list uses the same [`List`] shape.
+    type Modules;
+}
+
+impl<B, P, U> Host for B
+where
+    B: Proxied<Link: Marked<Target = P>>,
+    P: BeanInfo + ProxyRows<P::Chain, Rows = U>,
+{
+    type Proxies = U;
+    type Modules = List<Leaf<(B,)>>;
+}
+
+/// `At` on this element.
 #[doc(hidden)]
-pub trait Sees<S, K> {
-    /// Index of `S` on the proxy that provides it.
+pub struct Hit;
+
+/// `At` is further along the list.
+#[doc(hidden)]
+pub struct Skip<K>(PhantomData<K>);
+
+/// Proxy forward: the element must also be in `Provides`.
+#[doc(hidden)]
+pub struct InProvides;
+
+/// Module forward: the element's own [`At`] is enough.
+#[doc(hidden)]
+pub struct InAt;
+
+/// Forward `S` to an inner [`At`].
+#[doc(hidden)]
+pub trait Find<S, K, D> {
+    /// That inner index.
     type Ix;
 }
 
-impl<P, S, Shape> Sees<S, (Own, Shape)> for P
+impl<S, E, G> Find<S, (Hit, G), InProvides> for List<Leaf<(E,)>>
 where
-    P: At<S> + Listed<S, Shape>,
+    E: At<S> + Listed<S, G>,
 {
-    type Ix = P::Ix;
+    type Ix = <E as At<S>>::Ix;
 }
 
-impl<P, O, S, K> Sees<S, (FromProxy, K)> for P
+impl<S, E> Find<S, Hit, InAt> for List<Leaf<(E,)>>
 where
-    P: BeanInfo<Chain = More<O>>,
-    O: Sees<S, K>,
+    E: At<S>,
 {
-    type Ix = <O as Sees<S, K>>::Ix;
+    type Ix = <E as At<S>>::Ix;
+}
+
+impl<S, E, R, G> Find<S, (Hit, G), InProvides> for List<(List<Leaf<(E,)>>, R)>
+where
+    E: At<S> + Listed<S, G>,
+{
+    type Ix = <E as At<S>>::Ix;
+}
+
+impl<S, E, R> Find<S, Hit, InAt> for List<(List<Leaf<(E,)>>, R)>
+where
+    E: At<S>,
+{
+    type Ix = <E as At<S>>::Ix;
+}
+
+impl<S, E, R, D, K> Find<S, Skip<K>, D> for List<(List<Leaf<(E,)>>, R)>
+where
+    R: Find<S, K, D>,
+{
+    type Ix = <R as Find<S, K, D>>::Ix;
+}
+
+/// `W` is `(OnProxy, _)` or `(OnModule, _)`.
+#[doc(hidden)]
+#[diagnostic::on_unimplemented(
+    message = "`{S}` is not on the proxy list or the module list",
+    note = "a proxy object must be an item of that proxy's Provides; a module object needs At"
+)]
+pub trait Pick<S, W> {
+    /// Index on the chosen inner.
+    type Ix;
+}
+
+/// Forward through the proxy chain.
+#[doc(hidden)]
+pub struct OnProxy;
+
+/// Forward through the module list.
+#[doc(hidden)]
+pub struct OnModule;
+
+impl<S, P, M, K> Pick<S, (OnProxy, K)> for (P, M)
+where
+    P: Find<S, K, InProvides>,
+{
+    type Ix = <P as Find<S, K, InProvides>>::Ix;
+}
+
+impl<S, P, M, K> Pick<S, (OnModule, K)> for (P, M)
+where
+    M: Find<S, K, InAt>,
+{
+    type Ix = <M as Find<S, K, InAt>>::Ix;
+}
+
+impl<S, P, M, W> At<S> for Surface<P, M, W>
+where
+    (P, M): Pick<S, W>,
+{
+    type Ix = <(P, M) as Pick<S, W>>::Ix;
 }
 
 /// Resource claim the pipeline bean can see on its own [`At`] list, or on a
@@ -71,7 +189,7 @@ pub trait ClaimVia<B, K> {
 
 /// Resource claim `B` can project.
 ///
-/// Leaves carry `B: At<P>`. Lists only require each part to be a [`Claim`].
+/// [`ClaimVia`] leaves carry [`Surface`]'s [`At`]. Lists only require each part to be a [`Claim`].
 pub trait Claim<B> {
     /// Absolute indexes of the claimed beans.
     type Indexes;
@@ -90,34 +208,14 @@ where
     type Indexes = B::Ix;
 }
 
-impl<B, C> ClaimVia<B, Own> for C
+impl<B, P, M, C, W> ClaimVia<B, Surface<P, M, W>> for C
 where
     C: Marked,
-    B: At<C::Target>,
+    B: Host<Proxies = P, Modules = M>,
+    Surface<P, M, W>: At<C::Target>,
     C::Target: Target + Proxied,
 {
-    type Indexes = B::Ix;
-}
-
-impl<B, P, C, Shape> ClaimVia<B, (FromProxy, Shape)> for C
-where
-    C: Marked,
-    B: Proxied<Link: Marked<Target = P>>,
-    P: BeanInfo + At<C::Target> + Listed<C::Target, Shape>,
-    C::Target: Target + Proxied,
-{
-    type Indexes = P::Ix;
-}
-
-impl<B, P, O, K, C> ClaimVia<B, (FromChain, K)> for C
-where
-    C: Marked,
-    B: Proxied<Link: Marked<Target = P>>,
-    P: BeanInfo<Chain = More<O>>,
-    O: Sees<C::Target, K>,
-    C::Target: Target + Proxied,
-{
-    type Indexes = <O as Sees<C::Target, K>>::Ix;
+    type Indexes = <Surface<P, M, W> as At<C::Target>>::Ix;
 }
 
 impl<B, A, C, Ka, Kc> ClaimVia<B, (Ka, Kc)> for And<A, C>

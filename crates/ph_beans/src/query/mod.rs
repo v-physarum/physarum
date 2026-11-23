@@ -13,7 +13,10 @@ mod schedule;
 mod setup;
 mod update;
 
-pub use args::{ArgsView, Claim, ClaimVia, FromChain, FromProxy, Own};
+pub use args::{
+    ArgsView, Claim, ClaimVia, Find, FromChain, FromProxy, Hit, InAt, InProvides, OnModule,
+    OnProxy, Own, Pick, Skip, Surface,
+};
 pub use built::Built;
 pub use entry::Query;
 pub use init::Init;
