@@ -88,9 +88,10 @@ jobs:
 
       # ph_beans is not on this branch. The ceiling measures its map chain.
       # The commit is pinned so the job does not follow a moving branch tip.
+      # Fetch that commit: a rewritten branch tip no longer has it as an ancestor.
       - name: Check out ph_beans
         run: |
-          git fetch origin cursor/ph-beans-derive-a16f
+          git fetch origin 89682756b358f1a9c88129c6a4744db4e62e4ea9
           git checkout 89682756b358f1a9c88129c6a4744db4e62e4ea9 -- crates/ph_beans crates/ph_beans_derive
           python3 - <<'PY'
           from pathlib import Path
