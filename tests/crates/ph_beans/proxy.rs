@@ -111,10 +111,6 @@ impl EventInfo for Update {
     type Parents = Main;
 }
 impl InitPath<GameTick> for Update {
-    fn install<H>(handler: H) -> Fwd<Self, H> {
-        Fwd::new(handler)
-    }
-
     fn default_state() -> u8 {
         7
     }
@@ -236,18 +232,10 @@ impl ProxyInfo for Inner {
     type Link = Get<Inner>;
     type Chain = More<Mid>;
 }
-impl Proxied for Inner {
-    type Proxy = Mid;
-    type Link = Get<Mid>;
-}
 impl EventInfo for Inner {
     type Parents = ();
 }
 impl InitPath<Core> for Inner {
-    fn install<H>(handler: H) -> Fwd<Self, H> {
-        Fwd::new(handler)
-    }
-
     fn default_state() -> u8 {
         7
     }
@@ -268,10 +256,6 @@ impl ProxyInfo for Mid {
     type Link = Get<Mid>;
     type Chain = More<Outer>;
 }
-impl Proxied for Mid {
-    type Proxy = Outer;
-    type Link = Get<Outer>;
-}
 impl EventInfo for Mid {
     type Parents = ();
 }
@@ -279,12 +263,6 @@ impl At<Prize> for Mid {
     type Ix = Ix0;
 }
 impl InitPath<Inner> for Mid {
-    fn install<H>(handler: H) -> Fwd<Self, H> {
-        Fwd::new(handler)
-    }
-
-    fn default_state() {}
-
     fn enter() {
         mark(2);
     }
@@ -308,12 +286,6 @@ impl At<Bonus> for Outer {
     type Ix = Ix0;
 }
 impl InitPath<Mid> for Outer {
-    fn install<H>(handler: H) -> Fwd<Self, H> {
-        Fwd::new(handler)
-    }
-
-    fn default_state() {}
-
     fn enter() {
         mark(1);
     }

@@ -157,10 +157,6 @@
 //!     type Link = Get<Inner>;
 //!     type Chain = More<Outer>;
 //! }
-//! impl Proxied for Inner {
-//!     type Proxy = Outer;
-//!     type Link = Get<Outer>;
-//! }
 //! impl BeanInfo for Outer {
 //!     type Provides = ();
 //!     type Injects = ();
@@ -241,16 +237,18 @@ pub trait ProxyInfo: crate::BeanInfo {
     type Chain;
 }
 
-/// Manual stand-in for `proxy = P::T` / `proxy = P::MUT`.
+/// Manual stand-in for `proxy = P::T` / `proxy = P::MUT` on a bean.
 ///
 /// Data only, same bar as [`ProxyInfo`] (rule 14). Names are a proposal
-/// pending owner approval. A bean or a proxy may implement this, so chains
-/// type-check. Injecting a proxy still fails: proxy types are not [`Target`].
+/// pending owner approval. Injecting a proxy still fails: proxy types are not
+/// [`Target`].
 ///
 /// No `proxy = ...` on a bean is the manual impl `Proxy = DefaultProxy<Self>`
 /// and `Link = Get<DefaultProxy<Self>>`. That is an ordinary proxy whose
-/// chain is [`Stop`]. An explicit proxy that names no further proxy is not
-/// [`Proxied`] either: [`DefaultProxy`] is not added outside it.
+/// chain is [`Stop`]. A proxy does not write this itself. `Chain = More<Outer>`
+/// fills it: `Proxy = Outer` and `Link = Outer::Link`. An explicit proxy that
+/// names no further proxy (`Chain = Stop`) is not [`Proxied`]: [`DefaultProxy`]
+/// is not added outside it.
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not a proxied target",
     note = "inject the target bean; a proxy is not a free-standing key. A missing `proxy = ...` on a bean is `Proxy = DefaultProxy<Self>` and `Link = Get<DefaultProxy<Self>>`"
@@ -260,6 +258,15 @@ pub trait Proxied: crate::BeanInfo {
     type Proxy: ProxyInfo<Targets = Self>;
     /// `Get<Self::Proxy>` (`T`) or `Mut<Self::Proxy>` (`MUT`).
     type Link: LinkMark<Self::Proxy>;
+}
+
+impl<P, O> Proxied for P
+where
+    P: ProxyInfo<Chain = More<O>>,
+    O: ProxyInfo<Targets = P>,
+{
+    type Proxy = O;
+    type Link = O::Link;
 }
 
 /// Proxy a bean uses when it names no other proxy.
@@ -336,27 +343,27 @@ impl<P, H> Fwd<P, H> {
 /// [`enter`]: InitPath::enter
 pub trait InitPath<B: crate::BeanInfo>: ProxyInfo<Targets = B> {
     /// Stores `handler` as this proxy's own init layer.
-    fn install<H>(handler: H) -> Fwd<Self, H>;
-    /// Default state of `B`, produced by this proxy.
-    fn default_state() -> B::State
-    where
-        B::State: Default;
-    /// Runs before the next inner init step.
-    fn enter() {}
-}
-
-impl<B: crate::BeanInfo> InitPath<B> for DefaultProxy<B> {
+    ///
+    /// The default wraps `handler` in [`Fwd`] and does not change it.
     fn install<H>(handler: H) -> Fwd<Self, H> {
         Fwd::new(handler)
     }
-
+    /// Default state of `B`, produced by this proxy.
+    ///
+    /// The default is [`Default::default`]. Override when the proxy picks a
+    /// different value.
+    #[must_use]
     fn default_state() -> B::State
     where
         B::State: Default,
     {
-        B::State::default()
+        Default::default()
     }
+    /// Runs before the next inner init step.
+    fn enter() {}
 }
+
+impl<B: crate::BeanInfo> InitPath<B> for DefaultProxy<B> {}
 
 /// Projects a call-site claim onto its proxy wrapper.
 pub trait ApplyProxy {
