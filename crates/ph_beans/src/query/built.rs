@@ -8,6 +8,7 @@ use crate::context::ContextTick;
 use crate::context::Ctx;
 use crate::context::CtxConfig;
 use crate::context::DefaultState;
+use crate::descriptor::Collected;
 use crate::descriptor::Descriptor;
 use crate::descriptor::NeedBuild;
 use crate::descriptor::OpOk;
@@ -74,6 +75,13 @@ where
 {
     type Status = C::Status;
     type Accessors = C::Accessors;
+}
+
+impl<E, C> Collected for Built<E, C>
+where
+    C: Collected,
+{
+    type Injects = C::Injects;
 }
 
 /// Next pipeline after `.build`.

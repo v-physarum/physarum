@@ -93,15 +93,15 @@ Layout of `crates/ph_beans/src/`. Keep the surface readable: **small files**, **
    // …
    ```
 
-   DI (`FromParent`): match through **membership** + `ClaimMark`. **Do not** split Get vs Mut. Slot Via (`OfProvide0` / `OfProvide1`, …) is allowed **only** as an E0119 residual when head/tail blankets overlap — document it; collapse when a non-overlapping encoding exists.
+   DI (`FromParent`): match through **membership** + `ClaimMark`. **Do not** split Get vs Mut. A pair uses `OfProvide0` / `OfProvide1` (and the inject twins). A longer list is `impl<A0, A1, A2> FromParent<P, (A0, A1, A2)> for (A0, A1, A2)`: the elements are generics. A tuple of slot markers is not a list. The inject tuple is collected on `Collected::Injects`. A nested tail `(Get<A>, (Get<B>, ()))` is not a list.
 
    ```rust
    // Forbidden — Get×Mut×slot
    impl FromParent<P, OfProvide0> for Get<T> where Provides = (Get<T>, R) {}
    impl FromParent<P, OfProvide0> for Mut<T> where Provides = (Mut<T>, R) {}
 
-   // Required residual — one arm per slot for every ClaimMark
-   impl<P, C: ClaimMark, R> FromParent<P, OfProvide0> for C
+   // Required — one arm per index; every element is a claim
+   impl<P, C: ClaimMark, R: ClaimMark> FromParent<P, OfProvide0> for C
    where P: BeanInfo<Provides = (C, R)> {}
    ```
 
@@ -565,7 +565,7 @@ Tree: `App` → `Logic` → `Render`. `Render` injects `Logic::MUT`; `Logic` inj
 
 ### `FromParent` impl style
 
-Compile-time “child may take this claim from parent” is **`FromParent`** (and `Module`). Use **`ClaimMark`** + membership on `Provides` / `Injects` — **not** Get×Mut×slot. `OfProvide0` / `OfProvide1` (and inject twins) are **E0119 residuals** only (head vs tail Via); collapse further if a non-overlapping encoding appears (rule 8).
+Compile-time “child may take this claim from parent” is **`FromParent`** (and `Module`). Use **`ClaimMark`** + membership on `Provides` / `Injects` — **not** Get×Mut×slot. A pair uses `OfProvide0` / `OfProvide1`. A longer list is one impl `for (A0, A1, A2)` whose elements are generics. The inject tuple is collected on `Collected::Injects`. A nested tail is not a list (rule 8).
 
 ### `T` vs `MUT`
 

@@ -10,6 +10,7 @@ use crate::context::Context;
 use crate::context::Ctx;
 use crate::context::CtxConfig;
 use crate::context::FreshInit;
+use crate::descriptor::Collected;
 use crate::descriptor::Descriptor;
 use crate::descriptor::NeedBuild;
 use crate::descriptor::OpOk;
@@ -43,6 +44,13 @@ where
 {
     type Status = C::Status;
     type Accessors = C::Accessors;
+}
+
+impl<E, C> Collected for Init<E, C>
+where
+    C: Collected,
+{
+    type Injects = C::Injects;
 }
 
 /// Stores init on a concrete [`Ctx`] (hides `B`/`A`/`S`/`T` from [`CtxConfig`]).

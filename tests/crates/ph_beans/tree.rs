@@ -7,8 +7,8 @@
 #![allow(missing_docs)]
 
 use ph_beans::{
-    At, BeanInfo, EventInfo, Get, Ix0, Ix1, Marker, Module, Mut, OfInject, OfParent, OfProvide,
-    OfProvide1, Query, Setup, Tick,
+    At, BeanInfo, Collected, EventInfo, Get, Init, Ix0, Ix1, Marker, Module, Mut, OfInject,
+    OfParent, OfProvide, OfProvide1, Query, Setup, StartDesc, Tick,
 };
 
 struct Id(u8);
@@ -124,6 +124,39 @@ impl BeanInfo for TakesKeys {
     type State = ();
 }
 
+struct FlatHost;
+struct InjectHost;
+struct TakesPair;
+struct TakesFlat;
+
+impl BeanInfo for FlatHost {
+    type Provides = (Get<Id>, Get<Keys>, Mut<Logic>);
+    type Injects = ();
+    type Beans = (Get<Id>, Get<Keys>, Mut<Logic>);
+    type State = ();
+}
+
+impl BeanInfo for InjectHost {
+    type Provides = ();
+    type Injects = (Get<Id>, Mut<Keys>);
+    type Beans = (Get<Id>, Mut<Keys>);
+    type State = ();
+}
+
+impl BeanInfo for TakesPair {
+    type Provides = ();
+    type Injects = (Get<Id>, Mut<Keys>);
+    type Beans = (Get<Id>, Mut<Keys>);
+    type State = ();
+}
+
+impl BeanInfo for TakesFlat {
+    type Provides = ();
+    type Injects = (Get<Id>, Get<Keys>, Mut<Logic>);
+    type Beans = (Get<Id>, Get<Keys>, Mut<Logic>);
+    type State = ();
+}
+
 impl Setup for Render {
     fn setup(self) -> impl Tick<Self> {
         Render::query().init_state_default().build()
@@ -150,10 +183,24 @@ fn a_child_injects_the_parent_surface() {
     fn from_inject<C: Module<Logic, OfInject>>() {}
     fn from_provide<C: Module<Logic, OfProvide>>() {}
     fn second<C: Module<PairHost, OfProvide1>>() {}
+    fn pair<C: Module<PairHost, (Get<Id>, Mut<Keys>)>>() {}
+    fn triple<C: Module<FlatHost, (Get<Id>, Get<Keys>, Mut<Logic>)>>() {}
+    fn parent_injects<C: Module<InjectHost, OfInject<(Get<Id>, Mut<Keys>)>>>() {}
     parent::<Render>();
     from_inject::<UsesApp>();
     from_provide::<UsesRender>();
     second::<TakesKeys>();
+    pair::<TakesPair>();
+    triple::<TakesFlat>();
+    parent_injects::<TakesPair>();
+}
+
+#[test]
+fn the_descriptor_collects_the_injects() {
+    fn one<D: Collected<Injects = Mut<Logic>>>() {}
+    fn flat<D: Collected<Injects = (Get<Id>, Get<Keys>, Mut<Logic>)>>() {}
+    one::<Init<(), <Render as StartDesc>::Ctx>>();
+    flat::<Init<(), <TakesFlat as StartDesc>::Ctx>>();
 }
 
 #[test]
