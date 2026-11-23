@@ -5,7 +5,7 @@
 
 use core::marker::PhantomData;
 
-use crate::bean::BeanInfo;
+use crate::bean::{BeanInfo, Fwd, InitPath, Proxied};
 use crate::context::Context;
 use crate::context::Ctx;
 use crate::context::CtxConfig;
@@ -58,10 +58,13 @@ impl<B, A, S, T, H> SealInit<H> for Ctx<B, A, S, T>
 where
     A: AccSet,
     T: FreshInit,
+    B: Proxied,
+    B::Proxy: InitPath<B>,
 {
-    type Out = Ctx<B, A, NeedBuild, T::WithInit<H>>;
+    type Out = Ctx<B, A, NeedBuild, T::WithInit<Fwd<B::Proxy, H>>>;
 
     fn seal_init(self, handler: H) -> Self::Out {
+        let handler = <B::Proxy as InitPath<B>>::install(handler);
         Ctx::new(FreshInit::install_init(self.tick, handler))
     }
 }
@@ -98,13 +101,15 @@ impl<B, A, S, T> SealDefault for Ctx<B, A, S, T>
 where
     A: AccSet,
     T: FreshInit,
-    B: BeanInfo,
+    B: Proxied,
+    B::Proxy: InitPath<B>,
     B::State: Default,
 {
     type Out = Ctx<B, A, NeedBuild, T::WithDefault<B::State>>;
 
     fn seal_default(self) -> Self::Out {
-        Ctx::new(FreshInit::install_default(self.tick, Default::default()))
+        let state = <B::Proxy as InitPath<B>>::default_state();
+        Ctx::new(FreshInit::install_default(self.tick, state))
     }
 }
 
@@ -136,7 +141,8 @@ impl<E, C, H> InitStateStep<H> for Init<E, C>
 where
     Self: ApplyPatch<SetInit<H>>,
     C: Context,
-    C::Bean: BeanInfo,
+    C::Bean: Proxied,
+    <C::Bean as Proxied>::Proxy: InitPath<C::Bean>,
     C::Tick: FreshInit,
     C::Args: Claim<C::Bean> + ArgsView + OpShape<Status: OpOk>,
     H: for<'a> Fn(<C::Args as ArgsView>::View<'a>) -> <C::Bean as BeanInfo>::State,
@@ -159,6 +165,8 @@ pub trait InitStateDefaultStep {
 impl<E, C> InitStateDefaultStep for Init<E, C>
 where
     C: Context,
+    C::Bean: Proxied,
+    <C::Bean as Proxied>::Proxy: InitPath<C::Bean>,
     C::Args: OpShape<Status: OpOk>,
     Self: ApplyPatch<SetDefault>,
 {
@@ -180,7 +188,7 @@ impl<E, C> Init<E, C> {
     /// A second call fails on this line with status [`ErrInitAlreadySet`](crate::ErrInitAlreadySet).
     ///
     /// ```compile_fail
-    /// use ph_beans::{BeanInfo, Query};
+    /// use ph_beans::{BeanInfo, Get, Pass, Proxied, Query, Target};
     ///
     /// struct App;
     ///
@@ -189,6 +197,12 @@ impl<E, C> Init<E, C> {
     ///     type Injects = ();
     ///     type Beans = ();
     ///     type State = u8;
+    /// }
+    ///
+    /// impl Target for App {}
+    /// impl Proxied for App {
+    ///     type Proxy = Pass<App>;
+    ///     type Link = Get<Pass<App>>;
     /// }
     ///
     /// fn boot(_: ()) -> u8 {
@@ -210,7 +224,7 @@ impl<E, C> Init<E, C> {
     /// A second init fails on that call with [`ErrInitAlreadySet`](crate::ErrInitAlreadySet).
     ///
     /// ```compile_fail
-    /// use ph_beans::{BeanInfo, Query};
+    /// use ph_beans::{BeanInfo, Get, Pass, Proxied, Query, Target};
     ///
     /// struct App;
     ///
@@ -219,6 +233,12 @@ impl<E, C> Init<E, C> {
     ///     type Injects = ();
     ///     type Beans = ();
     ///     type State = u8;
+    /// }
+    ///
+    /// impl Target for App {}
+    /// impl Proxied for App {
+    ///     type Proxy = Pass<App>;
+    ///     type Link = Get<Pass<App>>;
     /// }
     ///
     /// let _twice = App::query().init_state_default().init_state_default();

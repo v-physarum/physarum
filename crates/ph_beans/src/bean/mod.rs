@@ -2,17 +2,21 @@
 //!
 //! This slice uses manual impls. A later derive emits **only** [`BeanInfo`],
 //! [`At`](crate::At) (per `Beans` slot), [`EventInfo`] for events, and
-//! `ProxyInfo` for `#[config(type = proxy)]` — never `Query` / `Setup` /
+//! [`ProxyInfo`] for `#[config(type = proxy)]` — never `Query` / `Setup` /
 //! `StartDesc` / `Module` / steps (design: Derive + Proxy).
 //!
-//! [`BeanInfo`] / [`EventInfo`] (and later `ProxyInfo`) are **meta** traits
-//! (rule 14): do not add methods or associated types without owner approval.
-//! Entry points such as [`Query`](crate::query::Query) stay on separate traits.
+//! [`BeanInfo`] / [`EventInfo`] / [`ProxyInfo`] are **meta** traits (rule 14):
+//! do not add methods or associated types without owner approval. Entry points
+//! such as [`Query`](crate::query::Query) stay on separate traits.
 
 mod inject;
+mod proxy;
 
 pub use inject::{
     FromParent, Module, OfInject, OfInject0, OfInject1, OfParent, OfProvide, OfProvide0, OfProvide1,
+};
+pub use proxy::{
+    ApplyProxy, FreeKey, Fwd, InitPath, LinkMark, ParentList, Pass, Proxied, ProxyInfo, Target, Via,
 };
 
 use crate::filter::On;

@@ -2,8 +2,10 @@
 
 use core::marker::PhantomData;
 
+use crate::bean::Via;
 use crate::descriptor::Valid;
 use crate::descriptor::live::{Idle, Live};
+use crate::descriptor::{Get, Mut};
 use crate::filter::And;
 
 /// Per-operator lens. Pipeline [`crate::Descriptor`] stays the tip status.
@@ -46,7 +48,15 @@ impl<T> OpLeaf for crate::descriptor::Get<T> {
     type Leaf = Valid;
 }
 
-impl<T> OpLeaf for crate::descriptor::Mut<T> {
+impl<T> OpLeaf for Mut<T> {
+    type Leaf = Valid;
+}
+
+impl<P, T> OpLeaf for Via<P, Get<T>> {
+    type Leaf = Valid;
+}
+
+impl<P, T> OpLeaf for Via<P, Mut<T>> {
     type Leaf = Valid;
 }
 

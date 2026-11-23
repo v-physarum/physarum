@@ -2,8 +2,40 @@
 
 use core::any::TypeId;
 
+use crate::bean::{ParentList, Proxied};
 use crate::descriptor::{Get, Mut};
 use crate::filter::{And, Not, On, Or};
+
+/// Parent ids a proxy event contributes to the target's schedule.
+pub trait EventParent {
+    /// `true` when `emitted` names this parent.
+    fn listed(emitted: &[TypeId]) -> bool;
+}
+
+impl EventParent for () {
+    fn listed(_emitted: &[TypeId]) -> bool {
+        false
+    }
+}
+
+impl<E> EventParent for E
+where
+    E: crate::EventInfo + 'static,
+{
+    fn listed(emitted: &[TypeId]) -> bool {
+        emitted.contains(&TypeId::of::<E>())
+    }
+}
+
+impl<P> ParentList for P
+where
+    P: crate::EventInfo,
+    P::Parents: EventParent,
+{
+    fn listed(emitted: &[TypeId]) -> bool {
+        P::Parents::listed(emitted)
+    }
+}
 
 #[doc(hidden)]
 pub trait Collect {
@@ -103,11 +135,15 @@ fn listed(emitted: &[TypeId], id: TypeId) -> bool {
 
 impl<E, I> MatchEmit for On<E, I>
 where
-    E: 'static,
+    E: 'static + Proxied,
+    E::Proxy: 'static + ParentList,
     I: MatchEmit,
 {
     fn matches(emitted: &[TypeId]) -> bool {
-        listed(emitted, TypeId::of::<E>()) && I::matches(emitted)
+        (listed(emitted, TypeId::of::<E>())
+            || listed(emitted, TypeId::of::<E::Proxy>())
+            || <E::Proxy as ParentList>::listed(emitted))
+            && I::matches(emitted)
     }
 }
 

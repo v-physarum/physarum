@@ -1,6 +1,6 @@
 //! Spine, wait, and parent checks over the filter AST.
 
-use crate::bean::EventInfo;
+use crate::bean::{EventInfo, Proxied, Via};
 use crate::descriptor::{Get, Mut};
 use crate::filter::{And, Not, On, Or};
 
@@ -24,6 +24,14 @@ impl<T> HasMut for Get<T> {
 }
 
 impl<T> HasMut for Mut<T> {
+    type Mut = Yes;
+}
+
+impl<P, T> HasMut for Via<P, Get<T>> {
+    type Mut = No;
+}
+
+impl<P, T> HasMut for Via<P, Mut<T>> {
     type Mut = Yes;
 }
 
@@ -155,6 +163,64 @@ impl<P, C, I> Under<P> for On<C, I>
 where
     C: EventInfo<Parents = P>,
     I: Under<C>,
+{
+}
+
+/// Parent check that also accepts the proxy's [`EventInfo::Parents`].
+///
+/// `K` is inferred. [`()`][unit] is a predicate. [`Own`](crate::Own) is the
+/// event's own parents. [`FromProxy`](crate::FromProxy) is the proxy's parents.
+/// The target's [`EventInfo::Parents`] is not rewritten.
+///
+/// [unit]: https://doc.rust-lang.org/std/primitive.unit.html
+#[doc(hidden)]
+pub trait ParentsOk<K> {}
+
+/// `I` lists outer event `P` on its own [`EventInfo::Parents`] or on its proxy.
+#[doc(hidden)]
+pub trait UnderVia<P, K> {}
+
+impl<P> UnderVia<P, ()> for () {}
+
+impl<P, T> UnderVia<P, ()> for Get<T> {}
+
+impl<P, T> UnderVia<P, ()> for Mut<T> {}
+
+impl<P, A, B, Ka, Kb> UnderVia<P, (Ka, Kb)> for And<A, B>
+where
+    A: UnderVia<P, Ka>,
+    B: UnderVia<P, Kb>,
+{
+}
+
+impl<P, A, B, Ka, Kb> UnderVia<P, (Ka, Kb)> for Or<A, B>
+where
+    A: UnderVia<P, Ka>,
+    B: UnderVia<P, Kb>,
+{
+}
+
+impl<P, A, K> UnderVia<P, K> for Not<A> where A: UnderVia<P, K> {}
+
+impl<P, C, I, K> UnderVia<P, (crate::Own, K)> for On<C, I>
+where
+    C: EventInfo<Parents = P>,
+    I: UnderVia<C, K>,
+{
+}
+
+impl<P, C, I, X, K> UnderVia<P, (crate::FromProxy, K)> for On<C, I>
+where
+    C: Proxied<Proxy = X>,
+    X: EventInfo<Parents = P>,
+    I: UnderVia<C, K>,
+{
+}
+
+impl<E, I, K> ParentsOk<K> for On<E, I>
+where
+    E: EventInfo,
+    I: UnderVia<E, K>,
 {
 }
 

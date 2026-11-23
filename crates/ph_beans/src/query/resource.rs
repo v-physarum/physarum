@@ -2,7 +2,7 @@
 
 use core::marker::PhantomData;
 
-use crate::bean::BeanInfo;
+use crate::bean::{ApplyProxy, BeanInfo};
 use crate::context::Context;
 use crate::context::ContextTick;
 use crate::context::Ctx;
@@ -12,7 +12,7 @@ use crate::descriptor::live::{Idle, Live};
 use crate::filter::shape::HasMut;
 use crate::filter::shape::No;
 use crate::query::apply::ApplyPatch;
-use crate::query::args::Claim;
+use crate::query::args::ClaimVia;
 use crate::query::init::Init;
 
 /// Replaces resource args on a concrete [`Ctx`] (hides `B`/`O`/`S`/`T` from [`CtxConfig`]).
@@ -68,24 +68,27 @@ impl<N, C> AllowInjectResources<N> for Idle<C> {}
 
 /// Next pipeline after `.inject_resources`.
 ///
-/// `Out` is the tip with the claim set replaced. The signature does not
-/// spell `Ctx` or `Pipe`.
-pub trait InjectResourcesStep<R> {
-    /// Pipeline whose resource args are `R`.
+/// `Out` is the tip with the claim set replaced by the proxy wrapper. The
+/// signature does not spell `Ctx` or `Pipe`. `K` is the inferred path
+/// ([`Own`](crate::Own) or [`FromProxy`](crate::FromProxy)); callers do not
+/// name it.
+pub trait InjectResourcesStep<R, K> {
+    /// Pipeline whose resource args are the wrapped claim.
     type Out;
     /// Replaces the claim set.
     fn inject_resources(self, resources: R) -> Self::Out;
 }
 
-impl<E, C, R> InjectResourcesStep<R> for Init<E, C>
+impl<E, C, R, K> InjectResourcesStep<R, K> for Init<E, C>
 where
-    Self: ApplyPatch<SetArgs<Live<R>>>,
+    R: ApplyProxy,
+    Self: ApplyPatch<SetArgs<Live<R::Wrapped>>>,
     C: Context,
     C::Bean: BeanInfo,
-    R: Claim<C::Bean>,
+    R: ClaimVia<C::Bean, K>,
     C::Args: AllowInjectResources<R>,
 {
-    type Out = <Self as ApplyPatch<SetArgs<Live<R>>>>::Out;
+    type Out = <Self as ApplyPatch<SetArgs<Live<R::Wrapped>>>>::Out;
 
     fn inject_resources(self, resources: R) -> Self::Out {
         let _ = resources;
@@ -99,7 +102,7 @@ impl<E, C> Init<E, C> {
     /// A live `Mut` refuses this call until a wait filter clears it.
     ///
     /// ```compile_fail
-    /// use ph_beans::{At, BeanInfo, EventInfo, Ix0, Marker, Query};
+    /// use ph_beans::{At, BeanInfo, EventInfo, Get, Ix0, Marker, Pass, Proxied, Query, Target};
     ///
     /// struct Keys;
     /// struct Main;
@@ -110,6 +113,12 @@ impl<E, C> Init<E, C> {
     ///     type Injects = ();
     ///     type Beans = ();
     ///     type State = ();
+    /// }
+    ///
+    /// impl Target for Keys {}
+    /// impl Proxied for Keys {
+    ///     type Proxy = Pass<Keys>;
+    ///     type Link = Get<Pass<Keys>>;
     /// }
     ///
     /// impl BeanInfo for Main {
@@ -140,9 +149,9 @@ impl<E, C> Init<E, C> {
     ///     .inject_resources(Keys::T);
     /// ```
     #[allow(clippy::needless_pass_by_value)]
-    pub fn inject_resources<R>(self, resources: R) -> <Self as InjectResourcesStep<R>>::Out
+    pub fn inject_resources<R, K>(self, resources: R) -> <Self as InjectResourcesStep<R, K>>::Out
     where
-        Self: InjectResourcesStep<R>,
+        Self: InjectResourcesStep<R, K>,
     {
         InjectResourcesStep::inject_resources(self, resources)
     }

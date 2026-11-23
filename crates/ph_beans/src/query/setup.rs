@@ -44,7 +44,7 @@ where
     /// [`PipelineOk`](crate::PipelineOk).
     ///
     /// ```compile_fail
-    /// use ph_beans::{BeanInfo, Query, Setup, Tick};
+    /// use ph_beans::{BeanInfo, Get, Pass, Proxied, Query, Setup, Target, Tick};
     ///
     /// struct App;
     ///
@@ -53,6 +53,12 @@ where
     ///     type Injects = ();
     ///     type Beans = ();
     ///     type State = u8;
+    /// }
+    ///
+    /// impl Target for App {}
+    /// impl Proxied for App {
+    ///     type Proxy = Pass<App>;
+    ///     type Link = Get<Pass<App>>;
     /// }
     ///
     /// fn boot(_: ()) -> u8 {

@@ -34,7 +34,7 @@ pub struct Ix3;
 /// A resource claim that the bean does not provide fails here:
 ///
 /// ```compile_fail
-/// use ph_beans::{BeanInfo, Marker, Query};
+/// use ph_beans::{BeanInfo, Get, Marker, Pass, Proxied, Query, Target};
 ///
 /// struct Id;
 ///
@@ -43,6 +43,12 @@ pub struct Ix3;
 ///     type Injects = ();
 ///     type Beans = ();
 ///     type State = ();
+/// }
+///
+/// impl Target for Id {}
+/// impl Proxied for Id {
+///     type Proxy = Pass<Id>;
+///     type Link = Get<Pass<Id>>;
 /// }
 ///
 /// struct App;

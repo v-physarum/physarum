@@ -14,6 +14,7 @@ use crate::descriptor::live::AccSet;
 use crate::filter::NestOk;
 use crate::filter::On;
 use crate::filter::eval::UnionEmit;
+use crate::filter::shape::ParentsOk;
 use crate::query::apply::ApplyPatch;
 use crate::query::init::Init;
 
@@ -129,17 +130,20 @@ where
 }
 
 /// Next pipeline after `.emit`.
-pub trait EmitStep<T> {
+///
+/// `K` is the inferred parent path. Call sites do not name it. A proxy's
+/// parents satisfy the check without replacing [`EventInfo::Parents`](crate::EventInfo::Parents).
+pub trait EmitStep<T, K> {
     /// Pipeline with `T` unioned into the emit tree.
     type Out;
     /// Records `tree`.
     fn emit(self, tree: T) -> Self::Out;
 }
 
-impl<E, C, T> EmitStep<T> for Init<E, C>
+impl<E, C, T, K> EmitStep<T, K> for Init<E, C>
 where
     Self: ApplyPatch<SetEmit<T>>,
-    T: NestOk,
+    T: ParentsOk<K>,
 {
     type Out = <Self as ApplyPatch<SetEmit<T>>>::Out;
 
@@ -173,9 +177,9 @@ impl<E, C> Init<E, C> {
     ///
     /// A nested event must list its outer event in [`EventInfo::Parents`].
     #[allow(clippy::needless_pass_by_value)]
-    pub fn emit<T>(self, tree: T) -> <Self as EmitStep<T>>::Out
+    pub fn emit<T, K>(self, tree: T) -> <Self as EmitStep<T, K>>::Out
     where
-        Self: EmitStep<T>,
+        Self: EmitStep<T, K>,
     {
         EmitStep::emit(self, tree)
     }

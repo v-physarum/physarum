@@ -6,7 +6,7 @@ use core::marker::PhantomData;
 
 use crate::descriptor::live::Rewait;
 use crate::descriptor::{Get, Mut};
-use crate::filter::shape::{ApplyFilter, HasMut, NestOk, Spine};
+use crate::filter::shape::{ApplyFilter, HasMut, Spine};
 use crate::filter::{And, Not, On, Or};
 
 /// Event scope stays the previous `E`.
@@ -46,7 +46,7 @@ pub trait FilterDesc {
 }
 
 /// Predicate nodes leave `E` unchanged. `On` does not implement this.
-trait KeepsScope {}
+pub(crate) trait KeepsScope {}
 
 impl KeepsScope for () {}
 
@@ -60,6 +60,8 @@ impl<A, B> KeepsScope for Or<A, B> {}
 
 impl<A> KeepsScope for Not<A> {}
 
+impl<F: KeepsScope> crate::filter::shape::ParentsOk<()> for F {}
+
 impl<F> FilterDesc for F
 where
     F: KeepsScope + HasMut,
@@ -70,7 +72,7 @@ where
 
 impl<E, I> FilterDesc for On<E, I>
 where
-    On<E, I>: HasMut + Spine + NestOk,
+    On<E, I>: HasMut + Spine,
 {
     type Mut = <On<E, I> as HasMut>::Mut;
     type Scope = Replace<<On<E, I> as Spine>::Path>;
