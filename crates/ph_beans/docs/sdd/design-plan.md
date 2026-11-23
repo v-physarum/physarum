@@ -12,6 +12,7 @@ This file tracks **what is done**, **what is still open**, and **coding MUST/FOR
 | --- | --- |
 | Rules 1–19 (… pure systems; no silent API shape changes) | Crate module structure |
 | DI / inject `&dyn`: thin `Dyn` + marker `DynView`; `Get`/`Mut` frozen (R19) | Modules (DI) → Inject `&dyn`; Accessors; rule 19 |
+| Proxy (`type = proxy`, `proxy = P::T`; no bare proxy inject; wrap on target inject) | Modules (DI) → Proxy |
 | `.inject_resources`, OpDesc L1/L2 | OpDesc; Accessors |
 | Live Accessors, wait, replace | Descriptor → Accessors |
 | Tick, `MAX_MAP_SYSTEMS = 16`, shared `List`/`Leaf`/`Grow` | Context → ContextTick |
@@ -35,7 +36,7 @@ Aligned with `design.md` rules. Prefer these IDs in review notes.
 | **R10** Generics | **One letter** from the role (`B`,`A`,`S`,`T`,`E`,`H`,`F`,`N`,`O`,…), or **letter + digit** (`E0`). | Multi-letter params (`Bean`, `Args`, `Status`, `PrevE`, `New`, …); alphabet arity runs `A,B,C,…`. |
 | **R11–12** Lists | Shared `List` / `Leaf` / `Grow`; leaf ≤ **8**; opaque `E0…`; 9 → `(List, Grow)`; 16 → **4** `List`s. | Flat 9…16 megaimpls; `MapNode` / `room_*`; tuples of domain structs in arity heads (`MapEntry<…>, …`); bare `(E0,E1)` push that overlaps `(List, Grow)`. |
 | **R13** Push | One `context/push.rs`; Args/`TakeMany` shape — one `PushShape` blanket + sealed `AddItem` (Cap6). | Split `push/{leaf,group,wide,add}.rs`; unsealed `AddItem` on 7-tuples; `MapEntry` (or other domain) in push arity heads. |
-| **R14** Meta | `BeanInfo` / `EventInfo` data-only; `Query` + `StartDesc` for entry tip. | Methods / new assoc types on meta traits without owner OK; spelling `Ctx`/`Pipe`/`MapList` on `query` / `BeanInfo`. |
+| **R14** Meta | `BeanInfo` / `EventInfo` / `ProxyInfo` data-only; `Query` + `StartDesc` for entry tip. | Methods / new assoc types on meta traits without owner OK; spelling `Ctx`/`Pipe`/`MapList` on `query` / `BeanInfo`. |
 | **R15** Phantom | One phantom per struct; named field is always **`_markers`**. | Several phantoms; named phantom as `event` / `_filter` / `_path` / … |
 | **R16** Safety | `#![forbid(unsafe_code)]`; no owned `Box<dyn>`; inject cast → `&dyn` args (may inline). | `unsafe`; `Box<dyn>` in `State`; `dyn` / `as Trait` in **provides**. |
 | **R17** Trait bounds | Shared predicates on the **trait head** (`Update`/`Tick`/`Setup`: `BeanInfo` + `Injects: ArgsView`). `Update` only for `Built`. | Same bounds re-copied on every `fn`; stub `Update for Init`; dropping `injects` from `update` because the body ignores them. |
@@ -74,7 +75,8 @@ cargo test -p ph_beans
 | **R14** meta freeze + `Query` / `StartDesc` | **Done** | `BeanInfo` data-only; `context/start.rs` (`StartDesc`); `query/entry.rs` (`Query`) |
 | **R15** one phantom per struct | **Done** | `Ctx` / `MapList` / `SetFilter` use one `_markers` or tuple phantom |
 | **R16** no `unsafe` / no `Box<dyn>` | **Done** | Rule fixed; `&dyn` views documented under Provide / inject `&dyn` |
-| Inject `&dyn` (thin `Dyn` + marker-only `DynView`; `as_dyn` on Get/Mut) | **Open** | No Shared/Exclusive; no filter-ops for `Dyn` until needed; `ph_test_asm` |
+| Inject `&dyn` (`as Trait`; claim `Bean::T`; only ArgsView is `&dyn`) | **Open** | No `as_dyn` on Get/Mut; marker-only `DynView`; `ph_test_asm` |
+| **Proxy** (`type = proxy`, wrap on target inject) | **Open** | Design under Modules → Proxy; `ProxyInfo` meta TBD; no code yet |
 | **R19** no silent structure changes | **Done** | Rule fixed; `Get`/`Mut`/`Marker` called out under Accessors |
 | Map cap 16 | **Done** | `MAX_MAP_SYSTEMS`; push refuses 17th |
 | No macros in crate src | **Done** | No `macro_rules!` under `ph_beans/src` |
@@ -111,7 +113,7 @@ Do in this order. Each item is a small PR on `ph_beans` only.
 
 ## Out of this track
 
-- Proc-macro derive: **only** `BeanInfo` + `At` (modules) and `BeanInfo` + `EventInfo` (events) — see design Derive section (**owner OK required** — R6). Not `Query` / `Setup` / `Module` / …
+- Proc-macro derive: **only** `BeanInfo` + `At` / `EventInfo` / `ProxyInfo` (+ dyn/`proxy` links) — see design Derive + Proxy (**owner OK required** — R6). Not `Query` / `Setup` / `Module` / …
 - Root `physarum` package rewrite
 - Full production scheduler beyond emit-mask rules
 

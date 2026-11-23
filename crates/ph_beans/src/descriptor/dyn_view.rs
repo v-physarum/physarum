@@ -1,79 +1,42 @@
-//! View of a claimed bean as `&dyn Trait`.
+//! View of a claimed bean as `&dyn Trait` on the **system argument** only.
+//!
+//! Call sites inject the concrete bean (`Draw::T`), like any other claim.
+//! Under the hood this is ordinary unsizing: concrete value in, `&dyn Trait`
+//! only on the callee parameter (`ArgsView`). The cast is declared by
+//! `#[inject(Draw::T as Painter)]` / `Injects` encoding — not a method on
+//! `Get` / `Mut` (design + rule 19).
 
 use core::marker::PhantomData;
 
-use crate::descriptor::{Get, Mut};
-
 /// Marker: `V` may view bean `T`.
 ///
-/// `dyn Trait` implements this only when the trait is marked for dyn inject.
-/// The claimed bean stays `T`. [`Get`] and [`Mut`] stay one type parameter.
-/// The init borrow is `&V` or `&mut V`.
+/// `dyn Trait` implements this only when the trait is marked for dyn inject
+/// (`#[config(type = dyn)]`). The claimed bean stays `T`.
 pub trait DynView<T: ?Sized> {}
 
-/// Claim `C` viewed as `V`.
+/// Type-level claim `C` viewed as `V` (derive / `Injects` encoding).
 ///
-/// `C` is [`Get<T>`](Get) or [`Mut<T>`](Mut). `V` is `dyn Trait`.
-/// The bean key stays `T`.
+/// Users do **not** construct this at `.inject_resources` — they pass
+/// `Get` / `Mut` for the concrete bean. `C` is `Get<T>` or `Mut<T>`;
+/// `V` is `dyn Trait`.
 pub struct Dyn<C, V: ?Sized> {
-    #[allow(clippy::type_complexity)]
-    _markers: PhantomData<(C, fn() -> *const V)>,
+    _claim: PhantomData<C>,
+    _view: PhantomData<fn() -> *const V>,
 }
 
 impl<C, V: ?Sized> Dyn<C, V> {
-    /// Marker for claim `C` viewed as `V`.
+    /// Type-level marker (not an inject call-site API).
     #[must_use]
     pub const fn new() -> Self {
-        Self { _markers: PhantomData }
+        Self {
+            _claim: PhantomData,
+            _view: PhantomData,
+        }
     }
 }
 
 impl<C, V: ?Sized> Default for Dyn<C, V> {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl<T> Get<T> {
-    /// This claim, viewed as `V`.
-    ///
-    /// `V` is `dyn Trait` when that trait object implements [`DynView`].
-    /// Provides stay concrete: the cast is an inject view, not a new bean.
-    ///
-    /// ```compile_fail
-    /// use ph_beans::Get;
-    ///
-    /// trait Other {
-    ///     fn go(&self);
-    /// }
-    /// struct Draw;
-    /// impl Other for Draw {
-    ///     fn go(&self) {}
-    /// }
-    ///
-    /// let _claim = Get::<Draw>::new().as_dyn::<dyn Other>();
-    /// ```
-    #[must_use]
-    pub const fn as_dyn<V>(self) -> Dyn<Self, V>
-    where
-        V: DynView<T> + ?Sized,
-    {
-        let _ = self;
-        Dyn::new()
-    }
-}
-
-impl<T> Mut<T> {
-    /// This claim, viewed as `V`.
-    ///
-    /// `V` is `dyn Trait` when that trait object implements [`DynView`].
-    /// The exclusive view is `&mut V`.
-    #[must_use]
-    pub const fn as_dyn<V>(self) -> Dyn<Self, V>
-    where
-        V: DynView<T> + ?Sized,
-    {
-        let _ = self;
-        Dyn::new()
     }
 }

@@ -318,7 +318,7 @@ Layout of `crates/ph_beans/src/`. Keep the surface readable: **small files**, **
 
    **Carriers for coherence:** `Leaf` for flat 0..=8; `Grow` for the growing second group. **`AddItem` is sealed** (only lengths 1..=6) so it cannot apply to a 7-tuple and collide with the 15→16 reshape. Opaque `E0`… / `N` only — no domain type in the push arity table.
 
-14. **Meta traits are frozen** — [`BeanInfo`], [`EventInfo`] (and any trait this rule later lists) hold **only** their declared associated types / consts. Do **not** add methods, associated types, supertraits, or default bodies to them without **owner approval**. Pipeline entry and steps live on **separate** traits (`Query`, `Setup`, `InjectResourcesStep`, …). Context tip at start lives on [`StartDesc`], not on `BeanInfo`.
+14. **Meta traits are frozen** — [`BeanInfo`], [`EventInfo`], [`ProxyInfo`] (and any trait this rule later lists) hold **only** their declared associated types / consts. Do **not** add methods, associated types, supertraits, or default bodies to them without **owner approval**. Pipeline entry and steps live on **separate** traits (`Query`, `Setup`, `InjectResourcesStep`, …). Context tip at start lives on [`StartDesc`], not on `BeanInfo`.
 
    ```rust
    // Forbidden — growing BeanInfo with entry / tip spelling
@@ -417,11 +417,11 @@ Layout of `crates/ph_beans/src/`. Keep the surface readable: **small files**, **
    ```rust
    // Forbidden without owner OK — reshape a landed type
    struct Get<T, V = ()>(…);          // was Get<T>
-   trait Marker { const T: …; fn as_dyn… } // growing Marker
+   impl<T> Get<T> { fn as_dyn<V>(…) → … } // growing Get with cast API
 
-   // Required — leave Get/Mut; add a side view
-   struct Dyn<C, V: ?Sized>(…);
-   impl<T> Get<T> { fn as_dyn<V>(self) -> Dyn<Self, V> { … } }
+   // Required — leave Get/Mut; dyn cast is attribute / Injects encoding, not a Get method
+   #[inject(Draw::T as Painter)]
+   .inject_resources(Draw::T)   // same claim shape as any other bean
    ```
 
 (Rules 8–9: extractors + `CtxConfig` / shallow assoc. Rule 10: role names. Rules 11–16: lists / push / meta / phantom / safety. Rule 17: trait-head bounds. Rule 18: pure systems. Rule 19: no silent API shape changes.)
@@ -457,7 +457,8 @@ Proc-macro / derive (when owner-allowed under rule 6) **emits only** these trait
 | Target | Emitted | Not emitted |
 | --- | --- | --- |
 | **Module** (`#[config(type = module)]`) | [`BeanInfo`], one [`At`]`<P>` per entry in `Beans` | `Query`, `Setup`, `StartDesc`, `Module`, `FromParent`, pipeline steps, … |
-| **Event** | [`BeanInfo`] + [`EventInfo`] (`Parents`, `ON`) | same exclusion; no extra event runtime traits |
+| **Event** | [`BeanInfo`] + [`EventInfo`] (`Parents`, `ON`); if `proxy = …`, also the proxied link (see **Proxy**) | same exclusion |
+| **Proxy** (`#[config(type = proxy)]`) | [`BeanInfo`] + [`ProxyInfo`] (+ `At` for its `Beans` / provides) | bare inject of the proxy; pipeline steps |
 
 Manual impls in the prototype must match this surface so derive is a drop-in.
 
@@ -494,6 +495,49 @@ impl EventInfo for Update {
 ```
 
 **Forbidden for derive:** impls of `Query`, `Setup`, `Tick`, `StartDesc`, `Module`, `FromParent`, `Claim`, step traits, or any other non-meta API. Those stay hand-written blankets / user code.
+
+### Proxy
+
+A **proxy** is a thin bean wrapper around another bean (often an event). Declare the proxy type, then point the target at it. Derive name in examples may be `Component` / `Module` — the contract is `#[config(type = …)]`.
+
+```rust
+#[derive(Component)]
+#[config(type = proxy)]
+#[provide(/* proxy-owned surface */)]
+struct Update;
+
+#[derive(Component)]
+#[config(type = event, proxy = Update::T)]
+struct GameTick; // event (or other bean) wrapped by Update
+```
+
+| Piece | Role |
+| --- | --- |
+| `#[config(type = proxy)]` | This type **is** a proxy. Emits [`BeanInfo`] + [`ProxyInfo`]. May `#[provide]` / `#[inject]` like a module surface. |
+| `proxy = Update::T` on the target | Target bean/event is **proxied by** `Update`. Marker strength follows `T` / `MUT`. |
+| [`ProxyInfo`] | Meta (rule 14): data-only link proxy ↔ target(s). Exact assoc names TBD with owner; do not grow without OK. |
+
+**Rules:**
+
+1. **Cannot inject the proxy alone** — `Update::T` / `Update::MUT` as a claim / `#[inject(Update::…)]` / `.inject_resources(Update::T)` is a **compile error** (Descriptor / `FromParent` / claim gate). The proxy is not a free-standing inject key.
+2. **Inject the target → proxy comes as wrapper** — injecting the ordinary proxied bean (`GameTick`, …) **defaults** to injecting through its proxy: the claim/view is a **wrapper** (proxy around the bean), not a bare target-only slot. Call sites still name the **bean** (`GameTick::T`), not the proxy.
+3. **Target sees proxy providers** — a bean that has a proxy has access to that proxy’s **`Provides`** (union into the target’s usable surface / `At` membership for those beans), as if the proxy’s provides were available while working under the target.
+4. **Emit from proxy → bean** — from the proxy you can **reach the proxied bean via emit** (proxy emit / schedule path activates the target). Exact emit sugar stays on the emit / event channel; the proxy does not replace `EventInfo::Parents`.
+
+```rust
+// Forbidden — inject proxy by itself
+#[inject(Update::T)]
+.inject_resources(Update::MUT)
+
+// Required — inject the bean; proxy wraps by default
+#[inject(GameTick::T)]   // wrapper: Update around GameTick
+.inject_resources(GameTick::T)
+
+// Target may use beans from Update’s #[provide(…)]
+// From Update’s pipeline / emit path → activate GameTick
+```
+
+**Not a reshape of [`Get`] / [`Mut`]** (rules 19): wrapper encoding is a **side** type / claim projection (like `Dyn`), not new params on `Get`/`Mut`.
 
 ### Inject from the parent surface
 
@@ -538,39 +582,58 @@ Markers on provide/inject may be `T` (shared / immutable) or `MUT` (exclusive).
 
 ### Inject `&dyn` (not in provides)
 
-**`dyn` / cast forms do not appear in `Provides`.** Parents expose **concrete** beans only. The child asks for a trait view at inject / claim time.
+**`dyn` / cast forms do not appear in `Provides`.** Parents expose **concrete** beans only. The cast is declared on **inject**. The claim stays the ordinary concrete bean — **not** `Get::as_dyn` / a special claim API.
 
-**Call-site (prototype):** keep [`Get`] / [`Mut`] (rule 19). Side view type [`Dyn`]`<C, V>` — `Draw::T.as_dyn::<dyn Painter>()` → `Dyn<Get<Draw>, dyn Painter>` (attribute sugar `Draw::T as Painter` later).
+**Under the hood — only the final argument is `&dyn`.** Same model as ordinary Rust unsizing: the value is a concrete struct; the callee parameter is the trait object. Coercion happens at the call boundary, nowhere else (no stored fat pointer, no claim wrapper at the inject site).
 
-**`DynView` — marker only:** `#[config(type = dyn)]` on the trait emits / implies `impl<T: Painter> DynView<T> for dyn Painter` (name exact in code). **No** `Shared` / `Exclusive` GATs, **no** `shared` / `exclusive` / `Dyn::view` helpers on the marker — `ArgsView` is `&V` / `&mut V`. Unannotated traits cannot be `as_dyn` targets (`V: DynView<T>` fails).
+```rust
+trait Platform {}
+struct Unix;
+impl Platform for Unix {}
+
+fn process(platform: &dyn Platform) { /* … */ }
+
+fn main() {
+    let platform = Unix;
+    process(&platform); // concrete in; &dyn only on the parameter
+}
+```
+
+Mapped onto beans: `Draw` is `Unix`; `Painter` is `Platform`; the system / init fn is `process`. Claim and storage stay `Draw`. **`ArgsView` is the only place that becomes `&dyn Painter` / `&mut dyn Painter`.**
+
+**Declare the view on inject; inject the bean normally:**
 
 ```rust
 #[config(type = dyn)]
 trait Painter { fn paint(&self); }
 
-// derive / manual — marker gate only
-impl<T: Painter> DynView<T> for dyn Painter {}
+impl<T: Painter> DynView<T> for dyn Painter {} // marker only (derive)
 
 struct Draw;
 impl Painter for Draw { … }
 
-#[provide(Draw::T)]
-struct App;
+#[inject(Draw::T as Painter)]   // ArgsView → &dyn Painter (final arg only)
+struct Ui;
 
-// claim view (Get/Mut unchanged)
-.inject_resources(Draw::T.as_dyn::<dyn Painter>())
-// later attribute: #[inject(Draw::T as Painter)]
+fn boot(view: &dyn Painter) { view.paint(); } // like process(&dyn Platform)
+
+// Call site — same claim as any other bean (Get/Mut unchanged, rule 19)
+.inject_resources(Draw::T)      // concrete Draw, like `let platform = Unix`
+.init_state(boot)               // framework passes &Draw as &dyn Painter
 ```
 
 | Side | Form | Meaning |
 | --- | --- | --- |
 | Provide | `Draw::T` | Concrete only. **No** `as` / `dyn` in provides. |
-| Claim / inject | `Draw::T.as_dyn::<dyn Painter>()` | `Dyn<Get<Draw>, dyn Painter>`; bean key still `Draw`. |
-| Trait | `#[config(type = dyn)]` → `DynView` | Allows the cast. |
+| Inject attr | `Draw::T as Painter` | Same bean key `Draw`; **only** `ArgsView` / system arg is `&dyn Painter` (`::MUT` → `&mut dyn Painter`). |
+| Claim / `.inject_resources` | `Draw::T` / `Draw::MUT` | **Ordinary** marker — same shape as `Keys::T`. **No** `.as_dyn(…)`. |
+| Trait | `#[config(type = dyn)]` → `DynView` | Allows `… as Painter`. |
 
-**Minimal plumbing:** `Dyn` is a thin ZST (`_markers` / `PhantomData` — rule 15). Wire **`Claim`**, **`ArgsView`** (`&'a V` / `&'a mut V`), and **`OpLeaf`** as needed for `.inject_resources`. **Do not** add `Dyn` to filter ops (`FilterOperand` / `&|/!` / `HasMut`) until a `.filter` cast is required. **Do not** reshape `Get` / `Mut` / `Marker` (rules 19 + Accessors freeze).
+**`DynView` — marker only:** no `Shared` / `Exclusive` GATs, no coerce helpers on the marker. Unannotated traits cannot appear after `as`.
 
-**Why `&dyn Trait` in args:** `ArgsView` → `args: (&dyn Painter, …)`. Simple monomorphized paths **inline** — check with [`ph_test_asm`](../../../../crates/tests/ph_test_asm) `assert_no_virtual_calls()` on release probes. Not `Box<dyn>` (rule 16).
+**Type-level (derive / encoding):** `Injects` may record the cast (e.g. thin `Dyn<Get<Draw>, dyn Painter>` **inside** assoc types) so `ArgsView` resolves to `&V`. Users never construct that at the call site — they keep writing `Draw::T`. `At` / `FromParent` / `Beans` / live claim stay **`Draw`**. **Do not** add methods on [`Get`] / [`Mut`] / [`Marker`] for the cast (rule 19). **Do not** put `Dyn` on filter ops until a `.filter` cast is required.
+
+**Why `&dyn Trait` only on the arg:** under a cast inject, system / inject `ArgsView` is `(&dyn Painter, …)` — the “конечный аргумент”. Simple monomorphized paths **inline** — [`ph_test_asm`](../../../../crates/tests/ph_test_asm) `assert_no_virtual_calls()` on release probes. Not `Box<dyn>` (rule 16).
 
 ```rust
 AsmTester::new("dyn_inject_probe.rs")
@@ -582,10 +645,9 @@ AsmTester::new("dyn_inject_probe.rs")
 
 | Surface | Type-level |
 | --- | --- |
-| `Draw::T.as_dyn::<dyn Painter>()` | `Dyn<Get<Draw>, dyn Painter>` |
-| `At` / bean key | `Draw` |
-| `ArgsView` | `&dyn Painter` / `&mut dyn Painter` |
-| `BeanInfo::Injects` (module attr later) | concrete `Draw` (cast is claim/view, not a new Beans slot) |
+| `#[inject(Draw::T as Painter)]` | `Injects` encodes cast; bean key `Draw` |
+| `.inject_resources(Draw::T)` | same claim API as any bean |
+| `ArgsView` (cast inject) | `&dyn Painter` / `&mut dyn Painter` |
 
 **Forbidden:**
 
@@ -593,13 +655,14 @@ AsmTester::new("dyn_inject_probe.rs")
 #[provide(Draw::T as Painter)]
 #[provide(dyn Painter)]
 #[inject(dyn Painter::T)]
-struct Get<T, V>(…);                 // reshaping Get — rule 19
-trait DynView<T> { type Shared<'a>; fn shared(…); }  // heavy marker — keep marker-only
-struct State { p: Box<dyn Painter> } // rule 16
-// Dyn as FilterOperand / BitAnd LHS before filter cast is needed
+Draw::T.as_dyn::<dyn Painter>()     // not a claim API; dyn only on ArgsView
+impl Get<T> { fn as_dyn… }          // do not grow Get — rule 19
+struct Get<T, V>(…);                // reshape Get
+trait DynView<T> { type Shared<'a>; … }  // keep marker-only
+struct State { p: Box<dyn Painter> }     // rule 16
 ```
 
-Derive still emits only `BeanInfo` / `At` / `EventInfo`, plus the **`DynView` marker impl** for `#[config(type = dyn)]` traits.
+Derive still emits only `BeanInfo` / `At` / `EventInfo` / `ProxyInfo` as listed, plus the **`DynView` marker impl** for `#[config(type = dyn)]` traits (and cast encoding in `Injects`).
 
 ---
 
@@ -743,7 +806,7 @@ pub trait Marker: Sized {
 }
 ```
 
-No extra type params, no new fields, no rename, no wrapping (`Get<AsDyn<…>>`, `Get<T, Dyn<…>>`, …). Features that need another view use **`Dyn<Get<T>, dyn Trait>`** / `as_dyn` (see **Inject `&dyn`**), not a reshape of `Get`/`Mut`. Covered by **rule 19** — prior owner OK required to change these types.
+No extra type params, no new fields, no rename, no wrapping (`Get<AsDyn<…>>`, `Get<T, Dyn<…>>`, …). Features that need another view use **`#[inject(Bean::T as Trait)]`** + normal `Bean::T` claims (see **Inject `&dyn`**), not methods or extra params on `Get`/`Mut`. Covered by **rule 19**.
 
 **Model: persist + explicit wait.** Live claims survive a plain `.filter`. A wait filter such as `Main::ON[Keys::MUT]` **clears** that `Mut` claim. Read/read under different filters stays allowed.
 

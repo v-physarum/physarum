@@ -1,4 +1,4 @@
-//! Inject view `&dyn Trait` on the same `Get` / `Mut` leaf.
+//! Dyn inject: concrete bean claim; cast is attribute / Injects encoding.
 
 #![forbid(unsafe_code)]
 #![allow(missing_docs)]
@@ -43,34 +43,37 @@ impl Painter for Draw {
 
 impl<T: Painter> DynView<T> for dyn Painter {}
 
-fn boot(view: &(dyn Painter + 'static)) -> u8 {
+// Prototype without attr encoding: claim is still `Draw::T` / `Draw::MUT`
+// (`ArgsView` = `&Draw`). Cast inject makes only the final arg `&dyn`
+// (design: like `fn process(p: &dyn Platform)` with a concrete `Unix`).
+fn boot(draw: &Draw) -> u8 {
+    let view: &dyn Painter = draw;
     view.paint()
 }
 
-fn boot_mut(view: &mut (dyn Painter + 'static)) -> u8 {
+fn boot_mut(draw: &mut Draw) -> u8 {
+    let view: &mut dyn Painter = draw;
     view.paint()
 }
 
 #[test]
-fn a_shared_inject_views_the_trait_object() {
+fn a_shared_inject_uses_the_ordinary_bean_claim() {
     let _built = App::query()
-        .inject_resources(Draw::T.as_dyn::<dyn Painter>())
+        .inject_resources(Draw::T)
         .init_state(boot)
         .build();
 }
 
 #[test]
-fn an_exclusive_inject_views_the_trait_object() {
+fn an_exclusive_inject_uses_the_ordinary_bean_claim() {
     let _built = App::query()
-        .inject_resources(Draw::MUT.as_dyn::<dyn Painter>())
+        .inject_resources(Draw::MUT)
         .init_state(boot_mut)
         .build();
 }
 
 #[test]
 fn a_monomorphized_dyn_view_has_no_virtual_call() {
-    // Design requires a release probe: coerce to `&dyn Trait` and call it.
-    // `ph_test_asm` does not link dependencies, so the probe is a standalone file.
     let path = write_probe(
         "dyn_inject_probe.rs",
         r"
