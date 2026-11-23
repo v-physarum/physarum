@@ -3,7 +3,7 @@
 //! [`Bench`] reads directory cases. The workspace root, the path dependency,
 //! the user package, and the output directory are taken from the workspace
 //! when the bench does not set them. [`Series`] renders a generator at several
-//! scales and checks the measured builds from a test.
+//! scales and checks the measured builds from a bench.
 #![forbid(unsafe_code)]
 
 mod cases;

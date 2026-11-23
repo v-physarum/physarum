@@ -130,7 +130,7 @@ An empty hole-edge slice expands to no tokens.
 
 ## Build bench
 
-`cargo bench --bench ph_util_foreach_measure` asks `ph_bench_build` to time a downstream crate that depends on this one. The case sources live under `benches/crates/ph_util_foreach/cases`. CI runs this bench offline.
+`cargo bench --bench ph_util_foreach_measure` asks `ph_bench_build` to time a downstream crate that depends on this one. The case sources live under `benches/crates/ph_util_foreach/cases`. `cargo bench --bench ph_util_foreach_series` times the scale series and checks that build time grows linearly. CI runs both benches offline.
 
 ## License
 
