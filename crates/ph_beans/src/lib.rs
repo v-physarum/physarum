@@ -41,7 +41,7 @@ mod tests {
         //! `emitting_the_proxy_runs_the_target` is the manual emit.
         //! `emitting_chain_level_*` repeats it for the chain.
         //! `the_target_sees_the_proxy_provides` injects `Score` from `Update`'s `Provides`.
-        //! `GameTick`: `Proxy = Proxy<GameTick>`, `Link = Get<Update>`.
+        //! `GameTick`: `Proxy = Update`, so `Link = Get<Update>`.
 
         use std::fs;
         use std::path::PathBuf;
@@ -95,9 +95,6 @@ mod tests {
             type Proxy = Proxy<Id>;
         }
         impl Target for Id {}
-        impl Proxied for Id {
-            type Link = Get<<Id as BeanInfo>::Proxy>;
-        }
 
         impl_foreach!(n in 0..7 {
             struct paste(Row, n);
@@ -109,9 +106,6 @@ mod tests {
 
             type Proxy = Proxy<paste(Row, n)>;}
             impl Target for paste(Row, n) {}
-            impl Proxied for paste(Row, n) {
-                type Link = Get<<paste(Row, n) as BeanInfo>::Proxy>;
-            }
         });
         type Score = Row0;
         type Main = Row1;
@@ -146,9 +140,6 @@ mod tests {
             type Proxy = Proxy<Shell>;
         }
         impl Target for Shell {}
-        impl Proxied for Shell {
-            type Link = Get<<Shell as BeanInfo>::Proxy>;
-        }
         impl At<Id> for Shell {
             type Ix = Ix0;
         }
@@ -187,12 +178,9 @@ mod tests {
             type Beans = ();
             type State = u8;
 
-            type Proxy = Proxy<GameTick>;
+            type Proxy = Update;
         }
         impl Target for GameTick {}
-        impl Proxied for GameTick {
-            type Link = Get<Update>;
-        }
         impl EventInfo for GameTick {
             type Parents = ();
         }
@@ -217,12 +205,9 @@ mod tests {
             type Beans = ();
             type State = ();
 
-            type Proxy = Proxy<Loud>;
+            type Proxy = Gate;
         }
         impl Target for Loud {}
-        impl Proxied for Loud {
-            type Link = Mut<Gate>;
-        }
 
         struct Core;
         struct Inner;
@@ -236,12 +221,9 @@ mod tests {
             type Beans = ();
             type State = u8;
 
-            type Proxy = Proxy<Core>;
+            type Proxy = Inner;
         }
         impl Target for Core {}
-        impl Proxied for Core {
-            type Link = Get<Inner>;
-        }
         impl EventInfo for Core {
             type Parents = ();
         }
@@ -331,9 +313,6 @@ mod tests {
             type Proxy = Proxy<Room>;
         }
         impl Target for Room {}
-        impl Proxied for Room {
-            type Link = Get<<Room as BeanInfo>::Proxy>;
-        }
         impl At<Core> for Room {
             type Ix = Ix0;
         }
@@ -388,12 +367,20 @@ mod tests {
         fn link_records_shared_and_exclusive_markers() {
             fn shared<T: Same<Get<Update>>>() {}
             fn exclusive<T: Same<Mut<Gate>>>() {}
-            fn universal<B, T: Same<Proxy<B>>>() {}
+            fn default_link<B>()
+            where
+                B: BeanInfo<Proxy = Proxy<B>> + Proxied<Link = Get<Proxy<B>>>,
+            {
+            }
+            fn named<P: Same<Update>>() {}
+            fn gate<P: Same<Gate>>() {}
+            fn inner<P: Same<Inner>>() {}
+            default_link::<Id>();
             shared::<<GameTick as Proxied>::Link>();
             exclusive::<<Loud as Proxied>::Link>();
-            universal::<GameTick, <GameTick as BeanInfo>::Proxy>();
-            universal::<Loud, <Loud as BeanInfo>::Proxy>();
-            universal::<Core, <Core as BeanInfo>::Proxy>();
+            named::<<GameTick as BeanInfo>::Proxy>();
+            gate::<<Loud as BeanInfo>::Proxy>();
+            inner::<<Core as BeanInfo>::Proxy>();
             shared::<<Update as ProxyInfo>::Link>();
             exclusive::<<Gate as ProxyInfo>::Link>();
         }
@@ -416,9 +403,6 @@ mod tests {
                 
                 type Proxy = Proxy<Score>;}
                 impl Target for Score {}
-                impl Proxied for Score {
-                    type Link = Get<<Score as BeanInfo>::Proxy>;
-                }
                 impl BeanInfo for Update {
                     type Provides = (); type Injects = (); type Beans = (); type State = ();
                 
@@ -430,9 +414,8 @@ mod tests {
                 impl BeanInfo for GameTick {
                     type Provides = (); type Injects = (); type Beans = (); type State = ();
                 
-                type Proxy = Proxy<GameTick>;}
+                type Proxy = Update;}
                 impl Target for GameTick {}
-                impl Proxied for GameTick { type Link = Get<Update>; }
                 fn probe() { let _claim = GameTick::query().inject_resources(Score::T); }
                 ",
                 "ClaimVia",
@@ -685,7 +668,7 @@ mod tests {
             impl BeanInfo for Tick {
                 type Provides = (); type Injects = (); type Beans = (); type State = ();
             
-            type Proxy = Proxy<Tick>;}
+            type Proxy = Inner;}
             impl ph_beans::Target for Tick {}
             impl BeanInfo for Inner {
                 type Provides = (); type Injects = (); type Beans = (); type State = ();
@@ -701,7 +684,6 @@ mod tests {
             impl ProxyInfo for Outer {
                 type Targets = Inner; type Link = Get<Outer>; type Chain = Stop;
             }
-            impl Proxied for Tick { type Link = Get<Inner>; }
             impl BeanInfo for App {
                 type Provides = (); type Injects = (); type Beans = (); type State = ();
             
@@ -768,7 +750,7 @@ mod tests {
 
         use ph_beans::{
             At, BeanInfo, EventInfo, Get, Ix0, Ix1, Marker, Module, Mut, OfInject, OfParent,
-            OfProvide, OfProvide1, Proxied, Proxy, Query, Setup, Target, Tick,
+            OfProvide, OfProvide1, Proxy, Query, Setup, Target, Tick,
         };
 
         struct Id(u8);
@@ -817,25 +799,10 @@ mod tests {
         }
 
         impl Target for Id {}
-        impl Proxied for Id {
-            type Link = Get<<Id as BeanInfo>::Proxy>;
-        }
         impl Target for Keys {}
-        impl Proxied for Keys {
-            type Link = Get<<Keys as BeanInfo>::Proxy>;
-        }
         impl Target for App {}
-        impl Proxied for App {
-            type Link = Get<<App as BeanInfo>::Proxy>;
-        }
         impl Target for Logic {}
-        impl Proxied for Logic {
-            type Link = Get<<Logic as BeanInfo>::Proxy>;
-        }
         impl Target for Render {}
-        impl Proxied for Render {
-            type Link = Get<<Render as BeanInfo>::Proxy>;
-        }
 
         impl At<Id> for App {
             type Ix = Ix0;
@@ -972,8 +939,7 @@ mod tests {
         use core::cell::Cell;
 
         use ph_beans::{
-            At, BeanInfo, Ctx, EventInfo, Get, Init, Ix0, Marker, Pipe, Proxied, Proxy, Query,
-            Target, Tick,
+            At, BeanInfo, Ctx, EventInfo, Init, Ix0, Marker, Pipe, Proxy, Query, Target, Tick,
         };
         use ph_util_foreach::impl_foreach;
 
@@ -1052,25 +1018,10 @@ mod tests {
         }
 
         impl Target for Sched {}
-        impl Proxied for Sched {
-            type Link = Get<<Sched as BeanInfo>::Proxy>;
-        }
         impl Target for Keys {}
-        impl Proxied for Keys {
-            type Link = Get<<Keys as BeanInfo>::Proxy>;
-        }
         impl Target for Update {}
-        impl Proxied for Update {
-            type Link = Get<<Update as BeanInfo>::Proxy>;
-        }
         impl Target for Graphics {}
-        impl Proxied for Graphics {
-            type Link = Get<<Graphics as BeanInfo>::Proxy>;
-        }
         impl Target for Main {}
-        impl Proxied for Main {
-            type Link = Get<<Main as BeanInfo>::Proxy>;
-        }
 
         fn graphics_under_update<A, S, P>(
             _pipeline: &Init<(Graphics, Update), Ctx<Sched, A, S, P>>,
@@ -1214,7 +1165,7 @@ mod tests {
         use std::path::PathBuf;
         use std::sync::atomic::{AtomicU64, Ordering};
 
-        use ph_beans::{At, BeanInfo, DynView, Get, Ix0, Marker, Proxied, Proxy, Query, Target};
+        use ph_beans::{At, BeanInfo, DynView, Ix0, Marker, Proxy, Query, Target};
         use ph_test_asm::AsmTester;
 
         struct Draw(u8);
@@ -1243,13 +1194,7 @@ mod tests {
         }
 
         impl Target for Draw {}
-        impl Proxied for Draw {
-            type Link = Get<<Draw as BeanInfo>::Proxy>;
-        }
         impl Target for App {}
-        impl Proxied for App {
-            type Link = Get<<App as BeanInfo>::Proxy>;
-        }
 
         trait Painter {
             fn paint(&self) -> u8;
@@ -1440,8 +1385,6 @@ mod tests {
             
             type Proxy = Proxy<Logic>;}
             impl Target for Logic {}
-            impl Proxied for Logic { type Link = Get<<Logic as BeanInfo>::Proxy>;
-            }
             impl BeanInfo for App {
                 type Provides = Get<Logic>; type Injects = (); type Beans = Get<Logic>; type State = ();
             
@@ -1463,8 +1406,6 @@ mod tests {
             
             type Proxy = Proxy<Id>;}
             impl Target for Id {}
-            impl Proxied for Id { type Link = Get<<Id as BeanInfo>::Proxy>;
-            }
             struct App;
             impl BeanInfo for App {
                 type Provides = (Id,); type Injects = (); type Beans = (Id,); type State = ();
@@ -1487,8 +1428,6 @@ mod tests {
             
             type Proxy = Proxy<App>;}
             impl Target for App {}
-            impl Proxied for App { type Link = Get<<App as BeanInfo>::Proxy>;
-            }
             fn boot(_: ()) -> u8 { 1 }
             fn probe() { let _twice = App::query().init_state(boot).init_state(boot); }
             ",
@@ -1507,8 +1446,6 @@ mod tests {
             
             type Proxy = Proxy<App>;}
             impl Target for App {}
-            impl Proxied for App { type Link = Get<<App as BeanInfo>::Proxy>;
-            }
             fn probe() { let _twice = App::query().init_state_default().init_state_default(); }
             ",
                 "method `init_state_default` exists",
@@ -1528,8 +1465,6 @@ mod tests {
             
             type Proxy = Proxy<Keys>;}
             impl Target for Keys {}
-            impl Proxied for Keys { type Link = Get<<Keys as BeanInfo>::Proxy>;
-            }
             impl BeanInfo for Main {
                 type Provides = (); type Injects = (); type Beans = (); type State = ();
             
@@ -1562,8 +1497,6 @@ mod tests {
             
             type Proxy = Proxy<App>;}
             impl Target for App {}
-            impl Proxied for App { type Link = Get<<App as BeanInfo>::Proxy>;
-            }
             fn boot(_: ()) -> u8 { 1 }
             impl Setup for App {
                 fn setup(self) -> impl Tick<Self> { App::query().init_state(boot) }

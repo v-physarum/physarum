@@ -39,7 +39,7 @@ pub trait BeanInfo: Sized {
     type Beans;
     /// Owned state of this bean only.
     type State;
-    /// Always [`Proxy<Self>`](crate::Proxy). The default link is `Get<Self::Proxy>`.
+    /// Wrapping proxy. [`Proxy<Self>`](crate::Proxy) when none is named.
     type Proxy: ProxyInfo<Targets = Self>;
 }
 

@@ -6,7 +6,7 @@
 //! `a_chain_nests_wrappers_outer_around_inner`.
 //! Chain emits are `emitting_chain_level_*`, expanded with `impl_foreach`.
 //! A component injects a proxy object only when that proxy lists it in `Provides`.
-//! `BeanInfo::Proxy` is always `Proxy<Self>`. `Link` names the real proxy.
+//! `BeanInfo::Proxy` is that proxy. `Proxied::Link` is the proxy's own link.
 
 use core::any::TypeId;
 use core::marker::PhantomData;
@@ -62,27 +62,23 @@ pub trait ProxyInfo: crate::BeanInfo {
     type Chain;
 }
 
-/// Bean wrapped by the proxy named in [`Link`](Proxied::Link).
+/// Bean wrapped by [`BeanInfo::Proxy`](crate::BeanInfo::Proxy).
 ///
-/// [`BeanInfo::Proxy`](crate::BeanInfo::Proxy) is always [`Proxy<Self>`].
-/// No explicit proxy uses `Link = Get<<Self as BeanInfo>::Proxy>`.
-/// An explicit proxy is `Link = Get<Update>` (`T`) or `Mut<Update>` (`MUT`).
+/// Blanket for every [`BeanInfo`](crate::BeanInfo).
+/// [`Link`](Proxied::Link) is that proxy's [`ProxyInfo::Link`](ProxyInfo::Link).
+/// No named proxy: `Proxy<Self>`, so the link is `Get<Proxy<Self>>`.
+/// A named proxy is `BeanInfo::Proxy` (`Get<Update>` or `Mut<Gate>`).
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not a proxied target",
-    note = "inject the target bean; a proxy is not a free-standing key. `BeanInfo::Proxy` is `Proxy<Self>`. `Link` is `Get<P>` or `Mut<P>` of the wrapping proxy"
+    note = "inject the target bean; a proxy is not a free-standing key. `Link` is `BeanInfo::Proxy`'s `Get` or `Mut`"
 )]
 pub trait Proxied: crate::BeanInfo {
-    /// `Get<P>` or `Mut<P>` of the proxy that wraps `Self`.
-    /// The default `P` is [`<Self as BeanInfo>::Proxy`](crate::BeanInfo::Proxy).
+    /// `Get<P>` or `Mut<P>` of the wrapping proxy.
     type Link: Marked<Target: ProxyInfo<Targets = Self>>;
 }
 
-impl<P, O> Proxied for P
-where
-    P: ProxyInfo<Chain = More<O>>,
-    O: ProxyInfo<Targets = P>,
-{
-    type Link = O::Link;
+impl<T: crate::BeanInfo> Proxied for T {
+    type Link = <T::Proxy as ProxyInfo>::Link;
 }
 
 /// Proxy used when a bean names none. `Targets = B`, `Link = Get<Self>`, `Chain = Stop`.
@@ -270,7 +266,7 @@ where
 impl<P, B, O> EnterAll<B, More<O>> for P
 where
     B: crate::BeanInfo,
-    P: crate::BeanInfo + InitPath<B> + Proxied<Link: Marked<Target = O>>,
+    P: InitPath<B> + ProxyInfo<Chain = More<O>>,
     O: ProxyInfo<Targets = P> + InitPath<P> + EnterAll<P, O::Chain>,
 {
     fn enter_all() {

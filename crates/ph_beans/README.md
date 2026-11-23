@@ -3,7 +3,7 @@
 A bean pipeline records resource claims (`.inject_resources`), init, maps/filters/emit, and `.build()`. [`Descriptor`](src/lib.rs) carries a single status for that chain. [`Setup::setup`](src/query/setup.rs) returns a tick only when the status is ready. Design: [`docs/sdd/design.md`](docs/sdd/design.md).
 
 ```rust
-use ph_beans::{At, BeanInfo, Get, Ix0, Ix1, Marker, Proxied, Proxy, Query, Setup, Target, Tick};
+use ph_beans::{At, BeanInfo, Ix0, Ix1, Marker, Proxy, Query, Setup, Target, Tick};
 
 struct Id(u8);
 struct Keys(u8);
@@ -42,17 +42,8 @@ impl At<Keys> for App {
 }
 
 impl Target for Id {}
-impl Proxied for Id {
-    type Link = Get<<Id as BeanInfo>::Proxy>;
-}
 impl Target for Keys {}
-impl Proxied for Keys {
-    type Link = Get<<Keys as BeanInfo>::Proxy>;
-}
 impl Target for App {}
-impl Proxied for App {
-    type Link = Get<<App as BeanInfo>::Proxy>;
-}
 
 fn boot(args: (&Id, &mut Keys)) -> u8 {
     let (id, keys) = args;
