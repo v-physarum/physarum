@@ -5,7 +5,13 @@
 #![forbid(unsafe_code)]
 #![allow(missing_docs)]
 
+use std::fs;
+use std::path::PathBuf;
+use std::time::SystemTime;
+
 use core::cell::Cell;
+
+use ph_test_errors::ErrorTester;
 
 use ph_beans::{
     At, BeanInfo, ClaimVia, Ctx, DefaultProxy, EventInfo, FromChain, FromProxy, Fwd, Get, Init,
@@ -564,4 +570,166 @@ fn init_of_a_chain_runs_outer_then_inner() {
     let built = Core::query().init_state_default().build();
     assert_eq!(ORDER.with(Cell::get), 123);
     assert_eq!(*built.state(), 7);
+}
+
+#[test]
+fn injecting_a_proxy_is_rejected() {
+    fail(
+        "
+        use ph_beans::{At, BeanInfo, Ix0, Marker, ProxyInfo, Query, Stop, Target};
+        struct Tick;
+        struct Update;
+        struct App;
+        impl BeanInfo for Tick {
+            type Provides = (); type Injects = (); type Beans = (); type State = ();
+        }
+        impl Target for Tick {}
+        impl BeanInfo for Update {
+            type Provides = (); type Injects = (); type Beans = (); type State = ();
+        }
+        impl ProxyInfo for Update {
+            type Targets = Tick; type Link = ph_beans::Get<Update>; type Chain = Stop;
+        }
+        impl BeanInfo for App {
+            type Provides = (); type Injects = (); type Beans = (); type State = ();
+        }
+        impl At<Update> for App { type Ix = Ix0; }
+        fn probe() { let _claim = App::query().inject_resources(Update::MUT); }
+        ",
+        "ClaimVia",
+    );
+}
+
+#[test]
+fn injecting_a_proxy_provide_is_rejected() {
+    fail(
+        "
+        use ph_beans::{BeanInfo, FromParent, Get, OfProvide, ProxyInfo, Stop, Target};
+        struct Tick;
+        struct Update;
+        struct App;
+        impl BeanInfo for Tick {
+            type Provides = (); type Injects = (); type Beans = (); type State = ();
+        }
+        impl Target for Tick {}
+        impl BeanInfo for Update {
+            type Provides = (); type Injects = (); type Beans = (); type State = ();
+        }
+        impl ProxyInfo for Update {
+            type Targets = Tick; type Link = Get<Update>; type Chain = Stop;
+        }
+        impl BeanInfo for App {
+            type Provides = Get<Update>; type Injects = (); type Beans = Get<Update>; type State = ();
+        }
+        fn probe() { fn inject<C: FromParent<App, OfProvide>>() {} inject::<Get<Update>>(); }
+        ",
+        "not an injectable bean",
+    );
+}
+
+#[test]
+fn claiming_a_proxy_is_rejected() {
+    fail(
+        "
+        use ph_beans::query::Claim;
+        use ph_beans::{At, BeanInfo, Ix0, ProxyInfo, Stop, Target};
+        struct Tick;
+        struct Update;
+        struct App;
+        impl BeanInfo for Tick {
+            type Provides = (); type Injects = (); type Beans = (); type State = ();
+        }
+        impl Target for Tick {}
+        impl BeanInfo for Update {
+            type Provides = (); type Injects = (); type Beans = (); type State = ();
+        }
+        impl ProxyInfo for Update {
+            type Targets = Tick; type Link = ph_beans::Get<Update>; type Chain = Stop;
+        }
+        impl BeanInfo for App {
+            type Provides = (); type Injects = (); type Beans = (); type State = ();
+        }
+        impl At<Update> for App { type Ix = Ix0; }
+        fn probe<C: Claim<App>>() {}
+        fn call() { probe::<ph_beans::Mut<Update>>(); }
+        ",
+        "not an injectable bean",
+    );
+}
+
+#[test]
+fn injecting_an_inner_proxy_is_rejected() {
+    fail(
+        "
+        use ph_beans::{At, BeanInfo, Get, Ix0, Marker, More, Proxied, ProxyInfo, Query, Stop};
+        struct Tick;
+        struct Inner;
+        struct Outer;
+        struct App;
+        impl BeanInfo for Tick {
+            type Provides = (); type Injects = (); type Beans = (); type State = ();
+        }
+        impl ph_beans::Target for Tick {}
+        impl BeanInfo for Inner {
+            type Provides = (); type Injects = (); type Beans = (); type State = ();
+        }
+        impl ProxyInfo for Inner {
+            type Targets = Tick; type Link = Get<Inner>; type Chain = More<Outer>;
+        }
+        impl BeanInfo for Outer {
+            type Provides = (); type Injects = (); type Beans = (); type State = ();
+        }
+        impl ProxyInfo for Outer {
+            type Targets = Inner; type Link = Get<Outer>; type Chain = Stop;
+        }
+        impl Proxied for Tick { type Proxy = Inner; type Link = Get<Inner>; }
+        impl BeanInfo for App {
+            type Provides = (); type Injects = (); type Beans = (); type State = ();
+        }
+        impl At<Inner> for App { type Ix = Ix0; }
+        fn probe() { let _claim = App::query().inject_resources(Inner::T); }
+        ",
+        "ClaimVia",
+    );
+}
+
+fn fail(body: &str, description: &str) {
+    ErrorTester::source(body)
+        .extern_crate("ph_beans", beans_rlib())
+        .assert_description(description);
+}
+
+fn beans_rlib() -> PathBuf {
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let target = std::env::var_os("CARGO_TARGET_DIR")
+        .map_or_else(|| manifest.join("../../target"), PathBuf::from);
+    let mut found = Vec::new();
+    collect_rlib(&target.join("debug/deps"), &mut found);
+    let build = target.join("debug/build/ph_beans");
+    if let Ok(hashes) = fs::read_dir(build) {
+        for hash in hashes.flatten() {
+            collect_rlib(&hash.path().join("out"), &mut found);
+        }
+    }
+    found
+        .into_iter()
+        .max_by_key(|path| {
+            path.metadata()
+                .and_then(|meta| meta.modified())
+                .unwrap_or(SystemTime::UNIX_EPOCH)
+        })
+        .expect("ph_beans rlib")
+}
+
+fn collect_rlib(dir: &std::path::Path, found: &mut Vec<PathBuf>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with("libph_beans-") && name.ends_with(".rlib") {
+            found.push(entry.path());
+        }
+    }
 }
