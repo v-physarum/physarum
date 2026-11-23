@@ -6,7 +6,7 @@
 //! `a_chain_nests_wrappers_outer_around_inner`.
 //! Chain emits are `emitting_chain_level_*`, expanded with `impl_foreach`.
 //! A component injects a proxy object only when that proxy lists it in `Provides`.
-//! `Proxied::Proxy` is always `DefaultProxy<Self>`. `Link` names the real proxy.
+//! `BeanInfo::Proxy` is always `Proxy<Self>`. `Link` names the real proxy.
 
 use core::any::TypeId;
 use core::marker::PhantomData;
@@ -45,7 +45,7 @@ pub trait LinkMark<P>: Marked<Target = P> {}
 
 impl<S, C> LinkMark<S> for C where C: Marked<Target = S> {}
 
-/// No further proxy. `DefaultProxy` ends here too.
+/// No further proxy. [`Proxy`] ends here too.
 pub struct Stop;
 
 /// Next outer proxy.
@@ -64,17 +64,16 @@ pub trait ProxyInfo: crate::BeanInfo {
 
 /// Bean wrapped by the proxy named in [`Link`](Proxied::Link).
 ///
-/// `Proxy` is always [`DefaultProxy<Self>`](DefaultProxy). An explicit proxy
-/// such as `Update` is `Link = Get<Update>` (`T`) or `Mut<Update>` (`MUT`).
-/// No `proxy` attribute keeps `Link = Get<DefaultProxy<Self>>`.
+/// [`BeanInfo::Proxy`](crate::BeanInfo::Proxy) is always [`Proxy<Self>`].
+/// No explicit proxy uses `Link = Get<<Self as BeanInfo>::Proxy>`.
+/// An explicit proxy is `Link = Get<Update>` (`T`) or `Mut<Update>` (`MUT`).
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not a proxied target",
-    note = "inject the target bean; a proxy is not a free-standing key. `Proxy` is `DefaultProxy<Self>`. `Link` is `Get<P>` or `Mut<P>` of the wrapping proxy"
+    note = "inject the target bean; a proxy is not a free-standing key. `BeanInfo::Proxy` is `Proxy<Self>`. `Link` is `Get<P>` or `Mut<P>` of the wrapping proxy"
 )]
 pub trait Proxied: crate::BeanInfo {
-    /// Always [`DefaultProxy<Self>`](DefaultProxy).
-    type Proxy: ProxyInfo<Targets = Self>;
     /// `Get<P>` or `Mut<P>` of the proxy that wraps `Self`.
+    /// The default `P` is [`<Self as BeanInfo>::Proxy`](crate::BeanInfo::Proxy).
     type Link: Marked<Target: ProxyInfo<Targets = Self>>;
 }
 
@@ -83,14 +82,13 @@ where
     P: ProxyInfo<Chain = More<O>>,
     O: ProxyInfo<Targets = P>,
 {
-    type Proxy = DefaultProxy<P>;
     type Link = O::Link;
 }
 
 /// Proxy used when a bean names none. `Targets = B`, `Link = Get<Self>`, `Chain = Stop`.
-pub struct DefaultProxy<B>(PhantomData<B>);
+pub struct Proxy<B>(PhantomData<B>);
 
-impl<B: crate::BeanInfo> crate::BeanInfo for DefaultProxy<B> {
+impl<B: crate::BeanInfo> crate::BeanInfo for Proxy<B> {
     /// This proxy provides no beans of its own.
     type Provides = ();
     /// This proxy injects nothing.
@@ -99,15 +97,17 @@ impl<B: crate::BeanInfo> crate::BeanInfo for DefaultProxy<B> {
     type Beans = ();
     /// The target keeps its own state.
     type State = ();
+    /// The wrapper's own default proxy.
+    type Proxy = Proxy<Proxy<B>>;
 }
 
-impl<B: crate::BeanInfo> ProxyInfo for DefaultProxy<B> {
+impl<B: crate::BeanInfo> ProxyInfo for Proxy<B> {
     type Targets = B;
-    type Link = Get<DefaultProxy<B>>;
+    type Link = Get<Proxy<B>>;
     type Chain = Stop;
 }
 
-impl<B: crate::BeanInfo> crate::EventInfo for DefaultProxy<B> {
+impl<B: crate::BeanInfo> crate::EventInfo for Proxy<B> {
     /// No parent events.
     type Parents = ();
 }
@@ -153,7 +153,7 @@ pub trait InitPath<B: crate::BeanInfo>: ProxyInfo<Targets = B> {
     fn enter() {}
 }
 
-impl<B: crate::BeanInfo> InitPath<B> for DefaultProxy<B> {}
+impl<B: crate::BeanInfo> InitPath<B> for Proxy<B> {}
 
 /// Projects a call-site claim onto its proxy wrapper.
 pub trait ApplyProxy {

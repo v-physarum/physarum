@@ -17,8 +17,8 @@ pub use inject::{
 };
 pub use proxy::Marked;
 pub use proxy::{
-    ApplyProxy, DefaultProxy, FreeKey, Fwd, InitPath, LinkMark, More, ParentList, Proxied,
-    ProxyInfo, Stop, Target, Via,
+    ApplyProxy, FreeKey, Fwd, InitPath, LinkMark, More, ParentList, Proxied, Proxy, ProxyInfo,
+    Stop, Target, Via,
 };
 pub use proxy::{DriveInit, Enfold, EnterAll, ForwardInit, WrapFwd};
 
@@ -39,6 +39,8 @@ pub trait BeanInfo: Sized {
     type Beans;
     /// Owned state of this bean only.
     type State;
+    /// Always [`Proxy<Self>`](crate::Proxy). The default link is `Get<Self::Proxy>`.
+    type Proxy: ProxyInfo<Targets = Self>;
 }
 
 /// Extra descriptor for an event, beside [`BeanInfo`].

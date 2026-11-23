@@ -3,7 +3,7 @@
 A bean pipeline records resource claims (`.inject_resources`), init, maps/filters/emit, and `.build()`. [`Descriptor`](src/lib.rs) carries a single status for that chain. [`Setup::setup`](src/query/setup.rs) returns a tick only when the status is ready. Design: [`docs/sdd/design.md`](docs/sdd/design.md).
 
 ```rust
-use ph_beans::{At, BeanInfo, DefaultProxy, Get, Ix0, Ix1, Marker, Proxied, Query, Setup, Target, Tick};
+use ph_beans::{At, BeanInfo, Get, Ix0, Ix1, Marker, Proxied, Proxy, Query, Setup, Target, Tick};
 
 struct Id(u8);
 struct Keys(u8);
@@ -14,6 +14,7 @@ impl BeanInfo for Id {
     type Injects = ();
     type Beans = ();
     type State = u8;
+    type Proxy = Proxy<Id>;
 }
 
 impl BeanInfo for Keys {
@@ -21,6 +22,7 @@ impl BeanInfo for Keys {
     type Injects = ();
     type Beans = ();
     type State = u8;
+    type Proxy = Proxy<Keys>;
 }
 
 impl BeanInfo for App {
@@ -28,6 +30,7 @@ impl BeanInfo for App {
     type Injects = ();
     type Beans = (Id, Keys);
     type State = u8;
+    type Proxy = Proxy<App>;
 }
 
 impl At<Id> for App {
@@ -40,18 +43,15 @@ impl At<Keys> for App {
 
 impl Target for Id {}
 impl Proxied for Id {
-    type Proxy = DefaultProxy<Id>;
-    type Link = Get<DefaultProxy<Id>>;
+    type Link = Get<<Id as BeanInfo>::Proxy>;
 }
 impl Target for Keys {}
 impl Proxied for Keys {
-    type Proxy = DefaultProxy<Keys>;
-    type Link = Get<DefaultProxy<Keys>>;
+    type Link = Get<<Keys as BeanInfo>::Proxy>;
 }
 impl Target for App {}
 impl Proxied for App {
-    type Proxy = DefaultProxy<App>;
-    type Link = Get<DefaultProxy<App>>;
+    type Link = Get<<App as BeanInfo>::Proxy>;
 }
 
 fn boot(args: (&Id, &mut Keys)) -> u8 {
