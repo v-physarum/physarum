@@ -2,7 +2,7 @@
 
 use core::any::TypeId;
 
-use crate::bean::{ParentList, Proxied};
+use crate::bean::{More, ParentList, Proxied, ProxyInfo, Stop};
 use crate::descriptor::{Get, Mut};
 use crate::filter::{And, Not, On, Or};
 
@@ -133,16 +133,41 @@ fn listed(emitted: &[TypeId], id: TypeId) -> bool {
     emitted.contains(&id)
 }
 
+/// Events of every proxy from `Self` out to the end of the chain.
+#[doc(hidden)]
+pub trait ChainEmit<Link> {
+    /// `true` when `emitted` names this proxy, one of its parents, or an outer proxy.
+    fn hit(emitted: &[TypeId]) -> bool;
+}
+
+impl<P> ChainEmit<Stop> for P
+where
+    P: ParentList + 'static,
+{
+    fn hit(emitted: &[TypeId]) -> bool {
+        listed(emitted, TypeId::of::<P>()) || P::listed(emitted)
+    }
+}
+
+impl<P, O> ChainEmit<More<O>> for P
+where
+    P: ParentList + 'static,
+    O: ProxyInfo + ChainEmit<O::Chain>,
+{
+    fn hit(emitted: &[TypeId]) -> bool {
+        listed(emitted, TypeId::of::<P>()) || P::listed(emitted) || O::hit(emitted)
+    }
+}
+
 impl<E, I> MatchEmit for On<E, I>
 where
     E: 'static + Proxied,
-    E::Proxy: 'static + ParentList,
+    E::Proxy: ChainEmit<<E::Proxy as ProxyInfo>::Chain>,
     I: MatchEmit,
 {
     fn matches(emitted: &[TypeId]) -> bool {
         (listed(emitted, TypeId::of::<E>())
-            || listed(emitted, TypeId::of::<E::Proxy>())
-            || <E::Proxy as ParentList>::listed(emitted))
+            || <E::Proxy as ChainEmit<<E::Proxy as ProxyInfo>::Chain>>::hit(emitted))
             && I::matches(emitted)
     }
 }

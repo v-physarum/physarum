@@ -8,15 +8,21 @@
 use core::cell::Cell;
 
 use ph_beans::{
-    At, BeanInfo, ClaimVia, Ctx, EventInfo, FromProxy, Fwd, Get, Init, InitPath, Ix0, Ix1, Live,
-    Marker, Mut, Pass, Pipe, Proxied, ProxyInfo, Query, Target, Tick, Via, WithInit,
+    At, BeanInfo, ClaimVia, Ctx, EventInfo, FromChain, FromProxy, Fwd, Get, Init, InitPath, Ix0,
+    Ix1, Live, Marker, More, Mut, Own, Pass, Pipe, Proxied, ProxyInfo, Query, Stop, Target, Tick,
+    Via, WithInit,
 };
 
 thread_local! {
     static HITS: Cell<u8> = const { Cell::new(0) };
+    static ORDER: Cell<u16> = const { Cell::new(0) };
 }
 
 fn idle(_: ()) {}
+
+fn core_state(_: ()) -> u8 {
+    0
+}
 
 fn hit() {
     HITS.with(|hits| hits.set(hits.get() + 1));
@@ -24,6 +30,14 @@ fn hit() {
 
 fn reset() {
     HITS.with(|hits| hits.set(0));
+}
+
+fn mark(step: u16) {
+    ORDER.with(|order| order.set(order.get() * 10 + step));
+}
+
+fn reset_order() {
+    ORDER.with(|order| order.set(0));
 }
 
 struct Id;
@@ -88,6 +102,7 @@ impl BeanInfo for Update {
 impl ProxyInfo for Update {
     type Targets = GameTick;
     type Link = Get<Update>;
+    type Chain = Stop;
 }
 impl At<Score> for Update {
     type Ix = Ix0;
@@ -129,6 +144,7 @@ impl BeanInfo for Gate {
 impl ProxyInfo for Gate {
     type Targets = Loud;
     type Link = Mut<Gate>;
+    type Chain = Stop;
 }
 
 impl BeanInfo for Loud {
@@ -185,6 +201,178 @@ impl EventInfo for Plain {
     type Parents = ();
 }
 
+struct Core;
+struct Inner;
+struct Mid;
+struct Outer;
+struct Prize;
+struct Bonus;
+struct Alarm;
+struct Room;
+
+impl BeanInfo for Core {
+    type Provides = ();
+    type Injects = ();
+    type Beans = ();
+    type State = u8;
+}
+impl Target for Core {}
+impl Proxied for Core {
+    type Proxy = Inner;
+    type Link = Get<Inner>;
+}
+impl EventInfo for Core {
+    type Parents = ();
+}
+
+impl BeanInfo for Inner {
+    type Provides = ();
+    type Injects = ();
+    type Beans = ();
+    type State = ();
+}
+impl ProxyInfo for Inner {
+    type Targets = Core;
+    type Link = Get<Inner>;
+    type Chain = More<Mid>;
+}
+impl Proxied for Inner {
+    type Proxy = Mid;
+    type Link = Get<Mid>;
+}
+impl EventInfo for Inner {
+    type Parents = ();
+}
+impl InitPath<Core> for Inner {
+    fn install<H>(handler: H) -> Fwd<Self, H> {
+        Fwd::new(handler)
+    }
+
+    fn default_state() -> u8 {
+        7
+    }
+
+    fn enter() {
+        mark(3);
+    }
+}
+
+impl BeanInfo for Mid {
+    type Provides = (Prize,);
+    type Injects = ();
+    type Beans = (Prize,);
+    type State = ();
+}
+impl ProxyInfo for Mid {
+    type Targets = Inner;
+    type Link = Get<Mid>;
+    type Chain = More<Outer>;
+}
+impl Proxied for Mid {
+    type Proxy = Outer;
+    type Link = Get<Outer>;
+}
+impl EventInfo for Mid {
+    type Parents = ();
+}
+impl At<Prize> for Mid {
+    type Ix = Ix0;
+}
+impl InitPath<Inner> for Mid {
+    fn install<H>(handler: H) -> Fwd<Self, H> {
+        Fwd::new(handler)
+    }
+
+    fn default_state() {}
+
+    fn enter() {
+        mark(2);
+    }
+}
+
+impl BeanInfo for Outer {
+    type Provides = (Bonus,);
+    type Injects = ();
+    type Beans = (Bonus,);
+    type State = ();
+}
+impl ProxyInfo for Outer {
+    type Targets = Mid;
+    type Link = Get<Outer>;
+    type Chain = Stop;
+}
+impl EventInfo for Outer {
+    type Parents = Alarm;
+}
+impl At<Bonus> for Outer {
+    type Ix = Ix0;
+}
+impl InitPath<Mid> for Outer {
+    fn install<H>(handler: H) -> Fwd<Self, H> {
+        Fwd::new(handler)
+    }
+
+    fn default_state() {}
+
+    fn enter() {
+        mark(1);
+    }
+}
+
+impl BeanInfo for Prize {
+    type Provides = ();
+    type Injects = ();
+    type Beans = ();
+    type State = ();
+}
+impl Target for Prize {}
+impl Proxied for Prize {
+    type Proxy = Pass<Prize>;
+    type Link = Get<Pass<Prize>>;
+}
+
+impl BeanInfo for Bonus {
+    type Provides = ();
+    type Injects = ();
+    type Beans = ();
+    type State = ();
+}
+impl Target for Bonus {}
+impl Proxied for Bonus {
+    type Proxy = Pass<Bonus>;
+    type Link = Get<Pass<Bonus>>;
+}
+
+impl BeanInfo for Alarm {
+    type Provides = ();
+    type Injects = ();
+    type Beans = ();
+    type State = ();
+}
+impl Target for Alarm {}
+impl Proxied for Alarm {
+    type Proxy = Pass<Alarm>;
+    type Link = Get<Pass<Alarm>>;
+}
+impl EventInfo for Alarm {
+    type Parents = ();
+}
+
+impl BeanInfo for Room {
+    type Provides = (Core,);
+    type Injects = ();
+    type Beans = (Core,);
+    type State = ();
+}
+impl Target for Room {}
+impl Proxied for Room {
+    type Proxy = Pass<Room>;
+    type Link = Get<Pass<Room>>;
+}
+impl At<Core> for Room {
+    type Ix = Ix0;
+}
+
 trait Same<T> {}
 impl<T> Same<T> for T {}
 
@@ -193,6 +381,9 @@ impl<H, P, L> Through<P> for Pipe<WithInit<Fwd<P, H>>, L> {}
 
 type PassWrap<S, T> = Init<(), Ctx<Shell, Live<Via<Pass<Id>, Get<Id>>>, S, T>>;
 type UpdateWrap<S, T> = Init<(), Ctx<Shell, Live<Via<Update, Get<GameTick>>>, S, T>>;
+type ChainClaim = Via<Outer, Via<Mid, Via<Inner, Get<Core>>>>;
+type ChainWrap<S, T> = Init<(), Ctx<Room, Live<ChainClaim>, S, T>>;
+type ChainFwd<H> = Fwd<Outer, Fwd<Mid, Fwd<Inner, H>>>;
 
 fn assert_default<S, T>(_: &PassWrap<S, T>) {}
 
@@ -201,6 +392,18 @@ fn assert_explicit<S, T>(_: &UpdateWrap<S, T>) {}
 fn assert_init<E, A, S, T, P>(_: &Init<E, Ctx<Host, A, S, T>>)
 where
     T: Through<P>,
+{
+}
+
+fn assert_chain<S, T>(_: &ChainWrap<S, T>) {}
+
+trait ChainThrough {}
+
+impl<H, L> ChainThrough for Pipe<WithInit<ChainFwd<H>>, L> {}
+
+fn assert_chain_init<E, A, S, T>(_: &Init<E, Ctx<Core, A, S, T>>)
+where
+    T: ChainThrough,
 {
 }
 
@@ -305,5 +508,88 @@ fn init_of_an_unset_proxy_goes_through_pass() {
 #[test]
 fn init_default_comes_from_the_explicit_proxy() {
     let built = GameTick::query().init_state_default().build();
+    assert_eq!(*built.state(), 7);
+}
+
+#[test]
+fn a_chain_nests_wrappers_outer_around_inner() {
+    let pipeline = Room::query().inject_resources(Core::T);
+    assert_chain(&pipeline);
+}
+
+#[test]
+fn the_bean_sees_provides_on_every_proxy_in_the_chain() {
+    fn at_mid<R: ClaimVia<Core, (FromChain, Own)>>() {}
+    fn at_outer<R: ClaimVia<Core, (FromChain, (FromProxy, Own))>>() {}
+    at_mid::<Get<Prize>>();
+    at_outer::<Get<Bonus>>();
+    let _mid = Core::query().inject_resources(Prize::T);
+    let _outer = Core::query().inject_resources(Bonus::T);
+}
+
+#[test]
+fn parents_on_a_chained_bean_stay_empty() {
+    fn parents<E: EventInfo<Parents = ()>>() {}
+    parents::<Core>();
+}
+
+#[test]
+fn an_outer_proxy_parent_allows_the_bean_under_that_event() {
+    let _pipeline = Room::query().filter(Alarm::ON[Core::ON]);
+}
+
+#[test]
+fn emitting_any_proxy_in_the_chain_runs_the_bean() {
+    reset();
+    let mut tick = Room::query()
+        .filter(Core::ON)
+        .map(hit)
+        .emit(Inner::ON)
+        .init_state(idle)
+        .build();
+    Tick::<Room>::update(&mut tick, ());
+    assert_eq!(HITS.with(Cell::get), 1);
+
+    reset();
+    let mut tick = Room::query()
+        .filter(Core::ON)
+        .map(hit)
+        .emit(Mid::ON)
+        .init_state(idle)
+        .build();
+    Tick::<Room>::update(&mut tick, ());
+    assert_eq!(HITS.with(Cell::get), 1);
+
+    reset();
+    let mut tick = Room::query()
+        .filter(Core::ON)
+        .map(hit)
+        .emit(Outer::ON)
+        .init_state(idle)
+        .build();
+    Tick::<Room>::update(&mut tick, ());
+    assert_eq!(HITS.with(Cell::get), 1);
+}
+
+#[test]
+fn emitting_an_outer_proxy_parent_runs_the_bean() {
+    reset();
+    let mut tick = Room::query()
+        .filter(Core::ON)
+        .map(hit)
+        .emit(Alarm::ON)
+        .init_state(idle)
+        .build();
+    Tick::<Room>::update(&mut tick, ());
+    assert_eq!(HITS.with(Cell::get), 1);
+}
+
+#[test]
+fn init_of_a_chain_runs_outer_then_inner() {
+    reset_order();
+    let pipeline = Core::query().init_state(core_state);
+    assert_chain_init(&pipeline);
+    let built = Core::query().init_state_default().build();
+    assert_eq!(ORDER.with(Cell::get), 123);
     assert_eq!(*built.state(), 7);
 }

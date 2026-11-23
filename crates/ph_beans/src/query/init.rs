@@ -5,7 +5,7 @@
 
 use core::marker::PhantomData;
 
-use crate::bean::{BeanInfo, Fwd, InitPath, Proxied};
+use crate::bean::{BeanInfo, DriveInit, ForwardInit, Proxied, ProxyInfo};
 use crate::context::Context;
 use crate::context::Ctx;
 use crate::context::CtxConfig;
@@ -59,12 +59,18 @@ where
     A: AccSet,
     T: FreshInit,
     B: Proxied,
-    B::Proxy: InitPath<B>,
+    B::Proxy: ForwardInit<B, H, <B::Proxy as ProxyInfo>::Chain>,
 {
-    type Out = Ctx<B, A, NeedBuild, T::WithInit<Fwd<B::Proxy, H>>>;
+    type Out = Ctx<
+        B,
+        A,
+        NeedBuild,
+        T::WithInit<<B::Proxy as ForwardInit<B, H, <B::Proxy as ProxyInfo>::Chain>>::Out>,
+    >;
 
     fn seal_init(self, handler: H) -> Self::Out {
-        let handler = <B::Proxy as InitPath<B>>::install(handler);
+        let handler =
+            <B::Proxy as ForwardInit<B, H, <B::Proxy as ProxyInfo>::Chain>>::forward(handler);
         Ctx::new(FreshInit::install_init(self.tick, handler))
     }
 }
@@ -102,13 +108,13 @@ where
     A: AccSet,
     T: FreshInit,
     B: Proxied,
-    B::Proxy: InitPath<B>,
+    B::Proxy: DriveInit<B>,
     B::State: Default,
 {
     type Out = Ctx<B, A, NeedBuild, T::WithDefault<B::State>>;
 
     fn seal_default(self) -> Self::Out {
-        let state = <B::Proxy as InitPath<B>>::default_state();
+        let state = <B::Proxy as DriveInit<B>>::drive();
         Ctx::new(FreshInit::install_default(self.tick, state))
     }
 }
@@ -142,7 +148,8 @@ where
     Self: ApplyPatch<SetInit<H>>,
     C: Context,
     C::Bean: Proxied,
-    <C::Bean as Proxied>::Proxy: InitPath<C::Bean>,
+    <C::Bean as Proxied>::Proxy:
+        ForwardInit<C::Bean, H, <<C::Bean as Proxied>::Proxy as ProxyInfo>::Chain>,
     C::Tick: FreshInit,
     C::Args: Claim<C::Bean> + ArgsView + OpShape<Status: OpOk>,
     H: for<'a> Fn(<C::Args as ArgsView>::View<'a>) -> <C::Bean as BeanInfo>::State,
@@ -166,7 +173,7 @@ impl<E, C> InitStateDefaultStep for Init<E, C>
 where
     C: Context,
     C::Bean: Proxied,
-    <C::Bean as Proxied>::Proxy: InitPath<C::Bean>,
+    <C::Bean as Proxied>::Proxy: DriveInit<C::Bean>,
     C::Args: OpShape<Status: OpOk>,
     Self: ApplyPatch<SetDefault>,
 {

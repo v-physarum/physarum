@@ -70,8 +70,8 @@ impl<N, C> AllowInjectResources<N> for Idle<C> {}
 ///
 /// `Out` is the tip with the claim set replaced by the proxy wrapper. The
 /// signature does not spell `Ctx` or `Pipe`. `K` is the inferred path
-/// ([`Own`](crate::Own) or [`FromProxy`](crate::FromProxy)); callers do not
-/// name it.
+/// ([`Own`](crate::Own), [`FromProxy`](crate::FromProxy), or
+/// [`FromChain`](crate::FromChain)); callers do not name it.
 pub trait InjectResourcesStep<R, K> {
     /// Pipeline whose resource args are the wrapped claim.
     type Out;

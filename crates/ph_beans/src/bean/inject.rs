@@ -6,7 +6,7 @@
 //! non-overlapping membership encoding appears; do not add Get/Mut arms.
 
 use crate::bean::proxy::FreeKey;
-use crate::bean::{BeanInfo, Proxied};
+use crate::bean::{BeanInfo, Proxied, Target};
 use crate::descriptor::{Get, Mut};
 
 /// The child is injecting the parent bean itself.
@@ -85,9 +85,9 @@ impl<T> ClaimMark for Mut<T> {}
 /// The claim is the parent bean itself.
 trait IsParent<P> {}
 
-impl<P: Proxied> IsParent<P> for Get<P> {}
+impl<P: Target + Proxied> IsParent<P> for Get<P> {}
 
-impl<P: Proxied> IsParent<P> for Mut<P> {}
+impl<P: Target + Proxied> IsParent<P> for Mut<P> {}
 
 impl<P, C> FromParent<P, OfParent> for C where C: IsParent<P> {}
 

@@ -1,6 +1,6 @@
 //! Spine, wait, and parent checks over the filter AST.
 
-use crate::bean::{EventInfo, Proxied, Via};
+use crate::bean::{EventInfo, More, Proxied, ProxyInfo, Via};
 use crate::descriptor::{Get, Mut};
 use crate::filter::{And, Not, On, Or};
 
@@ -27,12 +27,11 @@ impl<T> HasMut for Mut<T> {
     type Mut = Yes;
 }
 
-impl<P, T> HasMut for Via<P, Get<T>> {
-    type Mut = No;
-}
-
-impl<P, T> HasMut for Via<P, Mut<T>> {
-    type Mut = Yes;
+impl<P, C> HasMut for Via<P, C>
+where
+    C: HasMut,
+{
+    type Mut = C::Mut;
 }
 
 impl<A, B> HasMut for And<A, B>
@@ -214,6 +213,32 @@ where
     C: Proxied<Proxy = X>,
     X: EventInfo<Parents = P>,
     I: UnderVia<C, K>,
+{
+}
+
+/// `P` is a parent of some outer proxy, not of the direct proxy.
+#[doc(hidden)]
+pub trait ChainParents<P, K> {}
+
+impl<X, O, P> ChainParents<P, crate::Own> for X
+where
+    X: ProxyInfo<Chain = More<O>>,
+    O: EventInfo<Parents = P>,
+{
+}
+
+impl<X, O, P, K> ChainParents<P, (crate::FromProxy, K)> for X
+where
+    X: ProxyInfo<Chain = More<O>>,
+    O: ChainParents<P, K>,
+{
+}
+
+impl<P, C, I, X, Kc, Ki> UnderVia<P, (crate::FromChain, Kc, Ki)> for On<C, I>
+where
+    C: Proxied<Proxy = X>,
+    X: ChainParents<P, Kc>,
+    I: UnderVia<C, Ki>,
 {
 }
 

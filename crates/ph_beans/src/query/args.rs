@@ -1,6 +1,6 @@
 //! Which beans a resource claim names, and the view the init function sees.
 
-use crate::bean::{ApplyProxy, Proxied, Via};
+use crate::bean::{ApplyProxy, More, Proxied, ProxyInfo, Target, Via};
 use crate::borrow::At;
 use crate::descriptor::live::{Idle, Live};
 use crate::descriptor::{Dyn, DynView, Get, Mut};
@@ -9,8 +9,33 @@ use crate::filter::And;
 /// Own [`At`] on the pipeline bean.
 pub struct Own;
 
-/// [`At`] on the pipeline bean's proxy (rule 3).
+/// [`At`] on the pipeline bean's direct proxy (rule 3).
 pub struct FromProxy;
+
+/// [`At`] on an outer proxy in the chain (rule 3).
+pub struct FromChain;
+
+/// `At` visible on a proxy or on a proxy further out in its chain.
+#[doc(hidden)]
+pub trait Sees<S, K> {
+    /// Index of `S` on the proxy that provides it.
+    type Ix;
+}
+
+impl<P, S> Sees<S, Own> for P
+where
+    P: At<S>,
+{
+    type Ix = P::Ix;
+}
+
+impl<P, O, S, K> Sees<S, (FromProxy, K)> for P
+where
+    P: ProxyInfo<Chain = More<O>>,
+    O: Sees<S, K>,
+{
+    type Ix = <O as Sees<S, K>>::Ix;
+}
 
 /// Resource claim that the pipeline bean can see, either on its own [`At`]
 /// list or on its proxy's [`At`] list.
@@ -34,7 +59,7 @@ impl<B> Claim<B> for () {
 impl<B, P> Claim<B> for Get<P>
 where
     B: At<P>,
-    P: Proxied,
+    P: Target + Proxied,
 {
     type Indexes = B::Ix;
 }
@@ -42,7 +67,7 @@ where
 impl<B, P> Claim<B> for Mut<P>
 where
     B: At<P>,
-    P: Proxied,
+    P: Target + Proxied,
 {
     type Indexes = B::Ix;
 }
@@ -50,7 +75,7 @@ where
 impl<B, S> ClaimVia<B, Own> for Get<S>
 where
     B: At<S>,
-    S: Proxied,
+    S: Target + Proxied,
 {
     type Indexes = B::Ix;
 }
@@ -58,7 +83,7 @@ where
 impl<B, S> ClaimVia<B, Own> for Mut<S>
 where
     B: At<S>,
-    S: Proxied,
+    S: Target + Proxied,
 {
     type Indexes = B::Ix;
 }
@@ -67,7 +92,7 @@ impl<B, S, P> ClaimVia<B, FromProxy> for Get<S>
 where
     B: Proxied<Proxy = P>,
     P: At<S>,
-    S: Proxied,
+    S: Target + Proxied,
 {
     type Indexes = P::Ix;
 }
@@ -76,9 +101,29 @@ impl<B, S, P> ClaimVia<B, FromProxy> for Mut<S>
 where
     B: Proxied<Proxy = P>,
     P: At<S>,
-    S: Proxied,
+    S: Target + Proxied,
 {
     type Indexes = P::Ix;
+}
+
+impl<B, S, P, O, K> ClaimVia<B, (FromChain, K)> for Get<S>
+where
+    B: Proxied<Proxy = P>,
+    P: ProxyInfo<Chain = More<O>>,
+    O: Sees<S, K>,
+    S: Target + Proxied,
+{
+    type Indexes = <O as Sees<S, K>>::Ix;
+}
+
+impl<B, S, P, O, K> ClaimVia<B, (FromChain, K)> for Mut<S>
+where
+    B: Proxied<Proxy = P>,
+    P: ProxyInfo<Chain = More<O>>,
+    O: Sees<S, K>,
+    S: Target + Proxied,
+{
+    type Indexes = <O as Sees<S, K>>::Ix;
 }
 
 impl<B, A, C, Ka, Kc> ClaimVia<B, (Ka, Kc)> for And<A, C>
@@ -99,14 +144,21 @@ where
 
 impl<B, P, S> Claim<B> for Via<P, Get<S>>
 where
-    S: Proxied<Proxy = P>,
+    S: Target + Proxied<Proxy = P>,
 {
     type Indexes = ();
 }
 
 impl<B, P, S> Claim<B> for Via<P, Mut<S>>
 where
-    S: Proxied<Proxy = P>,
+    S: Target + Proxied<Proxy = P>,
+{
+    type Indexes = ();
+}
+
+impl<B, P, Q, C> Claim<B> for Via<P, Via<Q, C>>
+where
+    Via<Q, C>: Claim<B>,
 {
     type Indexes = ();
 }
@@ -192,16 +244,12 @@ impl<T> ArgsView for Mut<T> {
         Self: 'a;
 }
 
-impl<P, T> ArgsView for Via<P, Get<T>> {
+impl<P, C> ArgsView for Via<P, C>
+where
+    C: ArgsView,
+{
     type View<'a>
-        = &'a T
-    where
-        Self: 'a;
-}
-
-impl<P, T> ArgsView for Via<P, Mut<T>> {
-    type View<'a>
-        = &'a mut T
+        = C::View<'a>
     where
         Self: 'a;
 }

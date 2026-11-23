@@ -1,8 +1,9 @@
-//! Proxy beans: a target is injected and initialized through a proxy.
+//! Proxy beans: a target is injected and initialized through a proxy chain.
 //!
 //! Manual impls match the derive surface ([`BeanInfo`] + [`ProxyInfo`] + [`At`]
 //! for provides). Derive is deferred (rule 6). [`Get`] / [`Mut`] / [`Marker`]
 //! stay as they are (rule 19). The wrapper is the side type [`Via`], like [`Dyn`].
+//! A chain nests that wrapper, outer around inner.
 //!
 //! [`At`]: crate::At
 //! [`Dyn`]: crate::Dyn
@@ -11,7 +12,7 @@
 //! [`Mut`]: crate::Mut
 //!
 //! ```compile_fail
-//! use ph_beans::{At, BeanInfo, Ix0, Marker, ProxyInfo, Query, Target};
+//! use ph_beans::{At, BeanInfo, Ix0, Marker, ProxyInfo, Query, Stop, Target};
 //!
 //! struct Tick;
 //! struct Update;
@@ -33,6 +34,7 @@
 //! impl ProxyInfo for Update {
 //!     type Targets = Tick;
 //!     type Link = ph_beans::Get<Update>;
+//!     type Chain = Stop;
 //! }
 //! impl BeanInfo for App {
 //!     type Provides = ();
@@ -48,7 +50,7 @@
 //! ```
 //!
 //! ```compile_fail
-//! use ph_beans::{BeanInfo, FromParent, Get, OfProvide, ProxyInfo, Target};
+//! use ph_beans::{BeanInfo, FromParent, Get, OfProvide, ProxyInfo, Stop, Target};
 //!
 //! struct Tick;
 //! struct Update;
@@ -71,6 +73,7 @@
 //! impl ProxyInfo for Update {
 //!     type Targets = Tick;
 //!     type Link = Get<Update>;
+//!     type Chain = Stop;
 //! }
 //! impl BeanInfo for App {
 //!     type Provides = Get<Update>;
@@ -90,7 +93,7 @@
 //! ```
 //!
 //! ```compile_fail
-//! use ph_beans::{At, BeanInfo, Claim, Ix0, ProxyInfo, Target};
+//! use ph_beans::{At, BeanInfo, Claim, Ix0, ProxyInfo, Stop, Target};
 //!
 //! struct Tick;
 //! struct Update;
@@ -112,6 +115,7 @@
 //! impl ProxyInfo for Update {
 //!     type Targets = Tick;
 //!     type Link = ph_beans::Get<Update>;
+//!     type Chain = Stop;
 //! }
 //! impl BeanInfo for App {
 //!     type Provides = ();
@@ -128,10 +132,12 @@
 //! ```
 //!
 //! ```compile_fail
-//! use ph_beans::{BeanInfo, Get, Proxied, ProxyInfo, Target};
+//! use ph_beans::{At, BeanInfo, Get, Ix0, Marker, More, Proxied, ProxyInfo, Query, Stop};
 //!
 //! struct Tick;
-//! struct Update;
+//! struct Inner;
+//! struct Outer;
+//! struct App;
 //!
 //! impl BeanInfo for Tick {
 //!     type Provides = ();
@@ -139,37 +145,48 @@
 //!     type Beans = ();
 //!     type State = ();
 //! }
-//! impl Target for Tick {}
-//! impl BeanInfo for Update {
+//! impl ph_beans::Target for Tick {}
+//! impl BeanInfo for Inner {
 //!     type Provides = ();
 //!     type Injects = ();
 //!     type Beans = ();
 //!     type State = ();
 //! }
-//! impl ProxyInfo for Update {
+//! impl ProxyInfo for Inner {
 //!     type Targets = Tick;
-//!     type Link = Get<Update>;
+//!     type Link = Get<Inner>;
+//!     type Chain = More<Outer>;
 //! }
-//! impl Proxied for Update {
-//!     type Proxy = Update;
-//!     type Link = Get<Update>;
+//! impl Proxied for Inner {
+//!     type Proxy = Outer;
+//!     type Link = Get<Outer>;
 //! }
-//! ```
-//!
-//! ```compile_fail
-//! use ph_beans::{BeanInfo, Pass, ProxyInfo};
-//!
-//! struct Update;
-//!
-//! impl BeanInfo for Update {
+//! impl BeanInfo for Outer {
 //!     type Provides = ();
 //!     type Injects = ();
 //!     type Beans = ();
 //!     type State = ();
 //! }
+//! impl ProxyInfo for Outer {
+//!     type Targets = Inner;
+//!     type Link = Get<Outer>;
+//!     type Chain = Stop;
+//! }
+//! impl Proxied for Tick {
+//!     type Proxy = Inner;
+//!     type Link = Get<Inner>;
+//! }
+//! impl BeanInfo for App {
+//!     type Provides = ();
+//!     type Injects = ();
+//!     type Beans = ();
+//!     type State = ();
+//! }
+//! impl At<Inner> for App {
+//!     type Ix = Ix0;
+//! }
 //!
-//! fn default_proxy<T: ProxyInfo>() {}
-//! default_proxy::<Pass<Update>>();
+//! let _claim = App::query().inject_resources(Inner::T);
 //! ```
 
 use core::any::TypeId;
@@ -177,13 +194,11 @@ use core::marker::PhantomData;
 
 use crate::descriptor::{Get, Mut};
 
-/// A bean or event that may sit under a proxy.
-///
-/// Proxy types do **not** implement this. [`Proxied`] requires it, so a proxy
-/// cannot declare `proxy = ...` and does not receive the default [`Pass`] proxy.
+/// A bean or event. Proxy types do not implement this, so a proxy is not a
+/// free-standing inject key even when an outer proxy wraps it.
 #[diagnostic::on_unimplemented(
-    message = "`{Self}` cannot declare `proxy = ...`",
-    note = "only a non-proxy bean or event implements `Target`. A `#[config(type = proxy)]` type has no proxy of its own"
+    message = "`{Self}` is not an injectable bean",
+    note = "proxy types do not implement `Target`. Name the bean; the proxy chain wraps it"
 )]
 pub trait Target: crate::BeanInfo {}
 
@@ -194,40 +209,56 @@ impl<P> LinkMark<P> for Get<P> {}
 
 impl<P> LinkMark<P> for Mut<P> {}
 
+/// Outermost link of a proxy chain. This proxy has no further proxy.
+///
+/// Name pending owner approval. [`Pass`] uses this too: it is not stacked
+/// outside an explicit proxy.
+pub struct Stop;
+
+/// This proxy is wrapped by `P`.
+///
+/// Name pending owner approval. `P` is the next outer proxy.
+pub struct More<P>(PhantomData<P>);
+
 /// Meta for `#[config(type = proxy)]`. Data only (rule 14).
 ///
 /// Associated item names are a proposal pending owner approval. Do not add
 /// methods or further items without that OK.
 ///
-/// [`Targets`] is the wrapped bean. [`Link`] is `Get<Self>` (`T`) or
-/// `Mut<Self>` (`MUT`).
+/// [`Targets`] is the wrapped bean or the next inner proxy. [`Link`] is
+/// `Get<Self>` (`T`) or `Mut<Self>` (`MUT`). [`Chain`] is [`Stop`] or
+/// [`More`] of the next outer proxy.
 ///
+/// [`Chain`]: ProxyInfo::Chain
 /// [`Link`]: ProxyInfo::Link
 /// [`Targets`]: ProxyInfo::Targets
 pub trait ProxyInfo: crate::BeanInfo {
-    /// Bean this proxy wraps. Not itself a proxy (`Targets: Target`).
-    type Targets: Target;
+    /// Bean or proxy this proxy wraps.
+    type Targets: crate::BeanInfo;
     /// `Get<Self>` or `Mut<Self>`.
     type Link: LinkMark<Self>;
+    /// [`Stop`] when this proxy is outermost. [`More`] of the outer proxy otherwise.
+    type Chain;
 }
 
-/// Manual stand-in for `proxy = P::T` / `proxy = P::MUT` on a target.
+/// Manual stand-in for `proxy = P::T` / `proxy = P::MUT`.
 ///
 /// Data only, same bar as [`ProxyInfo`] (rule 14). Names are a proposal
-/// pending owner approval.
+/// pending owner approval. A bean or a proxy may implement this, so chains
+/// type-check. Injecting a proxy still fails: proxy types are not [`Target`].
 ///
-/// No `proxy = ...` in source is the manual impl whose [`Proxy`] is [`Pass`]
-/// and whose [`Link`] is `Get<Pass<Self>>`. A proxy does not implement this
-/// (it is not a [`Target`]), so the default does not apply to proxies and a
-/// proxy cannot declare another proxy.
+/// No `proxy = ...` on a bean is the manual impl whose [`Proxy`] is [`Pass`]
+/// and whose [`Link`] is `Get<Pass<Self>>`. [`Pass`] is not [`Proxied`], so
+/// that chain stops. An explicit proxy that names no further proxy is not
+/// [`Proxied`] either: [`Pass`] is not wrapped around it.
 ///
 /// [`Link`]: Proxied::Link
 /// [`Proxy`]: Proxied::Proxy
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not a proxied target",
-    note = "inject the target bean; a proxy is not a free-standing key. A missing `proxy = ...` is `Proxy = Pass<Self>` and `Link = Get<Pass<Self>>`"
+    note = "inject the target bean; a proxy is not a free-standing key. A missing `proxy = ...` on a bean is `Proxy = Pass<Self>` and `Link = Get<Pass<Self>>`"
 )]
-pub trait Proxied: Target {
+pub trait Proxied: crate::BeanInfo {
     /// Proxy that wraps `Self`.
     type Proxy: ProxyInfo<Targets = Self>;
     /// `Get<Self::Proxy>` (`T`) or `Mut<Self::Proxy>` (`MUT`).
@@ -236,7 +267,9 @@ pub trait Proxied: Target {
 
 /// Identity proxy. A bean with no `proxy = ...` names this as [`Proxied::Proxy`].
 ///
-/// Pass-through: no provides, no events, and it is not itself proxied.
+/// Pass-through: no provides, no events, and it is not itself proxied, so a
+/// chain that reaches [`Pass`] stops. [`Pass`] is only for a [`Target`]. It
+/// does not wrap a proxy and it is not placed outside an explicit proxy.
 /// The name and the `Pass<B>` shape are pending owner approval.
 pub struct Pass<B>(PhantomData<B>);
 
@@ -254,20 +287,23 @@ impl<B: Target> crate::BeanInfo for Pass<B> {
 impl<B: Target> ProxyInfo for Pass<B> {
     type Targets = B;
     type Link = Get<Pass<B>>;
+    type Chain = Stop;
 }
 
 /// Claim `C` wrapped by proxy `P`.
 ///
 /// Side type, like [`Dyn`](crate::Dyn). Not a new parameter on [`Get`] / [`Mut`].
 /// Call sites still pass `Get` / `Mut` for the **target**; [`ApplyProxy`] projects
-/// this wrapper. [`ArgsView`](crate::ArgsView) for the wrapper is the target
-/// reference — the proxy forwards that argument.
+/// this wrapper. A chain is `Via<Outer, Via<Inner, Get<T>>>`.
+/// [`ArgsView`](crate::ArgsView) for the wrapper is the target reference — each
+/// proxy forwards that argument.
 pub struct Via<P, C>(PhantomData<(P, C)>);
 
 /// Init handler `H` installed by proxy `P`.
 ///
-/// The proxy is the path that stores the target's init. `H` stays a function
-/// item (rule 18).
+/// The proxy is the path that stores the target's init. A chain nests this
+/// outer to inner: `Fwd<Outer, Fwd<Inner, H>>`. `H` stays a function item
+/// (rule 18).
 pub struct Fwd<P, H> {
     handler: H,
     _markers: PhantomData<P>,
@@ -287,23 +323,28 @@ impl<P, H> Fwd<P, H> {
     }
 }
 
-/// Proxy `Self` initializes bean `B`.
+/// Proxy `Self` initializes its direct target `B`.
 ///
 /// Not a meta trait. [`Update`](crate::Update) stays on [`Built`](crate::Built)
-/// only (rule 17). This path is the init stage ([`Init`](crate::Init) /
-/// [`InitStateStep`](crate::InitStateStep)).
+/// only (rule 17). The chain walks [`ProxyInfo::Chain`] and calls [`enter`]
+/// from the outside in, then [`default_state`] on the proxy that targets the bean.
+///
+/// [`default_state`]: InitPath::default_state
+/// [`enter`]: InitPath::enter
 pub trait InitPath<B: crate::BeanInfo>: ProxyInfo<Targets = B> {
-    /// Stores `handler` as the target's init.
+    /// Stores `handler` as this proxy's own init layer.
     fn install<H>(handler: H) -> Fwd<Self, H>;
-    /// Default state of `B`, produced by the proxy.
+    /// Default state of `B`, produced by this proxy.
     fn default_state() -> B::State
     where
         B::State: Default;
+    /// Runs before the next inner init step.
+    fn enter() {}
 }
 
 impl<B> InitPath<B> for Pass<B>
 where
-    B: Proxied<Proxy = Pass<B>>,
+    B: Target + Proxied<Proxy = Pass<B>>,
 {
     fn install<H>(handler: H) -> Fwd<Self, H> {
         Fwd::new(handler)
@@ -319,29 +360,170 @@ where
 
 /// Projects a call-site claim onto its proxy wrapper.
 pub trait ApplyProxy {
-    /// [`Via`] around the target, or the same shape for a list of claims.
+    /// [`Via`] around the target, nested through the chain.
     type Wrapped;
 }
 
-impl<B: Proxied> ApplyProxy for Get<B> {
-    type Wrapped = Via<B::Proxy, Get<B>>;
+/// Nests `C` through proxy `Self` according to `Link` ([`Stop`] or [`More`]).
+#[doc(hidden)]
+pub trait Enfold<C, Link> {
+    /// Fully wrapped claim.
+    type Wrapped;
 }
 
-impl<B: Proxied> ApplyProxy for Mut<B> {
-    type Wrapped = Via<B::Proxy, Mut<B>>;
+impl<P, C> Enfold<C, Stop> for P {
+    type Wrapped = Via<P, C>;
 }
 
-/// A free-standing inject key. Proxy beans do not implement [`Proxied`], so
-/// `Get<Proxy>` / `Mut<Proxy>` are not keys.
+impl<P, O, C> Enfold<C, More<O>> for P
+where
+    O: ProxyInfo + Enfold<Via<P, C>, O::Chain>,
+{
+    type Wrapped = <O as Enfold<Via<P, C>, O::Chain>>::Wrapped;
+}
+
+impl<B: Proxied> ApplyProxy for Get<B>
+where
+    B::Proxy: Enfold<Get<B>, <B::Proxy as ProxyInfo>::Chain>,
+{
+    type Wrapped = <B::Proxy as Enfold<Get<B>, <B::Proxy as ProxyInfo>::Chain>>::Wrapped;
+}
+
+impl<B: Proxied> ApplyProxy for Mut<B>
+where
+    B::Proxy: Enfold<Mut<B>, <B::Proxy as ProxyInfo>::Chain>,
+{
+    type Wrapped = <B::Proxy as Enfold<Mut<B>, <B::Proxy as ProxyInfo>::Chain>>::Wrapped;
+}
+
+/// Builds the init wrapper for proxy `Self` around bean `B`, outer around inner.
+#[doc(hidden)]
+pub trait ForwardInit<B, H, Link> {
+    /// Nested [`Fwd`] for the whole chain above `Self`, including `Self`.
+    type Out;
+    /// Wraps `handler` through this proxy and its outers.
+    fn forward(handler: H) -> Self::Out;
+}
+
+/// Nests an already-built inner [`Fwd`] through an outer proxy.
+#[doc(hidden)]
+pub trait WrapFwd<H, Link> {
+    /// Nested [`Fwd`].
+    type Out;
+    /// Wraps `handler` in this proxy, then in its outers.
+    fn wrap_fwd(handler: H) -> Self::Out;
+}
+
+impl<P, B, H> ForwardInit<B, H, Stop> for P
+where
+    B: crate::BeanInfo,
+    P: InitPath<B>,
+{
+    type Out = Fwd<P, H>;
+
+    fn forward(handler: H) -> Self::Out {
+        <P as InitPath<B>>::install(handler)
+    }
+}
+
+impl<P, B, O, H> ForwardInit<B, H, More<O>> for P
+where
+    B: crate::BeanInfo,
+    P: InitPath<B>,
+    O: ProxyInfo + WrapFwd<Fwd<P, H>, O::Chain>,
+{
+    type Out = <O as WrapFwd<Fwd<P, H>, O::Chain>>::Out;
+
+    fn forward(handler: H) -> Self::Out {
+        O::wrap_fwd(<P as InitPath<B>>::install(handler))
+    }
+}
+
+impl<P, H> WrapFwd<H, Stop> for P {
+    type Out = Fwd<P, H>;
+
+    fn wrap_fwd(handler: H) -> Self::Out {
+        Fwd::new(handler)
+    }
+}
+
+impl<P, O, H> WrapFwd<H, More<O>> for P
+where
+    O: ProxyInfo + WrapFwd<Fwd<P, H>, O::Chain>,
+{
+    type Out = <O as WrapFwd<Fwd<P, H>, O::Chain>>::Out;
+
+    fn wrap_fwd(handler: H) -> Self::Out {
+        O::wrap_fwd(Fwd::<P, H>::new(handler))
+    }
+}
+
+/// Calls [`InitPath::enter`] from the outermost proxy in to `Self`.
+///
+/// `B` is the direct target of `Self`, not a projection of [`ProxyInfo::Targets`].
+#[doc(hidden)]
+pub trait EnterAll<B, Link> {
+    /// Enters every proxy from the outside in.
+    fn enter_all();
+}
+
+impl<P, B> EnterAll<B, Stop> for P
+where
+    B: crate::BeanInfo,
+    P: InitPath<B>,
+{
+    fn enter_all() {
+        <P as InitPath<B>>::enter();
+    }
+}
+
+impl<P, B, O> EnterAll<B, More<O>> for P
+where
+    B: crate::BeanInfo,
+    P: crate::BeanInfo + InitPath<B> + Proxied<Proxy = O>,
+    O: InitPath<P> + EnterAll<P, O::Chain>,
+{
+    fn enter_all() {
+        <O as EnterAll<P, O::Chain>>::enter_all();
+        <P as InitPath<B>>::enter();
+    }
+}
+
+/// Init of bean `B` through its whole proxy chain.
+#[doc(hidden)]
+pub trait DriveInit<B: crate::BeanInfo> {
+    /// Enters outer proxies first, then returns `B`'s state from its direct proxy.
+    fn drive() -> B::State
+    where
+        B::State: Default;
+}
+
+impl<B, P> DriveInit<B> for P
+where
+    B: crate::BeanInfo,
+    P: InitPath<B> + EnterAll<B, P::Chain>,
+{
+    fn drive() -> B::State
+    where
+        B::State: Default,
+    {
+        <P as EnterAll<B, P::Chain>>::enter_all();
+        <P as InitPath<B>>::default_state()
+    }
+}
+
+/// A free-standing inject key. Proxy beans do not implement [`Target`], so
+/// `Get<Proxy>` / `Mut<Proxy>` are not keys, including a proxy that itself
+/// has an outer proxy.
 #[diagnostic::on_unimplemented(
     message = "`{Self}` cannot be injected alone",
-    note = "a proxy is not a free-standing inject key; name the target bean and the proxy wraps it"
+    note = "a proxy is not a free-standing inject key; name the target bean and the proxy chain wraps it"
 )]
 pub trait FreeKey {}
 
-impl<B: Proxied> FreeKey for Get<B> {}
+impl<B: Target + Proxied> FreeKey for Get<B> {}
 
-impl<B: Proxied> FreeKey for Mut<B> {}
+impl<B: Target + Proxied> FreeKey for Mut<B> {}
 
 /// Events of a proxy, walked when the target is scheduled.
 ///
