@@ -6,24 +6,21 @@ pub struct Yes;
 /// The filter does not wait.
 pub struct No;
 
+/// Combines two wait flags (`A | B`). Policy on the left flag — not a 2×2 table.
 #[doc(hidden)]
-pub trait OrFlag {
+pub trait OrWith<R> {
     /// `Yes` if either side waited.
     type Out;
 }
 
-impl OrFlag for (No, No) {
+impl OrWith<No> for No {
     type Out = No;
 }
 
-impl OrFlag for (No, Yes) {
+impl OrWith<Yes> for No {
     type Out = Yes;
 }
 
-impl OrFlag for (Yes, No) {
-    type Out = Yes;
-}
-
-impl OrFlag for (Yes, Yes) {
+impl<R> OrWith<R> for Yes {
     type Out = Yes;
 }

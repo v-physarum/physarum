@@ -4,7 +4,7 @@ use crate::bean::EventInfo;
 use crate::descriptor::{Get, Mut};
 use crate::filter::{And, Not, On, Or};
 
-use super::flag::OrFlag;
+use super::flag::OrWith;
 
 pub use super::flag::{No, Yes};
 
@@ -31,18 +31,18 @@ impl<A, B> HasMut for And<A, B>
 where
     A: HasMut,
     B: HasMut,
-    (A::Mut, B::Mut): OrFlag,
+    A::Mut: OrWith<B::Mut>,
 {
-    type Mut = <(A::Mut, B::Mut) as OrFlag>::Out;
+    type Mut = <A::Mut as OrWith<B::Mut>>::Out;
 }
 
 impl<A, B> HasMut for Or<A, B>
 where
     A: HasMut,
     B: HasMut,
-    (A::Mut, B::Mut): OrFlag,
+    A::Mut: OrWith<B::Mut>,
 {
-    type Mut = <(A::Mut, B::Mut) as OrFlag>::Out;
+    type Mut = <A::Mut as OrWith<B::Mut>>::Out;
 }
 
 impl<A> HasMut for Not<A>

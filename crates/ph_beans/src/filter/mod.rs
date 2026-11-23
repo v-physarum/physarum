@@ -5,7 +5,6 @@ pub(crate) mod eval;
 mod flag;
 mod node;
 mod ops;
-mod ops_node;
 pub(crate) mod shape;
 
 pub use eval::{Collect, MatchEmit, UnionEmit};

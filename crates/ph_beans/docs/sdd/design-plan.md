@@ -30,7 +30,7 @@ Aligned with `design.md` rules. Prefer these IDs in review notes.
 | --- | --- | --- |
 | **R5** Step return | Inherent builder method + **named step trait** with `type Out`. Signature returns `<Self as Step<…>>::Out`. | Inherent `-> Init<E, C::With<…>>` / `Ctx<…>` / `Pipe<…>` tip spelled inline. |
 | **R6** Macros | Explicit impls / trait recursion. | `macro_rules!` / proc-macros / `impl_foreach` without owner OK. |
-| **R8** Ops / DI | Extractor / membership traits; thin `&` `|` `!`. | Get×Mut×And matrices; `OfProvide0`/`OfProvide1`×Get/Mut tables. |
+| **R8** No matrices | Collapse whenever possible (flag policy, `FilterOperand`, `ClaimMark`). | Product tables; new Get×Mut×slot; keeping a matrix “for clarity” when a thinner shape works. |
 | **R9** Context tip | One GAT: `Context::With<Cfg>` + `CtxConfig` (+ `ApplyPatch`). **`impl<C, …> CtxConfig<C>`** + seal. Type params on the config **only for a carried value**; bean-derived steps use a **unit** config (`SetDefault`, `SetProviders`) — seal reads `Bean` from `Ctx`. With the bound present, **`T::Assoc`**. Defaults: **`Default::default()`**. | `WithArgs`/`WithStatus`/`WithTick`; `CtxConfig<Ctx<B,A,S,T>>`; `SetDefault<D>` / step spelling `Bean::State`; `T::default()` / `<B as BeanInfo>::State::default()` when the type is inferred; stacked lenses; needless UFCS. |
 | **R10** Generics | **One letter** from the role (`B`,`A`,`S`,`T`,`E`,`H`,`F`,`N`,`O`,…), or **letter + digit** (`E0`). | Multi-letter params (`Bean`, `Args`, `Status`, `PrevE`, `New`, …); alphabet arity runs `A,B,C,…`. |
 | **R11–12** Lists | Shared `List` / `Leaf` / `Grow`; leaf ≤ **8**; opaque `E0…`; 9 → `(List, Grow)`; 16 → **4** `List`s. | Flat 9…16 megaimpls; `MapNode` / `room_*`; tuples of domain structs in arity heads (`MapEntry<…>, …`); bare `(E0,E1)` push that overlaps `(List, Grow)`. |
@@ -76,8 +76,8 @@ cargo test -p ph_beans
 | Inject `&dyn` (`Bean::T as Trait`, marker on trait via `#[config(type = dyn)]`) | **Open** | View-only cast; `Injects`/`At` stay concrete; `ph_test_asm` `assert_no_virtual_calls` |
 | Map cap 16 | **Done** | `MAX_MAP_SYSTEMS`; push refuses 17th |
 | No macros in crate src | **Done** | No `macro_rules!` under `ph_beans/src` |
-| **R8** filter ops extractors | **Partial** | `FilterOperand` exists — confirm no leftover matrices in `ops` / `ops_node` |
-| **R8** DI `FromParent` | **Partial** | Tables reduced — finish collapse of slot/Get×Mut remnants in `bean/inject.rs` |
+| **R8** filter ops / flags | **Done** | `FilterOperand` RHS; per-LHS orphan residual; `OrWith` / `WaitFlag`; `ops_node` removed |
+| **R8** DI `FromParent` | **Partial** | `ClaimMark` done; `OfProvide0`/`1` remain as E0119 Via only — no Get×Mut split |
 | **R10** one-letter generics | **Open** | Rule fixed; many files still use `Bean`/`Args`/`Status`/`Tick`/`PrevE` — **sweep required** |
 | `OpDesc` L1 gate on `.inject_resources` | **Partial** | Types exist — confirm call is gated on `OpOk` + tests |
 | Handlers `Fn` (not `FnMut`) | **Done** | `.map` / init use `Fn()` — see **R18** |
@@ -93,11 +93,10 @@ Do in this order. Each item is a small PR on `ph_beans` only.
 
 1. **R9 seal sweep (mandatory)** — every `CtxConfig` → `impl<C, …> CtxConfig<C>`; unpack `Ctx` only in seal helpers. Convert remaining `SetFilter` / `SetEmit` / `SetMap` / `SetArgs` / `SetStatus` / … (reject new `CtxConfig<Ctx<B,A,S,T>>` heads).
 2. **R10 generics sweep** — rename every multi-letter type param to one letter or letter+digit (`B`,`A`,`S`,`T`,`E0`,…); include `context/`, `query/`, `filter/`, `bean/`, docs examples that still show `Bean`/`PrevE`.
-3. **R8 DI** — finish `bean/inject.rs`: no Get×Mut×slot matrices; membership / extractor only.
-4. **R8 ops check** — audit `filter/ops.rs` + `ops_node.rs`; remove any remaining closed matrix.
-5. **OpDesc L1** — ensure `.inject_resources` refuses duplicates / `T`+`Mut` on that line; add/strengthen tests.
-6. **FilterDesc follow-ups (optional)** — align `Claim` / `ArgsView` / `OpLeaf` if still duplicated walks; grow `Rewait` only via config if the Live×Idle table expands.
-7. **Keep green** — fmt, clippy `-D warnings`, `cargo test -p ph_beans`.
+3. **R8 DI** — keep `ClaimMark`; replace `OfProvide0`/`1` when a non-overlapping membership encoding exists (E0119 residual today).
+4. **OpDesc L1** — ensure `.inject_resources` refuses duplicates / `T`+`Mut` on that line; add/strengthen tests.
+5. **FilterDesc follow-ups (optional)** — align `Claim` / `ArgsView` / `OpLeaf` if still duplicated walks.
+6. **Keep green** — fmt, clippy `-D warnings`, `cargo test -p ph_beans`.
 
 ---
 

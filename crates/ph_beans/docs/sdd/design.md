@@ -66,33 +66,46 @@ Layout of `crates/ph_beans/src/`. Keep the surface readable: **small files**, **
    Same for **pipeline entry**: `query()` is a **named step trait** [`Query`] with `type Out` (not a method on [`BeanInfo`]). `Out = Init<(), B::Ctx>` — the empty tip comes from the **context start descriptor**, not a spelled `Ctx<…>` / `Pipe<…>` / `MapList<…>` on the call site.
 6. **No macros without owner permission** — do not add `macro_rules!`, `impl_foreach`, or proc-macros in `ph_beans` unless the owner explicitly allows that use. Default: **explicit impls** and **trait-recursive / extractor bounds** (as with `Claim`, `At`, `TakeMany`). Existing macros in the prototype (`maps`/`schedule`/`filter` helpers, future derive) need an explicit OK or must be removed/replaced.
 7. **Tuple / trait-recursive lists only — no nested “room” tables** — multi-value type lists (maps, claims, DI, …) use **tuples** (and optional wrapper structs — rules 12–13) with trait recursion over **groups**, not a cons spine of `MapNode<F, H, MapNode<…>>`. Role names for params (rule 10). Leaf arity and grouping: **rules 11–13**. **Forbidden:** hand-unrolled recursive nestings with a separate `Room` (or similar) impl per length (`room.rs` / `room_mid` / `room_hi` / `room_top` style).
-8. **Ops and DI via extractor / descriptor traits — not accessor×slot matrices** — `&` / `|` / `!`, resource markers, and **`FromParent` / module inject** use **generics + trait bounds**, not one impl per `Get`/`Mut` × provide/inject × index mix.
+8. **No closed matrices when a thinner shape exists** — if there is **any** workable way to replace a product table (A×B×C impls, Live×Yes/No, Get×Mut×slot, …) with a **policy on a marker**, an **extractor / membership trait**, or **one blanket**, do that. Reviewers **reject** new matrices when a collapse is possible. Arity walks like `Take` / `AddItem` (one axis = length) are not this rule’s target.
 
-   Filter/resource ops (as in the root `accessors` sketch):
+   **Required shapes:**
 
-   ```rust
-   impl<B0, B1> BitAnd<B1> for Get<B0>
-   where
-       B1: FilterOperand, // extractor / Bean / Node
-   {
-       type Output = And<Self, B1>;
-       …
-   }
-   ```
-
-   DI (`FromParent`): one (or few) impls that match a claim against the parent surface through a **list/membership trait** (and marker kind via a small accessor trait), e.g. “`Acc` appears in `P::Provides` / `P::Injects`” — trait-recursive over tuples — instead of:
+   | Area | Do | Don’t |
+   | --- | --- | --- |
+   | Wait / flags | Policy on `Yes`/`No` (`WaitFlag`, `OrWith`) + blankets | `Live`×`Idle`×`Yes`×`No` / `(Yes\|No)×(Yes\|No)` tables |
+   | Filter ops | RHS = `FilterOperand`; one thin op set per **local** LHS node | Get×Mut×And×Or×On product; macros to stamp the product (rule 6) |
+   | DI | `ClaimMark` (Get\|Mut once) + membership; Via only if rustc forces it | Get×Mut × Provide/Inject × every slot |
+   | Filter effects | Per-node descriptor + one `ApplyFilter` | Re-impl the step per AST node |
 
    ```rust
-   // Forbidden — today’s bean/inject.rs style
-   impl<P, T> FromParent<P, OfProvide> for Get<T> where P: BeanInfo<Provides = Get<T>> {}
-   impl<P, T> FromParent<P, OfProvide> for Mut<T> where P: BeanInfo<Provides = Mut<T>> {}
-   impl<P, T, R> FromParent<P, OfProvide0> for Get<T> where P: BeanInfo<Provides = (Get<T>, R)> {}
-   // … Get/Mut × Provide/Inject × every slot index
+   // Required — flag policy (Rewait / OrWith)
+   impl<C> WaitFlag<C> for Yes { type OnLive = Idle<C>; }
+   impl<C, F: WaitFlag<C>> Rewait<F> for Live<C> { type Out = F::OnLive; }
+
+   // Required — ops: RHS open; LHS is orphan residual (E0210 blocks
+   // `impl<L: FilterOperand> BitAnd<R> for L`), not an excuse for a product table
+   impl<T, R: FilterOperand> BitAnd<R> for Get<T> { type Output = And<Self, R>; … }
+
+   // Forbidden — product matrix
+   impl … BitAnd<Get<_>> for Get<_> {}
+   impl … BitAnd<Mut<_>> for Get<_> {}
+   impl … BitAnd<And<_,_>> for Mut<_> {}
+   // …
    ```
 
-   **Forbidden:** closed matrices for `BitAnd`/`BitOr`/`Not` (`filter/ops.rs`) and for `FromParent` (`OfProvide0`/`OfProvide1`/… × `Get`/`Mut`). Leaves and list membership implement extractors once; ops/DI stay thin.
+   DI (`FromParent`): match through **membership** + `ClaimMark`. **Do not** split Get vs Mut. Slot Via (`OfProvide0` / `OfProvide1`, …) is allowed **only** as an E0119 residual when head/tail blankets overlap — document it; collapse when a non-overlapping encoding exists.
 
-   **Same pattern for filter *effects* (not only `&|/!`):** when every AST node runs the same step and only a small policy differs (`Keep` vs `Replace` scope, wait flag, …), put that policy on a **per-node descriptor** and keep **one** blanket for the step. Do **not** re-impl the step once per `()` / `Get` / `Mut` / `And` / `Or` / `Not` / `On`. See **Filter effect descriptor** under Filters.
+   ```rust
+   // Forbidden — Get×Mut×slot
+   impl FromParent<P, OfProvide0> for Get<T> where Provides = (Get<T>, R) {}
+   impl FromParent<P, OfProvide0> for Mut<T> where Provides = (Mut<T>, R) {}
+
+   // Required residual — one arm per slot for every ClaimMark
+   impl<P, C: ClaimMark, R> FromParent<P, OfProvide0> for C
+   where P: BeanInfo<Provides = (C, R)> {}
+   ```
+
+   **Same for filter *effects*:** policy on a descriptor, one blanket for the step — see **Filter effect descriptor**.
 9. **Flat trait bounds — no projection towers; next tip via config structs** — steps resolve complexity **inside traits**, with **shallow** `where` clauses (Borrowing / `Args` style). Do **not** nest `as` projections or chain `WithTick` / `WithArgs` / `WithStatus` in return types or associated types.
 
    ```rust
@@ -496,7 +509,7 @@ Tree: `App` → `Logic` → `Render`. `Render` injects `Logic::MUT`; `Logic` inj
 
 ### `FromParent` impl style
 
-Compile-time “child may take this claim from parent” is **`FromParent`** (and `Module`). Wire it with **trait-recursive membership** on `Provides` / `Injects` lists and a shared bound on the accessor kind — **not** a separate impl for every `Get`/`Mut` × slot (`OfProvide0`, `OfProvide1`, …). Same rule 8 as filter ops. Prototype `bean/inject.rs` pair/slot tables are out of design and should be collapsed.
+Compile-time “child may take this claim from parent” is **`FromParent`** (and `Module`). Use **`ClaimMark`** + membership on `Provides` / `Injects` — **not** Get×Mut×slot. `OfProvide0` / `OfProvide1` (and inject twins) are **E0119 residuals** only (head vs tail Via); collapse further if a non-overlapping encoding appears (rule 8).
 
 ### `T` vs `MUT`
 
@@ -910,7 +923,7 @@ impl<L, R: FilterOperand> BitAnd<R> for L where L: FilterOperand { type Output =
 // or: impl only on Get/Mut/On leaves + one impl for any already-built node type
 ```
 
-Validation and emit walk **traits over the AST** (`Claim`-style), not per-pair op tables. Today’s `filter/ops.rs` pair matrix is **out of design** and should be collapsed to this pattern.
+Validation and emit walk **traits over the AST** (`Claim`-style), not per-pair op tables. Filter `&`/`|`/`!` use `FilterOperand` on the RHS; per-LHS `BitAnd` arms remain only because of orphan E0210 (rule 8).
 
 #### Filter effect descriptor
 
@@ -966,11 +979,12 @@ Use a per-node (or per-leaf) descriptor + one blanket whenever the code today is
 | Area | Today | Collapse toward |
 | --- | --- | --- |
 | `filter/apply.rs` | `ApplyFilter` × every AST node (+ `keep_scope!`) | `FilterDesc` + `ScopeOf` + one blanket (above) |
-| `filter/ops.rs` | ops / operand tables | `FilterOperand` (or shared filter descriptor) + thin `BitAnd`/`BitOr`/`Not` |
-| `bean/inject.rs` | `FromParent` × Get/Mut × slot | membership / extractor traits (rule 8) |
+| `filter/ops.rs` | Get×Mut×node product | RHS `FilterOperand`; per-LHS ops only (orphan E0210); **no** `ops_node` |
+| `filter/flag.rs` | `(Yes\|No)×(Yes\|No)` `OrFlag` | **`OrWith` on the left flag** |
+| `bean/inject.rs` | Get×Mut×slot | `ClaimMark` + Via **only** for E0119 head/tail |
 | `query/args.rs` `Claim` / `ArgsView` | near-duplicate walks over `()` / `Get` / `Mut` / `And` / `Live` / `Idle` | shared claim-shape descriptor; step blankets over it |
 | `descriptor/op_desc.rs` `OpLeaf` | parallel walk of the same claim nodes | stay aligned with that claim-shape descriptor (one Status lens, not a second matrix) |
-| `descriptor/live.rs` `Rewait` | `Live`/`Idle` × `Yes`/`No` table | wait policy ZST (`Clear` / `Keep`) + one blanket if the table grows |
+| `descriptor/live.rs` `Rewait` | `Live`/`Idle` × `Yes`/`No` table | **`WaitFlag` on `Yes`/`No`** + one blanket for `Live`, one for `Idle` |
 | `filter/eval.rs` | `Collect` / `MatchEmit` / `UnionEmit` per node | **keep** per-node *behavior* when semantics differ; factor only shared “fold over AST” scaffolding if several traits share the same skeleton |
 | `filter/shape.rs` `HasMut` / `SpineTail` / `Under` | recursive policy walks | **keep** — these *are* the descriptors’ inputs; do not replace them with another ApplyFilter-style matrix |
 

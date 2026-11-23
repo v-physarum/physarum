@@ -1,8 +1,9 @@
 //! Manual provide / inject against a parent surface.
 //!
-//! A child names where the claim comes from: the parent bean, the parent's
-//! provide, or the parent's inject. `MUT` against an immutable provide does
-//! not implement [`FromParent`].
+//! Membership is [`ClaimMark`] + list match. Slot markers (`OfProvide0`, …)
+//! exist only because two `Provides = (C, _)` / `Provides = (_, C)` blankets
+//! overlap (E0119) — not a Get×Mut matrix. Prefer collapsing further if a
+//! non-overlapping membership encoding appears; do not add Get/Mut arms.
 
 use crate::bean::BeanInfo;
 use crate::descriptor::{Get, Mut};
@@ -17,6 +18,8 @@ pub struct OfProvide;
 pub struct OfInject;
 
 /// First item of a two-item provide list.
+///
+/// Residual Via for E0119 — not an accessor×slot product.
 pub struct OfProvide0;
 
 /// Second item of a two-item provide list.
@@ -97,10 +100,7 @@ where
 {
 }
 
-// A list search with one `V` does not fit stable Rust: `Provides = (C, R)`
-// and `Provides = (H, C)` are the same `FromParent<P, OfProvide> for C` and
-// overlap (`E0119`). Slot markers keep those impls apart. Each slot is one
-// impl for every [`ClaimMark`], not a separate `Get` and `Mut` line.
+// Two-item lists: Via distinguishes head vs tail (E0119 if both use OfProvide).
 impl<P, C, R> FromParent<P, OfProvide0> for C
 where
     P: BeanInfo<Provides = (C, R)>,

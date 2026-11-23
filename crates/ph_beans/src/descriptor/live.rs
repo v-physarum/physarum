@@ -24,25 +24,39 @@ impl<C> AccSet for Idle<C> {
     type Set = ();
 }
 
+/// Wait policy on [`Yes`] / [`No`]: what happens to a [`Live`] claim.
+///
+/// Marker on the flag — not a Live×flag matrix.
+#[doc(hidden)]
+pub trait WaitFlag<C> {
+    /// Args after applying this wait to [`Live`]`<C>`.
+    type OnLive;
+}
+
+impl<C> WaitFlag<C> for Yes {
+    type OnLive = Idle<C>;
+}
+
+impl<C> WaitFlag<C> for No {
+    type OnLive = Live<C>;
+}
+
 /// Applies a wait flag to the current args.
+///
+/// One blanket for [`Live`] (via [`WaitFlag`]), one for [`Idle`] (always idle).
 #[doc(hidden)]
 pub trait Rewait<F> {
     /// Args after the filter.
     type Out;
 }
 
-impl<C> Rewait<Yes> for Live<C> {
-    type Out = Idle<C>;
+impl<C, F> Rewait<F> for Live<C>
+where
+    F: WaitFlag<C>,
+{
+    type Out = F::OnLive;
 }
 
-impl<C> Rewait<No> for Live<C> {
-    type Out = Live<C>;
-}
-
-impl<C> Rewait<Yes> for Idle<C> {
-    type Out = Idle<C>;
-}
-
-impl<C> Rewait<No> for Idle<C> {
+impl<C, F> Rewait<F> for Idle<C> {
     type Out = Idle<C>;
 }
