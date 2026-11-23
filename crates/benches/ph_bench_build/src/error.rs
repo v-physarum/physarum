@@ -95,6 +95,60 @@ pub(crate) enum ErrorKind {
     /// The runtime bench printed no `runtime_seconds` line.
     #[error("runtime bench did not print runtime_seconds")]
     MissingRuntimeSeconds,
+    /// A growth series has an empty name.
+    #[error("series name is empty")]
+    SeriesName,
+    /// A growth series has no group.
+    #[error("series {series} group is unset")]
+    SeriesGroup { series: String },
+    /// A growth series has too few scales to show growth.
+    #[error("{series} needs at least {min} scales")]
+    SeriesTooFew { series: String, min: usize },
+    /// A scale is zero, so it has no logarithm.
+    #[error("{series} scale {scale} is not a positive size")]
+    SeriesScale { series: String, scale: u32 },
+    /// The same scale was declared twice.
+    #[error("{series} scale {scale} is duplicated")]
+    SeriesDuplicate { series: String, scale: u32 },
+    /// A growth series has no claim.
+    #[error("series {series} expectation is unset")]
+    SeriesExpect { series: String },
+    /// The generator returned an empty source.
+    #[error("series {series} scale {scale} rendered an empty source")]
+    SeriesSource { series: String, scale: u32 },
+    /// [`crate::Series::render`] was not called, or the scales changed after it.
+    #[error("series {series} has no rendered sources")]
+    SeriesSources { series: String },
+    /// The time slice length does not match the scales.
+    #[error("{series} has {scales} scales but {times} times")]
+    SeriesTimeCount {
+        series: String,
+        scales: usize,
+        times: usize,
+    },
+    /// A measured time is not a positive finite number.
+    #[error("{series} scale {scale} time is not a positive finite number")]
+    SeriesTime { series: String, scale: u32 },
+    /// The log-log fit is not a finite exponent.
+    #[error("{series} scales are not distinguishable on a log axis")]
+    SeriesLog { series: String },
+    /// A linear claim missed [`crate::LINEAR_LIMIT`].
+    #[error("{series} is not linear: exponent {exponent}, linear limit {limit}")]
+    NotLinear {
+        series: String,
+        exponent: f64,
+        limit: f64,
+    },
+    /// A not-quadratic claim hit [`crate::QUADRATIC_LIMIT`].
+    #[error("{series} is quadratic: exponent {exponent}, quadratic limit {limit}")]
+    QuadraticGrowth {
+        series: String,
+        exponent: f64,
+        limit: f64,
+    },
+    /// A measured group has no median for one scale of a series.
+    #[error("series {series} is missing a time for scale {scale}")]
+    SeriesUnmeasured { series: String, scale: u32 },
 }
 
 impl Error {

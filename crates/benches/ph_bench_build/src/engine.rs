@@ -9,6 +9,7 @@ use std::process::{Command, Output};
 use crate::Plan;
 use crate::cases::Case;
 use crate::error::{ErrorKind, Result};
+use crate::growth::{self, Group, Median};
 use crate::json::{CargoMessage, WallClock};
 use crate::manifest::UserManifest;
 
@@ -260,6 +261,7 @@ impl Report {
     }
 
     fn measure_debug(&mut self, layout: &Layout<'_>) -> Result<()> {
+        let mut medians = Vec::with_capacity(layout.plan.cases.debug.len());
         for case in &layout.plan.cases.debug {
             layout.write_case(case)?;
             let name = &case.name;
@@ -272,11 +274,13 @@ impl Report {
                 timing.median, timing.stddev
             );
             self.sample(name, timing.median, timing.stddev)?;
+            medians.push(Median::new(name, timing.median));
         }
-        Ok(())
+        growth::check_group(Group::Debug, &layout.plan.growth, &medians)
     }
 
     fn measure_incremental(&mut self, layout: &Layout<'_>) -> Result<()> {
+        let mut medians = Vec::with_capacity(layout.plan.cases.incremental.len());
         for case in &layout.plan.cases.incremental {
             layout.write_case(case)?;
             let name = &case.name;
@@ -288,11 +292,13 @@ impl Report {
                 timing.median, timing.stddev
             );
             self.sample(&label, timing.median, timing.stddev)?;
+            medians.push(Median::new(name, timing.median));
         }
-        Ok(())
+        growth::check_group(Group::Incremental, &layout.plan.growth, &medians)
     }
 
     fn measure_release(&mut self, layout: &Layout<'_>) -> Result<()> {
+        let mut medians = Vec::with_capacity(layout.plan.cases.release.len());
         for case in &layout.plan.cases.release {
             layout.write_case(case)?;
             let name = &case.name;
@@ -310,8 +316,9 @@ impl Report {
                 timing.median, timing.stddev
             );
             self.sample(&label, timing.median, timing.stddev)?;
+            medians.push(Median::new(name, timing.median));
         }
-        Ok(())
+        growth::check_group(Group::Release, &layout.plan.growth, &medians)
     }
 
     fn measure_runtime(&mut self, layout: &Layout<'_>) -> Result<()> {

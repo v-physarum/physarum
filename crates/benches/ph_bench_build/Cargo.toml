@@ -5,7 +5,7 @@ edition = "2024"
 rust-version = "1.100"
 license = "GPL-3.0-or-later"
 repository = "https://github.com/v-physarum/physarum"
-description = "Hyperfine runner for cases selected by a directory layout."
+description = "Hyperfine runner for directory cases and scale-series growth checks."
 
 [lints.rust]
 unsafe_code = "forbid"
