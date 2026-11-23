@@ -159,6 +159,32 @@ pub(crate) enum ErrorKind {
     /// The rendered source uses a crate that is not in the workspace.
     #[error("{series} uses {crate_name}, which is not a workspace member")]
     SeriesCrate { series: String, crate_name: String },
+    /// A series sets both a growth claim and a pass ceiling.
+    #[error("{series} sets both a growth claim and a pass ceiling")]
+    SeriesBothClaims { series: String },
+    /// The ceiling scale is not one of the series scales.
+    #[error("{series} ceiling scale {scale} is not in the series")]
+    PassScale { series: String, scale: u32 },
+    /// Nightly rustc is required for `-Ztime-passes`.
+    #[error("nightly rustc is required for -Ztime-passes")]
+    NightlyMissing,
+    /// The user crate's `-Ztime-passes` log has no line for this pass.
+    #[error("no {pass} time after compiling {package}")]
+    PassMissing { pass: String, package: String },
+    /// A pass line did not contain a finite number of seconds.
+    #[error("{pass} time is not a number of seconds")]
+    PassText { pass: String },
+    /// A pass time is not a finite non-negative number.
+    #[error("{pass} at scale {scale} time is not a finite non-negative number")]
+    PassTime { pass: String, scale: u32 },
+    /// A pass took longer than its ceiling.
+    #[error("{pass} at scale {scale} took {elapsed_ms} ms, limit is {limit_ms} ms")]
+    PassSlow {
+        pass: String,
+        scale: u32,
+        elapsed_ms: u128,
+        limit_ms: u128,
+    },
 }
 
 impl Error {

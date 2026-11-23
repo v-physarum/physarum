@@ -12,13 +12,15 @@ mod error;
 mod growth;
 mod json;
 mod manifest;
+mod passes;
 mod source;
 mod workspace;
 
 pub use error::{Error, Result};
 pub use growth::{
     Character, Fit, Group, Growth, LINEAR_EXPONENT, LINEAR_LIMIT, MIN_SCALE, MIN_SCALES,
-    NOISE_ALLOWANCE, Point, QUADRATIC_EXPONENT, QUADRATIC_LIMIT, Scale, Series,
+    NOISE_ALLOWANCE, PassCeiling, PassSample, Point, QUADRATIC_EXPONENT, QUADRATIC_LIMIT,
+    RustcPass, Scale, Series, Solver, TYPE_CHECK_CRATE_LIMIT, Verdict,
 };
 
 use std::path::{Path, PathBuf};

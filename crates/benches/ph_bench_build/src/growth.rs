@@ -7,6 +7,7 @@
 
 use std::fmt;
 use std::sync::{Mutex, PoisonError};
+use std::time::Duration;
 
 use crate::error::{Error, ErrorKind, Result};
 
@@ -38,6 +39,17 @@ pub const QUADRATIC_LIMIT: f64 = QUADRATIC_EXPONENT - NOISE_ALLOWANCE;
 
 /// Fewest scales that can show growth.
 pub const MIN_SCALES: usize = 2;
+
+/// Digits after the decimal in a `-Ztime-passes` second count.
+const MILLIS_DIGITS: usize = 3;
+
+/// Ceiling for [`RustcPass::TypeCheckCrate`] at scale 16.
+///
+/// Function items at that scale take about 8 ms. The closure form of the same
+/// chain takes about 67 ms. [`Growth::Linear`] from scale 1 to scale 16 still
+/// passes that closure chain: the large build must take more than 32 times as
+/// long (`16` to the power [`LINEAR_LIMIT`]) before the claim fails.
+pub const TYPE_CHECK_CRATE_LIMIT: Duration = Duration::from_millis(20);
 
 /// Smallest scale. Zero has no logarithm.
 pub const MIN_SCALE: u32 = 1;
@@ -161,6 +173,164 @@ impl Point {
     }
 }
 
+/// One rustc pass named by `-Ztime-passes`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RustcPass {
+    /// The `type_check_crate` pass.
+    TypeCheckCrate,
+}
+
+impl RustcPass {
+    /// The name rustc prints for this pass.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::TypeCheckCrate => "type_check_crate",
+        }
+    }
+}
+
+/// Trait solver for a nightly pass measurement.
+///
+/// Stable hyperfine series keep [`Self::Default`]. [`Self::Next`] adds
+/// `-Znext-solver=globally`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Solver {
+    /// The compiler's default solver.
+    #[default]
+    Default,
+    /// `-Znext-solver=globally`.
+    Next,
+}
+
+impl Solver {
+    pub(crate) fn rustc_args(self) -> &'static [&'static str] {
+        match self {
+            Self::Default => &["-Ztime-passes"],
+            Self::Next => &["-Ztime-passes", "-Znext-solver=globally"],
+        }
+    }
+}
+
+/// Ceiling on one rustc pass at one scale.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PassCeiling {
+    pass: RustcPass,
+    scale: Scale,
+    limit: Duration,
+}
+
+impl PassCeiling {
+    /// `pass` at `scale` must finish in `limit` or less.
+    #[must_use]
+    pub const fn new(pass: RustcPass, scale: Scale, limit: Duration) -> Self {
+        Self { pass, scale, limit }
+    }
+
+    /// The pass this ceiling times.
+    #[must_use]
+    pub const fn pass(self) -> RustcPass {
+        self.pass
+    }
+
+    /// The scale this ceiling applies to.
+    #[must_use]
+    pub const fn scale(self) -> Scale {
+        self.scale
+    }
+
+    /// The longest allowed time.
+    #[must_use]
+    pub const fn limit(self) -> Duration {
+        self.limit
+    }
+
+    /// Checks one reported pass time.
+    ///
+    /// `seconds` is the number rustc printed, already rounded to milliseconds.
+    /// Zero is inside the ceiling. A non-finite or negative time is not.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `seconds` is not a finite non-negative time, or
+    /// when it is above [`Self::limit`].
+    pub fn check_seconds(self, seconds: f64) -> Result<Duration> {
+        let Some(elapsed_ms) = reported_millis(seconds) else {
+            return Err(ErrorKind::PassTime {
+                pass: self.pass.name().to_owned(),
+                scale: self.scale.count(),
+            }
+            .into());
+        };
+        let limit_ms = self.limit.as_millis();
+        if elapsed_ms > limit_ms {
+            return Err(ErrorKind::PassSlow {
+                pass: self.pass.name().to_owned(),
+                scale: self.scale.count(),
+                elapsed_ms,
+                limit_ms,
+            }
+            .into());
+        }
+        Duration::try_from_secs_f64(seconds).map_err(|_| {
+            ErrorKind::PassTime { pass: self.pass.name().to_owned(), scale: self.scale.count() }
+                .into()
+        })
+    }
+}
+
+/// One measured pass under its ceiling.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PassSample {
+    scale: Scale,
+    elapsed: Duration,
+    limit: Duration,
+}
+
+impl PassSample {
+    /// The scale that was timed.
+    #[must_use]
+    pub const fn scale(self) -> Scale {
+        self.scale
+    }
+
+    /// The pass time rustc reported.
+    #[must_use]
+    pub const fn elapsed(self) -> Duration {
+        self.elapsed
+    }
+
+    /// The ceiling that accepted this time.
+    #[must_use]
+    pub const fn limit(self) -> Duration {
+        self.limit
+    }
+}
+
+/// What [`Series::check`] accepted.
+#[derive(Clone, Copy, Debug)]
+pub enum Verdict {
+    /// Log-log fit of hyperfine wall-clock builds.
+    Growth(Fit),
+    /// One nightly rustc pass under its ceiling.
+    Pass(PassSample),
+}
+
+/// Milliseconds of a `-Ztime-passes` second count, printed to three decimals.
+fn reported_millis(seconds: f64) -> Option<u128> {
+    if !seconds.is_finite() || seconds < 0.0 {
+        return None;
+    }
+    let text = format!("{seconds:.3}");
+    let (whole, frac) = text.split_once('.')?;
+    if frac.len() != MILLIS_DIGITS {
+        return None;
+    }
+    let secs: u128 = whole.parse().ok()?;
+    let millis: u128 = frac.parse().ok()?;
+    secs.checked_mul(1000)?.checked_add(millis)
+}
+
 /// Log-log fit of `seconds ∝ N^exponent`.
 #[derive(Clone, Copy, Debug)]
 pub struct Fit {
@@ -203,6 +373,8 @@ pub struct Series {
     group: Option<Group>,
     scales: Vec<Scale>,
     expect: Option<Growth>,
+    ceiling: Option<PassCeiling>,
+    solver: Solver,
     sources: Vec<String>,
     rendered: bool,
 }
@@ -215,6 +387,8 @@ impl Series {
             group: None,
             scales: Vec::new(),
             expect: None,
+            ceiling: None,
+            solver: Solver::Default,
             sources: Vec::new(),
             rendered: false,
         }
@@ -237,17 +411,37 @@ impl Series {
         self
     }
 
-    /// The claim checked after the series is measured.
+    /// The growth claim checked after hyperfine measures the series.
+    ///
+    /// This is the stable path. A pass ceiling is a different claim.
     pub fn expect(mut self, growth: Growth) -> Self {
         self.expect = Some(growth);
+        self
+    }
+
+    /// Checks one nightly rustc pass at one scale instead of a growth claim.
+    ///
+    /// [`Self::check`] compiles with `-Ztime-passes` and reads that pass on
+    /// the user crate. Stable rustc has no `-Ztime-passes`.
+    pub fn ceiling(mut self, ceiling: PassCeiling) -> Self {
+        self.ceiling = Some(ceiling);
+        self
+    }
+
+    /// Selects the trait solver for a pass ceiling.
+    ///
+    /// [`Solver::Default`] leaves the compiler default. [`Solver::Next`] passes
+    /// `-Znext-solver=globally`. Hyperfine series ignore this.
+    pub fn solver(mut self, solver: Solver) -> Self {
+        self.solver = solver;
         self
     }
 
     /// Renders one source per scale. `generate` receives `N`.
     ///
     /// The source is stored on the series. [`Self::check`] writes it to the
-    /// downstream crate. Call [`Self::group`], [`Self::scales`], and
-    /// [`Self::expect`] before [`Self::check`].
+    /// downstream crate. Call [`Self::group`], [`Self::scales`], and either
+    /// [`Self::expect`] or [`Self::ceiling`] before [`Self::check`].
     pub fn render(mut self, mut generate: impl FnMut(Scale) -> String) -> Self {
         self.sources.clear();
         self.sources.reserve(self.scales.len());
@@ -277,21 +471,34 @@ impl Series {
         self.sources.get(index).map(String::as_str)
     }
 
-    /// Builds each rendered source and checks the measured times.
+    /// Builds each rendered source and checks the claim.
     ///
-    /// The workspace root is the ancestor of `CARGO_MANIFEST_DIR` whose
-    /// manifest lists members. `use` paths in the rendered source that name a
-    /// member become path dependencies. The user package is `{name}_user`.
-    /// Output is `{target}/ph_bench_build/{name}-{group}`.
+    /// [`Self::expect`] times stable hyperfine builds and checks the log-log
+    /// exponent. [`Self::ceiling`] times one nightly rustc pass with
+    /// `-Ztime-passes`. The workspace root is the ancestor of
+    /// `CARGO_MANIFEST_DIR` whose manifest lists members. `use` paths in the
+    /// rendered source that name a member become path dependencies. The user
+    /// package is `{name}_user`. Output is `{target}/ph_bench_build/{name}-{group}`.
     ///
     /// # Errors
     ///
-    /// Returns an error when the series is unfinished, a path cannot be
-    /// resolved, a build fails, or the measured times miss the claim.
-    pub fn check(&self) -> Result<Fit> {
+    /// Returns an error when the series is unfinished, both claims are set, a
+    /// path cannot be resolved, a build fails, or the measured times miss the
+    /// claim. A pass ceiling also fails when nightly rustc is missing.
+    pub fn check(&self) -> Result<Verdict> {
         static BUILD: Mutex<()> = Mutex::new(());
         let _guard = BUILD.lock().unwrap_or_else(PoisonError::into_inner);
-        let (group, _) = self.ensure_ready()?;
+        if self.ceiling.is_some() && self.expect.is_some() {
+            return Err(ErrorKind::SeriesBothClaims { series: self.name.clone() }.into());
+        }
+        if self.ceiling.is_some() {
+            return self.check_ceiling();
+        }
+        self.check_growth()
+    }
+
+    fn check_growth(&self) -> Result<Verdict> {
+        let (group, _) = self.ensure_growth()?;
         let home = crate::workspace::series_home(&self.name, group, &self.sources)?;
         let seconds = crate::engine::measure_series(&crate::engine::SeriesBuild {
             name: &self.name,
@@ -307,7 +514,53 @@ impl Series {
             fit.exponent(),
             fit.character()
         );
-        Ok(fit)
+        Ok(Verdict::Growth(fit))
+    }
+
+    fn check_ceiling(&self) -> Result<Verdict> {
+        let group = self.ensure_rendered()?;
+        let ceiling = self
+            .ceiling
+            .ok_or_else(|| Error::from(ErrorKind::SeriesExpect { series: self.name.clone() }))?;
+        if !self.scales.contains(&ceiling.scale) {
+            return Err(ErrorKind::PassScale {
+                series: self.name.clone(),
+                scale: ceiling.scale.count(),
+            }
+            .into());
+        }
+        let home = crate::workspace::series_home(&self.name, group, &self.sources)?;
+        let seconds = crate::engine::measure_passes(&crate::engine::PassBuild {
+            name: &self.name,
+            group,
+            scales: &self.scales,
+            sources: &self.sources,
+            home: &home,
+            pass: ceiling.pass.name(),
+            rustc_args: self.solver.rustc_args(),
+        })?;
+        let index = self.scales.iter().position(|scale| *scale == ceiling.scale);
+        let Some(index) = index else {
+            return Err(ErrorKind::PassScale {
+                series: self.name.clone(),
+                scale: ceiling.scale.count(),
+            }
+            .into());
+        };
+        let elapsed = ceiling.check_seconds(seconds[index])?;
+        println!(
+            "{group} {} {} scale {} {:.3}s limit {:.3}s",
+            self.name,
+            ceiling.pass.name(),
+            ceiling.scale.count(),
+            elapsed.as_secs_f64(),
+            ceiling.limit.as_secs_f64()
+        );
+        Ok(Verdict::Pass(PassSample {
+            scale: ceiling.scale,
+            elapsed,
+            limit: ceiling.limit,
+        }))
     }
 
     /// Checks `seconds` against this series.
@@ -319,7 +572,7 @@ impl Series {
     /// Returns an error when the series was not rendered, the slice length
     /// differs from the scales, the times cannot be fit, or the fit misses the claim.
     pub fn check_seconds(&self, seconds: &[f64]) -> Result<Fit> {
-        let (_, expect) = self.ensure_ready()?;
+        let (_, expect) = self.ensure_growth()?;
         if seconds.len() != self.scales.len() {
             return Err(ErrorKind::SeriesTimeCount {
                 series: self.name.clone(),
@@ -342,9 +595,6 @@ impl Series {
         if self.group.is_none() {
             return Err(ErrorKind::SeriesGroup { series: self.name.clone() }.into());
         }
-        if self.expect.is_none() {
-            return Err(ErrorKind::SeriesExpect { series: self.name.clone() }.into());
-        }
         if self.scales.len() < MIN_SCALES {
             return Err(
                 ErrorKind::SeriesTooFew { series: self.name.clone(), min: MIN_SCALES }.into(),
@@ -366,7 +616,7 @@ impl Series {
         Ok(())
     }
 
-    fn ensure_ready(&self) -> Result<(Group, Growth)> {
+    fn ensure_rendered(&self) -> Result<Group> {
         self.prepare()?;
         if !self.rendered || self.sources.len() != self.scales.len() {
             return Err(ErrorKind::SeriesSources { series: self.name.clone() }.into());
@@ -380,9 +630,12 @@ impl Series {
                 .into());
             }
         }
-        let group = self
-            .group
-            .ok_or_else(|| Error::from(ErrorKind::SeriesGroup { series: self.name.clone() }))?;
+        self.group
+            .ok_or_else(|| Error::from(ErrorKind::SeriesGroup { series: self.name.clone() }))
+    }
+
+    fn ensure_growth(&self) -> Result<(Group, Growth)> {
+        let group = self.ensure_rendered()?;
         let expect = self
             .expect
             .ok_or_else(|| Error::from(ErrorKind::SeriesExpect { series: self.name.clone() }))?;
