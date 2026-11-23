@@ -32,7 +32,7 @@ pub use descriptor::{
 };
 pub use filter::{And, ApplyFilter, NestOk, Not, On, Or};
 pub use query::{
-    Built, ClaimVia, FromChain, FromProxy, Init, Own, Query, Setup, Surface, Tick, Update,
+    BeanTag, Built, ClaimVia, FromChain, FromProxy, Init, Own, Query, Setup, Surface, Tick, Update,
 };
 
 #[cfg(test)]
@@ -47,7 +47,8 @@ mod tests {
 
         use std::fs;
         use std::path::PathBuf;
-        use std::time::SystemTime;
+        use std::process::Command;
+        use std::time::{SystemTime, UNIX_EPOCH};
 
         use core::cell::Cell;
 
@@ -404,11 +405,14 @@ mod tests {
         }
 
         #[test]
-        fn the_same_bean_on_the_module_and_the_proxy_is_ambiguous() {
-            fail(
-                "
-                use ph_beans::{At, BeanInfo, Get, Ix0, Marker, Proxy, Query, Stop, Target};
+        fn a_bean_listed_on_the_module_and_the_proxy_is_rejected() {
+            // Metadata-only probes skip the const-eval that reports this. A full
+            // rustc build is what prints it. The module lists Score, and the
+            // proxy lists Score in Provides.
+            let source = "
+                use ph_beans::{At, BeanInfo, BeanTag, Get, Ix0, Marker, Proxy, Query, Stop, Target};
                 struct Score;
+                impl BeanTag for Score { const ID: u64 = 1; }
                 struct Update;
                 struct GameTick;
                 impl BeanInfo for Score {
@@ -426,17 +430,15 @@ mod tests {
                 }
                 impl At<Score> for Update { type Ix = Ix0; }
                 impl BeanInfo for GameTick {
-                    type Provides = (); type Injects = (); type Beans = (); type State = ();
+                    type Provides = (); type Injects = (); type Beans = (Score,); type State = ();
                     type Proxy = Update;
                     type Link = ph_beans::Get<GameTick>;
                     type Chain = Stop;
                 }
-                impl At<Score> for GameTick { type Ix = Ix0; }
                 impl Target for GameTick {}
-                fn probe() { let _claim = GameTick::query().inject_resources(Score::T); }
-                ",
-                "type annotations needed",
-            );
+                pub fn probe() { let _claim = GameTick::query().inject_resources(Score::T); }
+                ";
+            assert_full_rustc(source, "already on the proxy");
         }
 
         #[test]
@@ -774,6 +776,37 @@ mod tests {
             );
         }
 
+        fn assert_full_rustc(body: &str, description: &str) {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |elapsed| elapsed.as_nanos());
+            let dir = std::env::temp_dir().join(format!("ph-beans-dup-{nanos}"));
+            fs::create_dir_all(&dir).expect("probe dir");
+            let path = dir.join("probe.rs");
+            fs::write(&path, body).expect("probe source");
+            let rustc = std::env::var("RUSTC").unwrap_or_else(|_| "rustc".to_owned());
+            let output = Command::new(rustc)
+                .arg("--edition")
+                .arg("2024")
+                .arg("--crate-type")
+                .arg("lib")
+                .arg("--error-format")
+                .arg("short")
+                .arg("--out-dir")
+                .arg(&dir)
+                .arg("--extern")
+                .arg(format!("ph_beans={}", beans_codegen_rlib().display()))
+                .arg(&path)
+                .output()
+                .expect("rustc");
+            let stderr = String::from_utf8(output.stderr).expect("stderr utf-8");
+            let _ = fs::remove_dir_all(&dir);
+            assert!(
+                stderr.contains(description),
+                "description {description}\n{stderr}"
+            );
+        }
+
         pub(super) fn fail(body: &str, description: &str) {
             ErrorTester::source(body)
                 .extern_crate("ph_beans", beans_rlib())
@@ -781,6 +814,14 @@ mod tests {
         }
 
         fn beans_rlib() -> PathBuf {
+            newest_beans_lib(false)
+        }
+
+        fn beans_codegen_rlib() -> PathBuf {
+            newest_beans_lib(true)
+        }
+
+        fn newest_beans_lib(rlib_only: bool) -> PathBuf {
             let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
             let target = std::env::var_os("CARGO_TARGET_DIR")
                 .map_or_else(|| manifest.join("../../target"), PathBuf::from);
@@ -791,6 +832,9 @@ mod tests {
                 for hash in hashes.flatten() {
                     collect_rlib(&hash.path().join("out"), &mut found);
                 }
+            }
+            if rlib_only {
+                found.retain(|path| path.extension().is_some_and(|ext| ext == "rlib"));
             }
             found
                 .into_iter()

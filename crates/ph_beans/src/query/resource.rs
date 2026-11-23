@@ -14,6 +14,7 @@ use crate::filter::shape::No;
 use crate::query::apply::ApplyPatch;
 use crate::query::args::ClaimVia;
 use crate::query::init::Init;
+use crate::query::overlap::DistinctBeans;
 
 /// Replaces resource args on a concrete [`Ctx`] (hides `B`/`O`/`S`/`T` from [`CtxConfig`]).
 #[doc(hidden)]
@@ -100,11 +101,16 @@ impl<E, C> Init<E, C> {
     ///
     /// A live `Mut` refuses another inject until a wait clears it.
     /// See `a_live_mut_blocks_the_next_inject`.
+    ///
+    /// A bean that is an item of the module's `Beans` and of a proxy's
+    /// `Provides` fails here: `bean is already on the proxy`.
     #[allow(clippy::needless_pass_by_value)]
     pub fn inject_resources<R, K>(self, resources: R) -> <Self as InjectResourcesStep<R, K>>::Out
     where
+        C: Context<Bean: DistinctBeans>,
         Self: InjectResourcesStep<R, K>,
     {
+        let _ = <C::Bean as DistinctBeans>::OK;
         InjectResourcesStep::inject_resources(self, resources)
     }
 }

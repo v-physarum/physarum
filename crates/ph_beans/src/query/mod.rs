@@ -8,6 +8,7 @@ mod entry;
 mod filter;
 mod init;
 mod map;
+mod overlap;
 mod resource;
 mod schedule;
 mod setup;
@@ -20,5 +21,6 @@ pub use args::{
 pub use built::Built;
 pub use entry::Query;
 pub use init::Init;
+pub use overlap::BeanTag;
 pub use setup::{Setup, Tick};
 pub use update::Update;
