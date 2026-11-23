@@ -1,9 +1,14 @@
 //! Manual provide / inject against a parent surface.
 //!
 //! Membership is [`ClaimMark`]. A pair uses `OfProvide0` / `OfProvide1` (and
-//! the inject twins). The inject tuple itself is collected on
+//! the inject twins). A longer list is one impl `for (A0, A1, A2, …)`: the
+//! elements are generics, not slot markers. The inject tuple is collected on
 //! [`Collected`](crate::Collected). A nested tail such as
-//! `(Get<T>, (Get<U>, ()))` is not a list. The markers are not a Get×Mut matrix.
+//! `(Get<T>, (Get<U>, ()))` is not a list.
+
+mod tuple;
+
+use core::marker::PhantomData;
 
 use crate::bean::BeanInfo;
 use crate::descriptor::{Get, Mut};
@@ -14,8 +19,10 @@ pub struct OfParent;
 /// The child is injecting the parent's single provide.
 pub struct OfProvide;
 
-/// The child is injecting the parent's single inject.
-pub struct OfInject;
+/// The child is injecting the parent's inject list.
+///
+/// A single claim uses [`OfInject`]. A flat tuple uses `OfInject<(A0, A1, …)>`.
+pub struct OfInject<T = ()>(PhantomData<T>);
 
 /// First claim of a flat provide pair.
 pub struct OfProvide0;
@@ -50,7 +57,7 @@ pub struct OfInject1;
 /// ```
 ///
 /// ```compile_fail
-/// use ph_beans::{BeanInfo, FromParent, Get, Mut, OfProvide0, OfProvide1};
+/// use ph_beans::{BeanInfo, FromParent, Get, Mut};
 ///
 /// struct Id;
 /// struct Keys;
@@ -63,7 +70,7 @@ pub struct OfInject1;
 ///     type State = ();
 /// }
 ///
-/// fn nested<C: FromParent<App, (OfProvide0, OfProvide1)>>() {}
+/// fn nested<C: FromParent<App, (Get<Id>, Mut<Keys>)>>() {}
 /// nested::<(Get<Id>, (Mut<Keys>, ()))>();
 /// ```
 ///
@@ -164,80 +171,6 @@ where
     P: BeanInfo<Injects = (L, C)>,
     C: ClaimMark,
     L: ClaimMark,
-{
-}
-
-// A child inject list is one flat tuple of claims. A nested tail does not match.
-impl<P, V0, V1, A, B> FromParent<P, (V0, V1)> for (A, B)
-where
-    A: FromParent<P, V0> + ClaimMark,
-    B: FromParent<P, V1> + ClaimMark,
-{
-}
-
-impl<P, V0, V1, V2, A, B, C> FromParent<P, (V0, V1, V2)> for (A, B, C)
-where
-    A: FromParent<P, V0> + ClaimMark,
-    B: FromParent<P, V1> + ClaimMark,
-    C: FromParent<P, V2> + ClaimMark,
-{
-}
-
-impl<P, V0, V1, V2, V3, A, B, C, D> FromParent<P, (V0, V1, V2, V3)> for (A, B, C, D)
-where
-    A: FromParent<P, V0> + ClaimMark,
-    B: FromParent<P, V1> + ClaimMark,
-    C: FromParent<P, V2> + ClaimMark,
-    D: FromParent<P, V3> + ClaimMark,
-{
-}
-
-impl<P, V0, V1, V2, V3, V4, A, B, C, D, E> FromParent<P, (V0, V1, V2, V3, V4)> for (A, B, C, D, E)
-where
-    A: FromParent<P, V0> + ClaimMark,
-    B: FromParent<P, V1> + ClaimMark,
-    C: FromParent<P, V2> + ClaimMark,
-    D: FromParent<P, V3> + ClaimMark,
-    E: FromParent<P, V4> + ClaimMark,
-{
-}
-
-impl<P, V0, V1, V2, V3, V4, V5, A, B, C, D, E, F> FromParent<P, (V0, V1, V2, V3, V4, V5)>
-    for (A, B, C, D, E, F)
-where
-    A: FromParent<P, V0> + ClaimMark,
-    B: FromParent<P, V1> + ClaimMark,
-    C: FromParent<P, V2> + ClaimMark,
-    D: FromParent<P, V3> + ClaimMark,
-    E: FromParent<P, V4> + ClaimMark,
-    F: FromParent<P, V5> + ClaimMark,
-{
-}
-
-impl<P, V0, V1, V2, V3, V4, V5, V6, A, B, C, D, E, F, G> FromParent<P, (V0, V1, V2, V3, V4, V5, V6)>
-    for (A, B, C, D, E, F, G)
-where
-    A: FromParent<P, V0> + ClaimMark,
-    B: FromParent<P, V1> + ClaimMark,
-    C: FromParent<P, V2> + ClaimMark,
-    D: FromParent<P, V3> + ClaimMark,
-    E: FromParent<P, V4> + ClaimMark,
-    F: FromParent<P, V5> + ClaimMark,
-    G: FromParent<P, V6> + ClaimMark,
-{
-}
-
-impl<P, V0, V1, V2, V3, V4, V5, V6, V7, A, B, C, D, E, F, G, H>
-    FromParent<P, (V0, V1, V2, V3, V4, V5, V6, V7)> for (A, B, C, D, E, F, G, H)
-where
-    A: FromParent<P, V0> + ClaimMark,
-    B: FromParent<P, V1> + ClaimMark,
-    C: FromParent<P, V2> + ClaimMark,
-    D: FromParent<P, V3> + ClaimMark,
-    E: FromParent<P, V4> + ClaimMark,
-    F: FromParent<P, V5> + ClaimMark,
-    G: FromParent<P, V6> + ClaimMark,
-    H: FromParent<P, V7> + ClaimMark,
 {
 }
 

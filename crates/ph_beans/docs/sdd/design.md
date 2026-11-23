@@ -93,7 +93,7 @@ Layout of `crates/ph_beans/src/`. Keep the surface readable: **small files**, **
    // …
    ```
 
-   DI (`FromParent`): match through **membership** + `ClaimMark`. **Do not** split Get vs Mut. A pair uses `OfProvide0` / `OfProvide1` (and the inject twins). The inject tuple is collected on `Collected::Injects` — one associated type on the pipeline descriptor, not an index walk and not a nested tail `(Get<A>, (Get<B>, ()))`. A child inject list is that same flat tuple: each element is a claim, so the tuple impl does not recurse.
+   DI (`FromParent`): match through **membership** + `ClaimMark`. **Do not** split Get vs Mut. A pair uses `OfProvide0` / `OfProvide1` (and the inject twins). A longer list is `impl<A0, A1, A2> FromParent<P, (A0, A1, A2)> for (A0, A1, A2)`: the elements are generics. A tuple of slot markers is not a list. The inject tuple is collected on `Collected::Injects`. A nested tail `(Get<A>, (Get<B>, ()))` is not a list.
 
    ```rust
    // Forbidden — Get×Mut×slot
@@ -565,7 +565,7 @@ Tree: `App` → `Logic` → `Render`. `Render` injects `Logic::MUT`; `Logic` inj
 
 ### `FromParent` impl style
 
-Compile-time “child may take this claim from parent” is **`FromParent`** (and `Module`). Use **`ClaimMark`** + membership on `Provides` / `Injects` — **not** Get×Mut×slot. A pair uses `OfProvide0` / `OfProvide1`. The inject tuple is collected on `Collected::Injects`. A nested tail is not a list (rule 8).
+Compile-time “child may take this claim from parent” is **`FromParent`** (and `Module`). Use **`ClaimMark`** + membership on `Provides` / `Injects` — **not** Get×Mut×slot. A pair uses `OfProvide0` / `OfProvide1`. A longer list is one impl `for (A0, A1, A2)` whose elements are generics. The inject tuple is collected on `Collected::Injects`. A nested tail is not a list (rule 8).
 
 ### `T` vs `MUT`
 
