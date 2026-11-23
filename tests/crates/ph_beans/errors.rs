@@ -71,14 +71,27 @@ fn a_generic_module_is_rejected() {
 }
 
 #[test]
-fn four_injects_are_rejected() {
+fn five_injects_are_rejected() {
     fail(
         "
         #[derive(Module)]
-        #[inject(A::T, B::T, C::T, D::T)]
+        #[inject(A::T, B::T, C::T, D::T, E::T)]
         struct Child;
         ",
-        "accepts at most 3 beans",
+        "accepts at most 4 beans",
+    );
+}
+
+#[test]
+fn provides_plus_injects_past_four_are_rejected() {
+    fail(
+        "
+        #[derive(Module)]
+        #[provide(A::T, B::T, C::T)]
+        #[inject(D::T, E::T)]
+        struct Child;
+        ",
+        "accepts at most 4 beans",
     );
 }
 

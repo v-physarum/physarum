@@ -16,7 +16,7 @@ struct Count(u8);
 struct Logic;
 ```
 
-A struct with fields is a data bean: `State` is `Self`. A unit struct is a module. `Type::T` is a shared claim and `Type::MUT` is an exclusive claim. Provide accepts at most four claims. Inject accepts at most three. `#[module(state = ...)]` sets the module state; without it the state is `()`.
+A struct with fields is a data bean: `State` is `Self`. A unit struct is a module. `Type::T` and `Type::MUT` name a concrete bean; the lists store that bean, not the marker. `Beans` is the provides followed by the injects, at most four, and each entry gets `At`. `#[module(state = ...)]` sets the module state; without it the state is `()`.
 
 ## License
 

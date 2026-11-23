@@ -185,6 +185,11 @@ struct DerivedLogic;
 #[inject(Render::T)]
 struct DerivedUses;
 
+#[derive(DeriveModule)]
+#[provide(Id::T)]
+#[inject(Keys::MUT)]
+struct DerivedBoth;
+
 fn derived_boot(args: (&Id, &mut Keys)) -> u8 {
     let (id, keys) = args;
     id.0.wrapping_add(keys.0)
@@ -213,7 +218,20 @@ fn a_derived_module_defaults_its_state() {
 }
 
 #[test]
-fn a_derived_child_sees_the_provide() {
-    fn from_provide<C: Module<DerivedLogic, OfProvide>>() {}
-    from_provide::<DerivedUses>();
+fn a_derived_child_lists_concrete_beans() {
+    fn logic<B: BeanInfo<Provides = (Render,), Injects = (), Beans = (Render,)>>() {}
+    fn uses<B: BeanInfo<Provides = (), Injects = (Render,), Beans = (Render,)>>() {}
+    fn both<B: BeanInfo<Provides = (Id,), Injects = (Keys,), Beans = (Id, Keys)>>() {}
+    fn app<B: BeanInfo<Provides = (Id, Keys), Injects = (), Beans = (Id, Keys), State = u8>>() {}
+    fn at_render<B: At<Render, Ix = Ix0>>() {}
+    fn at_id<B: At<Id, Ix = Ix0>>() {}
+    fn at_keys<B: At<Keys, Ix = Ix1>>() {}
+    logic::<DerivedLogic>();
+    uses::<DerivedUses>();
+    both::<DerivedBoth>();
+    app::<DerivedApp>();
+    at_render::<DerivedLogic>();
+    at_render::<DerivedUses>();
+    at_id::<DerivedBoth>();
+    at_keys::<DerivedBoth>();
 }

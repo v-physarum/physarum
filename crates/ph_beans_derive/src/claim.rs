@@ -5,10 +5,8 @@ use quote::ToTokens;
 use syn::punctuated::Punctuated;
 use syn::{Attribute, Token, Type, TypePath};
 
-/// Most claims a module may provide. `At` stops at `Ix3`.
-pub(crate) const PROVIDE_LIMIT: usize = 4;
-/// Most claims a module may inject.
-pub(crate) const INJECT_LIMIT: usize = 3;
+/// Most concrete beans in `Beans` (`Provides` then `Injects`). `At` stops at `Ix3`.
+pub(crate) const BEAN_LIMIT: usize = 4;
 
 pub(crate) const PROVIDE_ATTR: &str = "provide";
 pub(crate) const INJECT_ATTR: &str = "inject";
@@ -24,19 +22,11 @@ pub(crate) struct Module {
 }
 
 /// One `Type::T` or `Type::MUT` claim.
+///
+/// The marker is required syntax. `BeanInfo` stores the concrete bean.
 pub(crate) struct Claim {
     /// Bean the marker names.
     pub(crate) bean: Type,
-    /// Shared (`T`) or exclusive (`MUT`).
-    pub(crate) access: Access,
-}
-
-/// Which marker a claim wrote.
-pub(crate) enum Access {
-    /// `Type::T`, emitted as `Get`.
-    Shared,
-    /// `Type::MUT`, emitted as `Mut`.
-    Exclusive,
 }
 
 pub(crate) fn parse_claims(attr: &Attribute) -> syn::Result<Vec<Claim>> {
@@ -51,8 +41,7 @@ pub(crate) fn parse_claims(attr: &Attribute) -> syn::Result<Vec<Claim>> {
 }
 
 pub(crate) fn validate(module: &Module) -> syn::Result<()> {
-    check_len(&module.provide, PROVIDE_LIMIT, PROVIDE_ATTR)?;
-    check_len(&module.inject, INJECT_LIMIT, INJECT_ATTR)?;
+    check_total(module)?;
     reject_duplicates(&module.provide, PROVIDE_ATTR)?;
     reject_duplicates(&module.inject, INJECT_ATTR)?;
     reject_both(module)
@@ -77,27 +66,29 @@ fn split_claim(ty: &Type) -> syn::Result<Claim> {
             "expected Type::T or Type::MUT",
         ));
     }
-    let access = if last.ident == "T" {
-        Access::Shared
-    } else if last.ident == "MUT" {
-        Access::Exclusive
-    } else {
+    if last.ident != "T" && last.ident != "MUT" {
         return Err(syn::Error::new_spanned(
             &last.ident,
             "expected Type::T or Type::MUT",
         ));
-    };
+    }
     let bean = Type::Path(TypePath { qself: None, path });
-    Ok(Claim { bean, access })
+    Ok(Claim { bean })
 }
 
-fn check_len(list: &[Claim], limit: usize, label: &str) -> syn::Result<()> {
-    if list.len() <= limit {
+fn check_total(module: &Module) -> syn::Result<()> {
+    let total = module.provide.len() + module.inject.len();
+    if total <= BEAN_LIMIT {
         return Ok(());
     }
+    let claim = if module.provide.len() > BEAN_LIMIT {
+        &module.provide[BEAN_LIMIT]
+    } else {
+        &module.inject[BEAN_LIMIT - module.provide.len()]
+    };
     Err(syn::Error::new_spanned(
-        &list[limit].bean,
-        format!("`{label}` accepts at most {limit} beans"),
+        &claim.bean,
+        format!("`Beans` accepts at most {BEAN_LIMIT} beans"),
     ))
 }
 
