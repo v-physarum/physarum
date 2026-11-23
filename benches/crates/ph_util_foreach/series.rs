@@ -1,6 +1,12 @@
-//! Scale series measured by building the rendered source.
+//! Scale series for `ph_util_foreach`: debug and release build time versus `N`.
+//!
+//! Each series renders one source per scale, times `cargo build` with
+//! hyperfine, and checks the log-log exponent. `hand_structs` and
+//! `flat_structs` claim linear growth.
 
-use ph_bench_build::{Group, Growth, Scale, Series};
+use std::process::ExitCode;
+
+use ph_bench_build::{Group, Growth, Result, Scale, Series};
 
 const FLAT_BEFORE: &str = "use ph_util_foreach::impl_foreach;\n\nimpl_foreach!(n in 0..";
 const FLAT_AFTER: &str = " {\n    pub struct paste(Ix, n);\n});\n";
@@ -11,25 +17,26 @@ const DIGIT_CAP: usize = 10;
 /// Bytes reserved for one hand-written struct line, including a `u32`'s digits.
 const HAND_LINE_CAP: usize = HAND_PREFIX.len() + DIGIT_CAP + HAND_SUFFIX.len();
 
-#[test]
-fn hand_structs_grow_linearly() {
+fn main() -> ExitCode {
+    match run() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("{error}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+fn run() -> Result<()> {
     Series::new("hand_structs")
         .group(Group::Debug)
         .scales([64, 1024, 8192])
         .expect(Growth::Linear)
         .render(hand_structs)
-        .check()
-        .unwrap();
-}
-
-#[test]
-fn flat_structs_grow_linearly_in_debug() {
-    flat(Group::Debug, [64, 1024, 8192]).check().unwrap();
-}
-
-#[test]
-fn flat_structs_grow_linearly_in_release() {
-    flat(Group::Release, [1024, 8192]).check().unwrap();
+        .check()?;
+    flat(Group::Debug, [64, 1024, 8192]).check()?;
+    flat(Group::Release, [1024, 8192]).check()?;
+    Ok(())
 }
 
 #[test]
