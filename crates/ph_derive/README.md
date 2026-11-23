@@ -1,9 +1,9 @@
-# ph_beans_derive
+# ph_derive
 
 `#[derive(Module)]` implements `BeanInfo` for a struct.
 
 ```rust
-use ph_beans_derive::Module;
+use ph_derive::{Module, config};
 
 #[derive(Module)]
 struct Count(u8);
@@ -17,6 +17,8 @@ struct Logic;
 ```
 
 A struct with fields is a data bean: `State` is `Self`. A unit struct is a module. `Type::T` and `Type::MUT` name a concrete bean; the lists store that bean, not the marker. `Beans` is the provides followed by the injects, at most four, and each entry gets `At`. `#[module(state = ...)]` sets the module state; without it the state is `()`.
+
+`#[config(type = r#dyn)]` on a trait allows `#[inject(Draw::T as Trait)]`. The inject list still stores `Draw`. The view is `dyn Trait`. A cast in `provide` is rejected. The keyword `dyn` does not parse in an attribute on this toolchain, so the marker is the raw identifier.
 
 ## License
 

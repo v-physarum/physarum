@@ -38,6 +38,7 @@ fn expand_module(name: &Ident, module: &Module) -> TokenStream {
         quote! { () }
     };
     let at = at_impls(name, &module.provide, &module.inject);
+    let views = view_checks(&module.inject);
     quote! {
         impl ::ph_beans::BeanInfo for #name {
             type Provides = #provides;
@@ -47,7 +48,26 @@ fn expand_module(name: &Ident, module: &Module) -> TokenStream {
         }
 
         #at
+        #views
     }
+}
+
+fn view_checks(inject: &[Claim]) -> TokenStream {
+    let checks = inject.iter().filter_map(|claim| {
+        let view = claim.view.as_ref()?;
+        let bean = &claim.bean;
+        Some(quote! {
+            const _: () = {
+                const fn assert_dyn<T, V>()
+                where
+                    V: ::ph_beans::DynView<T> + ?Sized,
+                {
+                }
+                assert_dyn::<#bean, dyn #view>();
+            };
+        })
+    });
+    quote! { #(#checks)* }
 }
 
 fn concrete(claims: &[Claim]) -> Vec<TokenStream> {

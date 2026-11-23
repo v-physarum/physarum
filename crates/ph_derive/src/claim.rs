@@ -2,6 +2,7 @@
 
 use proc_macro2::TokenStream;
 use quote::ToTokens;
+use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::{Attribute, Token, Type, TypePath};
 
@@ -27,6 +28,8 @@ pub(crate) struct Module {
 pub(crate) struct Claim {
     /// Bean the marker names.
     pub(crate) bean: Type,
+    /// `as Trait` on an inject. Absent for a concrete claim.
+    pub(crate) view: Option<Type>,
 }
 
 pub(crate) fn parse_claims(attr: &Attribute) -> syn::Result<Vec<Claim>> {
@@ -36,18 +39,42 @@ pub(crate) fn parse_claims(attr: &Attribute) -> syn::Result<Vec<Claim>> {
             "expected a parenthesized claim list",
         ));
     };
-    let parsed = list.parse_args_with(Punctuated::<Type, Token![,]>::parse_terminated)?;
+    let parsed = list.parse_args_with(Punctuated::<RawClaim, Token![,]>::parse_terminated)?;
     parsed.iter().map(split_claim).collect()
+}
+
+struct RawClaim {
+    ty: Type,
+    view: Option<Type>,
+}
+
+impl Parse for RawClaim {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let ty = input.parse()?;
+        let view = if input.peek(Token![as]) {
+            input.parse::<Token![as]>()?;
+            Some(input.parse()?)
+        } else {
+            None
+        };
+        Ok(Self { ty, view })
+    }
 }
 
 pub(crate) fn validate(module: &Module) -> syn::Result<()> {
     check_total(module)?;
+    reject_provide_cast(module)?;
     reject_duplicates(&module.provide, PROVIDE_ATTR)?;
     reject_duplicates(&module.inject, INJECT_ATTR)?;
     reject_both(module)
 }
 
-fn split_claim(ty: &Type) -> syn::Result<Claim> {
+fn split_claim(raw: &RawClaim) -> syn::Result<Claim> {
+    let claim = split_marker(&raw.ty)?;
+    Ok(Claim { view: raw.view.clone(), ..claim })
+}
+
+fn split_marker(ty: &Type) -> syn::Result<Claim> {
     let Type::Path(type_path) = ty else {
         return Err(syn::Error::new_spanned(ty, "expected Type::T or Type::MUT"));
     };
@@ -73,7 +100,19 @@ fn split_claim(ty: &Type) -> syn::Result<Claim> {
         ));
     }
     let bean = Type::Path(TypePath { qself: None, path });
-    Ok(Claim { bean })
+    Ok(Claim { bean, view: None })
+}
+
+fn reject_provide_cast(module: &Module) -> syn::Result<()> {
+    for claim in &module.provide {
+        if let Some(view) = &claim.view {
+            return Err(syn::Error::new_spanned(
+                view,
+                "cast is not allowed in `provide`",
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn check_total(module: &Module) -> syn::Result<()> {

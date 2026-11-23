@@ -120,6 +120,30 @@ fn the_old_mut_marker_is_rejected() {
 }
 
 #[test]
+fn a_provide_cast_is_rejected() {
+    fail(
+        "
+        #[derive(Module)]
+        #[provide(Count::T as Painter)]
+        struct Parent;
+        ",
+        "cast is not allowed in `provide`",
+    );
+}
+
+#[test]
+fn dyn_config_on_a_struct_is_rejected() {
+    let source = "
+        use ph_derive::config;
+        #[config(type = r#dyn)]
+        struct Holder;
+    ";
+    ErrorTester::source(source)
+        .extern_crate("ph_derive", proc_macro_library("ph_derive"))
+        .assert_description("expected a trait");
+}
+
+#[test]
 fn provide_on_a_data_bean_is_rejected() {
     fail(
         "
@@ -132,8 +156,8 @@ fn provide_on_a_data_bean_is_rejected() {
 }
 
 fn fail(body: &str, description: &str) {
-    let source = format!("use ph_beans_derive::Module;\n{body}\n");
+    let source = format!("use ph_derive::Module;\n{body}\n");
     ErrorTester::source(source)
-        .extern_crate("ph_beans_derive", proc_macro_library("ph_beans_derive"))
+        .extern_crate("ph_derive", proc_macro_library("ph_derive"))
         .assert_description(description);
 }

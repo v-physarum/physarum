@@ -10,7 +10,8 @@ use ph_beans::{
     At, BeanInfo, EventInfo, Get, Ix0, Ix1, Marker, Module, Mut, OfInject, OfParent, OfProvide,
     OfProvide1, Query, Setup, Tick,
 };
-use ph_beans_derive::Module as DeriveModule;
+use ph_derive::Module as DeriveModule;
+use ph_derive::config;
 
 struct Id(u8);
 struct Keys(u8);
