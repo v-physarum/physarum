@@ -2,7 +2,7 @@
 
 use crate::borrow::At;
 use crate::descriptor::live::{Idle, Live};
-use crate::descriptor::{Get, Mut};
+use crate::descriptor::{Dyn, DynView, Get, Mut};
 use crate::filter::And;
 
 /// Resource claim `B` can project.
@@ -25,6 +25,20 @@ where
 }
 
 impl<B, P> Claim<B> for Mut<P>
+where
+    B: At<P>,
+{
+    type Indexes = B::Ix;
+}
+
+impl<B, P, V: ?Sized> Claim<B> for Dyn<Get<P>, V>
+where
+    B: At<P>,
+{
+    type Indexes = B::Ix;
+}
+
+impl<B, P, V: ?Sized> Claim<B> for Dyn<Mut<P>, V>
 where
     B: At<P>,
 {
@@ -86,6 +100,26 @@ impl<T> ArgsView for Get<T> {
 impl<T> ArgsView for Mut<T> {
     type View<'a>
         = &'a mut T
+    where
+        Self: 'a;
+}
+
+impl<T, V: ?Sized> ArgsView for Dyn<Get<T>, V>
+where
+    V: DynView<T>,
+{
+    type View<'a>
+        = &'a V
+    where
+        Self: 'a;
+}
+
+impl<T, V: ?Sized> ArgsView for Dyn<Mut<T>, V>
+where
+    V: DynView<T>,
+{
+    type View<'a>
+        = &'a mut V
     where
         Self: 'a;
 }
