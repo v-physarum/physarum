@@ -102,7 +102,7 @@ impl<E, C> Init<E, C> {
     /// A live `Mut` refuses this call until a wait filter clears it.
     ///
     /// ```compile_fail
-    /// use ph_beans::{At, BeanInfo, EventInfo, Get, Ix0, Marker, Proxy, Proxied, Query, Target};
+    /// use ph_beans::{At, BeanInfo, DefaultProxy, EventInfo, Get, Ix0, Marker, Proxied, Query, Target};
     ///
     /// struct Keys;
     /// struct Main;
@@ -117,8 +117,8 @@ impl<E, C> Init<E, C> {
     ///
     /// impl Target for Keys {}
     /// impl Proxied for Keys {
-    ///     type Proxy = Proxy<Keys>;
-    ///     type Link = Get<Proxy<Keys>>;
+    ///     type Proxy = DefaultProxy<Keys>;
+    ///     type Link = Get<DefaultProxy<Keys>>;
     /// }
     ///
     /// impl BeanInfo for Main {

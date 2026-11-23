@@ -211,8 +211,8 @@ impl<P> LinkMark<P> for Mut<P> {}
 
 /// Outermost link of a proxy chain. This proxy has no further proxy.
 ///
-/// Name pending owner approval. [`Proxy`] uses this too: it is not stacked
-/// outside an explicit proxy.
+/// Name pending owner approval. [`DefaultProxy`] ends here too: its chain is
+/// [`Stop`], the same as any proxy that names no further proxy.
 pub struct Stop;
 
 /// This proxy is wrapped by `P`.
@@ -247,13 +247,13 @@ pub trait ProxyInfo: crate::BeanInfo {
 /// pending owner approval. A bean or a proxy may implement this, so chains
 /// type-check. Injecting a proxy still fails: proxy types are not [`Target`].
 ///
-/// No `proxy = ...` on a bean is the manual impl `Proxy = Proxy<Self>` and
-/// `Link = Get<Proxy<Self>>`. The identity proxy is not [`Proxied`], so that
-/// chain stops. An explicit proxy that names no further proxy is not
-/// [`Proxied`] either: the identity proxy is not wrapped around it.
+/// No `proxy = ...` on a bean is the manual impl `Proxy = DefaultProxy<Self>`
+/// and `Link = Get<DefaultProxy<Self>>`. That is an ordinary proxy whose
+/// chain is [`Stop`]. An explicit proxy that names no further proxy is not
+/// [`Proxied`] either: [`DefaultProxy`] is not added outside it.
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not a proxied target",
-    note = "inject the target bean; a proxy is not a free-standing key. A missing `proxy = ...` on a bean is `Proxy = Proxy<Self>` and `Link = Get<Proxy<Self>>`"
+    note = "inject the target bean; a proxy is not a free-standing key. A missing `proxy = ...` on a bean is `Proxy = DefaultProxy<Self>` and `Link = Get<DefaultProxy<Self>>`"
 )]
 pub trait Proxied: crate::BeanInfo {
     /// Proxy that wraps `Self`.
@@ -262,28 +262,35 @@ pub trait Proxied: crate::BeanInfo {
     type Link: LinkMark<Self::Proxy>;
 }
 
-/// Identity proxy. A bean with no `proxy = ...` names this as [`Proxied::Proxy`].
+/// Proxy a bean uses when it names no other proxy.
 ///
-/// No provides, no events, and it is not itself proxied, so a chain that
-/// reaches [`Proxy`] stops. It is only for a [`Target`]. It does not wrap a
-/// proxy and it is not placed outside an explicit proxy.
-pub struct Proxy<B>(PhantomData<B>);
+/// Same surface as any proxy. [`Targets`](ProxyInfo::Targets) is `B`,
+/// [`Link`](ProxyInfo::Link) is `Get<DefaultProxy<B>>`, and
+/// [`Chain`](ProxyInfo::Chain) is [`Stop`]. It provides nothing and lists no
+/// parent events. A missing `proxy = ...` is written
+/// `Proxy = DefaultProxy<Self>` and `Link = Get<DefaultProxy<Self>>`.
+pub struct DefaultProxy<B>(PhantomData<B>);
 
-impl<B: Target> crate::BeanInfo for Proxy<B> {
-    /// Pass-through proxies expose no beans of their own.
+impl<B: crate::BeanInfo> crate::BeanInfo for DefaultProxy<B> {
+    /// This proxy provides no beans of its own.
     type Provides = ();
-    /// Pass-through proxies inject nothing.
+    /// This proxy injects nothing.
     type Injects = ();
     /// No provides and no injects.
     type Beans = ();
-    /// The target keeps its own state. Proxy does not store a second copy.
+    /// The target keeps its own state.
     type State = ();
 }
 
-impl<B: Target> ProxyInfo for Proxy<B> {
+impl<B: crate::BeanInfo> ProxyInfo for DefaultProxy<B> {
     type Targets = B;
-    type Link = Get<Proxy<B>>;
+    type Link = Get<DefaultProxy<B>>;
     type Chain = Stop;
+}
+
+impl<B: crate::BeanInfo> crate::EventInfo for DefaultProxy<B> {
+    /// No parent events.
+    type Parents = ();
 }
 
 /// Claim `C` wrapped by proxy `P`.
@@ -338,10 +345,7 @@ pub trait InitPath<B: crate::BeanInfo>: ProxyInfo<Targets = B> {
     fn enter() {}
 }
 
-impl<B> InitPath<B> for Proxy<B>
-where
-    B: Target + Proxied<Proxy = Proxy<B>>,
-{
+impl<B: crate::BeanInfo> InitPath<B> for DefaultProxy<B> {
     fn install<H>(handler: H) -> Fwd<Self, H> {
         Fwd::new(handler)
     }
@@ -523,15 +527,9 @@ impl<B: Target + Proxied> FreeKey for Mut<B> {}
 
 /// Events of a proxy, walked when the target is scheduled.
 ///
-/// [`Proxy`] contributes nothing. A proxy that is an event contributes its
-/// [`crate::EventInfo::Parents`] and its own id is matched separately.
+/// A proxy contributes its [`crate::EventInfo::Parents`]. Its own id is
+/// matched separately. [`DefaultProxy`] lists no parents.
 pub trait ParentList {
     /// `true` when `emitted` contains one of these parent events.
     fn listed(emitted: &[TypeId]) -> bool;
-}
-
-impl<B: Target> ParentList for Proxy<B> {
-    fn listed(_emitted: &[TypeId]) -> bool {
-        false
-    }
 }

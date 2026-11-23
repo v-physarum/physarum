@@ -44,7 +44,7 @@ where
     /// [`PipelineOk`](crate::PipelineOk).
     ///
     /// ```compile_fail
-    /// use ph_beans::{BeanInfo, Get, Proxy, Proxied, Query, Setup, Target, Tick};
+    /// use ph_beans::{BeanInfo, DefaultProxy, Get, Proxied, Query, Setup, Target, Tick};
     ///
     /// struct App;
     ///
@@ -57,8 +57,8 @@ where
     ///
     /// impl Target for App {}
     /// impl Proxied for App {
-    ///     type Proxy = Proxy<App>;
-    ///     type Link = Get<Proxy<App>>;
+    ///     type Proxy = DefaultProxy<App>;
+    ///     type Link = Get<DefaultProxy<App>>;
     /// }
     ///
     /// fn boot(_: ()) -> u8 {

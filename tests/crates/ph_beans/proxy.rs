@@ -1,6 +1,6 @@
-//! Proxy wrapper, default [`Proxy`], init forwarding, and proxy events.
+//! Proxy wrapper, [`DefaultProxy`], init forwarding, and proxy events.
 //!
-//! [`Proxy`]: ph_beans::Proxy
+//! [`DefaultProxy`]: ph_beans::DefaultProxy
 
 #![forbid(unsafe_code)]
 #![allow(missing_docs)]
@@ -8,9 +8,9 @@
 use core::cell::Cell;
 
 use ph_beans::{
-    At, BeanInfo, ClaimVia, Ctx, EventInfo, FromChain, FromProxy, Fwd, Get, Init, InitPath, Ix0,
-    Ix1, Live, Marker, More, Mut, Own, Pipe, Proxied, Proxy, ProxyInfo, Query, Stop, Target, Tick,
-    Via, WithInit,
+    At, BeanInfo, ClaimVia, Ctx, DefaultProxy, EventInfo, FromChain, FromProxy, Fwd, Get, Init,
+    InitPath, Ix0, Ix1, Live, Marker, More, Mut, Own, Pipe, Proxied, ProxyInfo, Query, Stop,
+    Target, Tick, Via, WithInit,
 };
 
 thread_local! {
@@ -59,8 +59,8 @@ impl BeanInfo for Id {
 }
 impl Target for Id {}
 impl Proxied for Id {
-    type Proxy = Proxy<Id>;
-    type Link = Get<Proxy<Id>>;
+    type Proxy = DefaultProxy<Id>;
+    type Link = Get<DefaultProxy<Id>>;
 }
 
 impl BeanInfo for Score {
@@ -71,8 +71,8 @@ impl BeanInfo for Score {
 }
 impl Target for Score {}
 impl Proxied for Score {
-    type Proxy = Proxy<Score>;
-    type Link = Get<Proxy<Score>>;
+    type Proxy = DefaultProxy<Score>;
+    type Link = Get<DefaultProxy<Score>>;
 }
 
 impl BeanInfo for Shell {
@@ -83,8 +83,8 @@ impl BeanInfo for Shell {
 }
 impl Target for Shell {}
 impl Proxied for Shell {
-    type Proxy = Proxy<Shell>;
-    type Link = Get<Proxy<Shell>>;
+    type Proxy = DefaultProxy<Shell>;
+    type Link = Get<DefaultProxy<Shell>>;
 }
 impl At<Id> for Shell {
     type Ix = Ix0;
@@ -167,8 +167,8 @@ impl BeanInfo for Main {
 }
 impl Target for Main {}
 impl Proxied for Main {
-    type Proxy = Proxy<Main>;
-    type Link = Get<Proxy<Main>>;
+    type Proxy = DefaultProxy<Main>;
+    type Link = Get<DefaultProxy<Main>>;
 }
 impl EventInfo for Main {
     type Parents = ();
@@ -182,8 +182,8 @@ impl BeanInfo for Host {
 }
 impl Target for Host {}
 impl Proxied for Host {
-    type Proxy = Proxy<Host>;
-    type Link = Get<Proxy<Host>>;
+    type Proxy = DefaultProxy<Host>;
+    type Link = Get<DefaultProxy<Host>>;
 }
 
 impl BeanInfo for Plain {
@@ -194,8 +194,8 @@ impl BeanInfo for Plain {
 }
 impl Target for Plain {}
 impl Proxied for Plain {
-    type Proxy = Proxy<Plain>;
-    type Link = Get<Proxy<Plain>>;
+    type Proxy = DefaultProxy<Plain>;
+    type Link = Get<DefaultProxy<Plain>>;
 }
 impl EventInfo for Plain {
     type Parents = ();
@@ -327,8 +327,8 @@ impl BeanInfo for Prize {
 }
 impl Target for Prize {}
 impl Proxied for Prize {
-    type Proxy = Proxy<Prize>;
-    type Link = Get<Proxy<Prize>>;
+    type Proxy = DefaultProxy<Prize>;
+    type Link = Get<DefaultProxy<Prize>>;
 }
 
 impl BeanInfo for Bonus {
@@ -339,8 +339,8 @@ impl BeanInfo for Bonus {
 }
 impl Target for Bonus {}
 impl Proxied for Bonus {
-    type Proxy = Proxy<Bonus>;
-    type Link = Get<Proxy<Bonus>>;
+    type Proxy = DefaultProxy<Bonus>;
+    type Link = Get<DefaultProxy<Bonus>>;
 }
 
 impl BeanInfo for Alarm {
@@ -351,8 +351,8 @@ impl BeanInfo for Alarm {
 }
 impl Target for Alarm {}
 impl Proxied for Alarm {
-    type Proxy = Proxy<Alarm>;
-    type Link = Get<Proxy<Alarm>>;
+    type Proxy = DefaultProxy<Alarm>;
+    type Link = Get<DefaultProxy<Alarm>>;
 }
 impl EventInfo for Alarm {
     type Parents = ();
@@ -366,8 +366,8 @@ impl BeanInfo for Room {
 }
 impl Target for Room {}
 impl Proxied for Room {
-    type Proxy = Proxy<Room>;
-    type Link = Get<Proxy<Room>>;
+    type Proxy = DefaultProxy<Room>;
+    type Link = Get<DefaultProxy<Room>>;
 }
 impl At<Core> for Room {
     type Ix = Ix0;
@@ -379,13 +379,13 @@ impl<T> Same<T> for T {}
 trait Through<P> {}
 impl<H, P, L> Through<P> for Pipe<WithInit<Fwd<P, H>>, L> {}
 
-type ProxyWrap<S, T> = Init<(), Ctx<Shell, Live<Via<Proxy<Id>, Get<Id>>>, S, T>>;
+type DefaultWrap<S, T> = Init<(), Ctx<Shell, Live<Via<DefaultProxy<Id>, Get<Id>>>, S, T>>;
 type UpdateWrap<S, T> = Init<(), Ctx<Shell, Live<Via<Update, Get<GameTick>>>, S, T>>;
 type ChainClaim = Via<Outer, Via<Mid, Via<Inner, Get<Core>>>>;
 type ChainWrap<S, T> = Init<(), Ctx<Room, Live<ChainClaim>, S, T>>;
 type ChainFwd<H> = Fwd<Outer, Fwd<Mid, Fwd<Inner, H>>>;
 
-fn assert_default<S, T>(_: &ProxyWrap<S, T>) {}
+fn assert_default<S, T>(_: &DefaultWrap<S, T>) {}
 
 fn assert_explicit<S, T>(_: &UpdateWrap<S, T>) {}
 
@@ -408,7 +408,7 @@ where
 }
 
 #[test]
-fn an_unset_proxy_wraps_with_proxy() {
+fn an_unset_proxy_uses_the_default() {
     let pipeline = Shell::query().inject_resources(Id::T);
     assert_default(&pipeline);
 }
@@ -500,9 +500,9 @@ fn a_default_proxy_still_runs_its_own_event() {
 }
 
 #[test]
-fn init_of_an_unset_proxy_goes_through_proxy() {
+fn init_of_an_unset_proxy_goes_through_the_default() {
     let pipeline = Host::query().init_state(idle);
-    assert_init::<_, _, _, _, Proxy<Host>>(&pipeline);
+    assert_init::<_, _, _, _, DefaultProxy<Host>>(&pipeline);
 }
 
 #[test]

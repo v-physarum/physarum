@@ -7,8 +7,8 @@
 #![allow(missing_docs)]
 
 use ph_beans::{
-    At, BeanInfo, EventInfo, Get, Ix0, Ix1, Marker, Module, Mut, OfInject, OfParent, OfProvide,
-    OfProvide1, Proxied, Proxy, Query, Setup, Target, Tick,
+    At, BeanInfo, DefaultProxy, EventInfo, Get, Ix0, Ix1, Marker, Module, Mut, OfInject, OfParent,
+    OfProvide, OfProvide1, Proxied, Query, Setup, Target, Tick,
 };
 
 struct Id(u8);
@@ -50,28 +50,28 @@ impl EventInfo for Update {
 
 impl Target for Id {}
 impl Proxied for Id {
-    type Proxy = Proxy<Id>;
-    type Link = Get<Proxy<Id>>;
+    type Proxy = DefaultProxy<Id>;
+    type Link = Get<DefaultProxy<Id>>;
 }
 impl Target for Keys {}
 impl Proxied for Keys {
-    type Proxy = Proxy<Keys>;
-    type Link = Get<Proxy<Keys>>;
+    type Proxy = DefaultProxy<Keys>;
+    type Link = Get<DefaultProxy<Keys>>;
 }
 impl Target for App {}
 impl Proxied for App {
-    type Proxy = Proxy<App>;
-    type Link = Get<Proxy<App>>;
+    type Proxy = DefaultProxy<App>;
+    type Link = Get<DefaultProxy<App>>;
 }
 impl Target for Logic {}
 impl Proxied for Logic {
-    type Proxy = Proxy<Logic>;
-    type Link = Get<Proxy<Logic>>;
+    type Proxy = DefaultProxy<Logic>;
+    type Link = Get<DefaultProxy<Logic>>;
 }
 impl Target for Render {}
 impl Proxied for Render {
-    type Proxy = Proxy<Render>;
-    type Link = Get<Proxy<Render>>;
+    type Proxy = DefaultProxy<Render>;
+    type Link = Get<DefaultProxy<Render>>;
 }
 
 impl At<Id> for App {
