@@ -1,9 +1,10 @@
 //! Manual provide / inject against a parent surface.
 //!
-//! Membership is [`ClaimMark`] + list match. Slot markers (`OfProvide0`, …)
-//! exist only because two `Provides = (C, _)` / `Provides = (_, C)` blankets
-//! overlap (E0119) — not a Get×Mut matrix. Prefer collapsing further if a
-//! non-overlapping membership encoding appears; do not add Get/Mut arms.
+//! Membership is [`ClaimMark`] + a flat tuple of at most eight claims.
+//! Slot markers (`OfProvide0`, …) name the index. A nested tail such as
+//! `(Get<T>, (Get<U>, ()))` is not a list. The markers are not a Get×Mut matrix.
+
+mod flat;
 
 use crate::bean::BeanInfo;
 use crate::descriptor::{Get, Mut};
@@ -17,21 +18,48 @@ pub struct OfProvide;
 /// The child is injecting the parent's single inject.
 pub struct OfInject;
 
-/// First item of a two-item provide list.
-///
-/// Residual Via for E0119 — not an accessor×slot product.
+/// First claim of a flat provide pair.
 pub struct OfProvide0;
 
-/// Second item of a two-item provide list.
+/// Second claim of a flat provide pair.
 pub struct OfProvide1;
 
-/// First item of a two-item inject list.
+/// Index `I` in a flat provide list of length `N` (3..=8).
+///
+/// A pair keeps [`OfProvide0`] / [`OfProvide1`]. Longer lists cannot share
+/// those markers: two impls that differ only by tuple length overlap (E0119).
+pub struct ProvideAt<const N: u8, const I: u8>;
+
+/// First claim of a flat inject list (two claims).
 pub struct OfInject0;
 
-/// Second item of a two-item inject list.
+/// Second claim of a flat inject list (two claims).
 pub struct OfInject1;
 
+/// Index `I` in a flat inject list of length `N` (3..=8).
+///
+/// A pair keeps [`OfInject0`] / [`OfInject1`].
+pub struct InjectAt<const N: u8, const I: u8>;
+
 /// `Self` may be injected from `P` via `V`.
+///
+/// ```compile_fail
+/// use ph_beans::{BeanInfo, FromParent, Get, OfProvide0};
+///
+/// struct Id;
+/// struct Keys;
+/// struct App;
+///
+/// impl BeanInfo for App {
+///     type Provides = (Get<Id>, (Get<Keys>, ()));
+///     type Injects = ();
+///     type Beans = ();
+///     type State = ();
+/// }
+///
+/// fn first<C: FromParent<App, OfProvide0>>() {}
+/// first::<Get<Id>>();
+/// ```
 ///
 /// ```compile_fail
 /// use ph_beans::{BeanInfo, FromParent, Get, Mut, OfProvide};
@@ -69,7 +97,7 @@ pub struct OfInject1;
 pub trait FromParent<P, V> {}
 
 /// `Get` or `Mut`. One bound covers both marker kinds.
-trait ClaimMark {}
+pub(super) trait ClaimMark {}
 
 impl<T> ClaimMark for Get<T> {}
 
@@ -100,11 +128,12 @@ where
 {
 }
 
-// Two-item lists: Via distinguishes head vs tail (E0119 if both use OfProvide).
+// Flat pairs. The other element is a claim, so a nested tail does not match.
 impl<P, C, R> FromParent<P, OfProvide0> for C
 where
     P: BeanInfo<Provides = (C, R)>,
     C: ClaimMark,
+    R: ClaimMark,
 {
 }
 
@@ -112,6 +141,7 @@ impl<P, C, L> FromParent<P, OfProvide1> for C
 where
     P: BeanInfo<Provides = (L, C)>,
     C: ClaimMark,
+    L: ClaimMark,
 {
 }
 
@@ -119,6 +149,7 @@ impl<P, C, R> FromParent<P, OfInject0> for C
 where
     P: BeanInfo<Injects = (C, R)>,
     C: ClaimMark,
+    R: ClaimMark,
 {
 }
 
@@ -126,6 +157,7 @@ impl<P, C, L> FromParent<P, OfInject1> for C
 where
     P: BeanInfo<Injects = (L, C)>,
     C: ClaimMark,
+    L: ClaimMark,
 {
 }
 

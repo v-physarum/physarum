@@ -81,7 +81,7 @@ cargo test -p ph_beans
 | Map cap 16 | **Done** | `MAX_MAP_SYSTEMS`; push refuses 17th |
 | No macros in crate src | **Done** | No `macro_rules!` under `ph_beans/src` |
 | **R8** filter ops / flags | **Done** | `FilterOperand` RHS; per-LHS orphan residual; `OrWith` / `WaitFlag`; `ops_node` removed |
-| **R8** DI `FromParent` | **Partial** | `ClaimMark` done; `OfProvide0`/`1` remain as E0119 Via only — no Get×Mut split |
+| **R8** DI `FromParent` | **Partial** | `ClaimMark` done; a pair uses `OfProvide0`/`1`; lengths 3..=8 use `ProvideAt<N, I>` — no nested tail, no Get×Mut split |
 | **R10** one-letter generics | **Open** | Rule fixed; many files still use `Bean`/`Args`/`Status`/`Tick`/`PrevE` — **sweep required** |
 | `OpDesc` L1 gate on `.inject_resources` | **Partial** | Types exist — confirm call is gated on `OpOk` + tests |
 | Handlers `Fn` (not `FnMut`) | **Done** | `.map` / init use `Fn()` — see **R18** |

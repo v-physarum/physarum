@@ -93,15 +93,15 @@ Layout of `crates/ph_beans/src/`. Keep the surface readable: **small files**, **
    // …
    ```
 
-   DI (`FromParent`): match through **membership** + `ClaimMark`. **Do not** split Get vs Mut. Slot Via (`OfProvide0` / `OfProvide1`, …) is allowed **only** as an E0119 residual when head/tail blankets overlap — document it; collapse when a non-overlapping encoding exists.
+   DI (`FromParent`): match through **membership** + `ClaimMark`. **Do not** split Get vs Mut. A provide or inject list is one flat tuple of at most eight claims, `(Get<A>, Get<B>, Get<C>)`. A pair uses `OfProvide0` / `OfProvide1` (and the inject twins). Lengths 3..=8 use `ProvideAt<N, I>` / `InjectAt<N, I>`: the length has to sit in the marker, or two arities overlap (E0119). A nested tail `(Get<A>, (Get<B>, ()))` is not a list.
 
    ```rust
    // Forbidden — Get×Mut×slot
    impl FromParent<P, OfProvide0> for Get<T> where Provides = (Get<T>, R) {}
    impl FromParent<P, OfProvide0> for Mut<T> where Provides = (Mut<T>, R) {}
 
-   // Required residual — one arm per slot for every ClaimMark
-   impl<P, C: ClaimMark, R> FromParent<P, OfProvide0> for C
+   // Required — one arm per index; every element is a claim
+   impl<P, C: ClaimMark, R: ClaimMark> FromParent<P, OfProvide0> for C
    where P: BeanInfo<Provides = (C, R)> {}
    ```
 
@@ -565,7 +565,7 @@ Tree: `App` → `Logic` → `Render`. `Render` injects `Logic::MUT`; `Logic` inj
 
 ### `FromParent` impl style
 
-Compile-time “child may take this claim from parent” is **`FromParent`** (and `Module`). Use **`ClaimMark`** + membership on `Provides` / `Injects` — **not** Get×Mut×slot. `OfProvide0` / `OfProvide1` (and inject twins) are **E0119 residuals** only (head vs tail Via); collapse further if a non-overlapping encoding appears (rule 8).
+Compile-time “child may take this claim from parent” is **`FromParent`** (and `Module`). Use **`ClaimMark`** + membership on `Provides` / `Injects` — **not** Get×Mut×slot. A list is a flat tuple of at most eight claims. A pair uses `OfProvide0` / `OfProvide1`. Lengths 3..=8 use `ProvideAt<N, I>` / `InjectAt<N, I>`. A nested tail is not a list (rule 8).
 
 ### `T` vs `MUT`
 
