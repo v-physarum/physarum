@@ -1,10 +1,10 @@
 //! Runs hyperfine scenarios against a downstream crate.
 //!
-//! A bench points [`Bench`] at a case directory. Group folders and the Rust
-//! files under them select the warmup, debug, incremental, and release cases
-//! and supply each case's source. A [`Series`] adds a generator rendered at
-//! several scales and checks that those times are linear or not quadratic.
-//! The dependency compile is paid once, before the case times.
+//! [`Bench`] reads directory cases. The workspace root, the path dependency,
+//! the user package, and the output directory are taken from the workspace
+//! when the bench does not set them. [`Series`] renders a generator at several
+//! scales and checks the measured builds from a test.
+#![forbid(unsafe_code)]
 
 mod cases;
 mod engine;
@@ -13,6 +13,7 @@ mod growth;
 mod json;
 mod manifest;
 mod source;
+mod workspace;
 
 pub use error::{Error, Result};
 pub use growth::{
@@ -60,7 +61,6 @@ pub struct Bench {
     cases: Option<PathBuf>,
     runtime: Option<String>,
     repeats: u32,
-    growth: Vec<Series>,
 }
 
 impl Bench {
@@ -73,8 +73,7 @@ impl Bench {
             dependency: None,
             cases: None,
             runtime: None,
-            repeats: 3,
-            growth: Vec::new(),
+            repeats: engine::DEFAULT_REPEATS,
         }
     }
 
@@ -123,43 +122,32 @@ impl Bench {
         self
     }
 
-    /// Measures `series` with the directory cases and checks its growth.
-    ///
-    /// The series cases use the same `{name}_{n}` labels as directory cases.
-    /// Kinds still run in name order and counts in numeric order. A series
-    /// must not reuse a directory case's name.
-    pub fn series(mut self, series: Series) -> Self {
-        self.growth.push(series);
-        self
-    }
-
     /// Builds the warmup cases, then runs the selected scenarios.
+    ///
+    /// Unset paths come from the workspace: the case directory is
+    /// `benches/crates/{name}/cases`, the path dependency is the member named
+    /// `name`, the user package is `{name}_user`, and the output directory is
+    /// `{name}-expand`.
     ///
     /// # Errors
     ///
-    /// Returns an error when a required setter was skipped, the case directory
-    /// cannot be read, a series was not rendered or repeats a case name, a
-    /// measured command fails, or a series misses its growth claim.
+    /// Returns an error when `name` is not a workspace member, the case
+    /// directory cannot be read, or a measured command fails.
     pub fn run(self) -> Result<()> {
-        let directory = required(self.cases, "case directory")?;
-        let mut cases = cases::load(&directory)?;
-        let growth = growth::install(&mut cases, self.growth)?;
+        let layout = workspace::bench_layout(&self.name)?;
+        let directory = self.cases.unwrap_or(layout.cases);
+        let cases = cases::load(&directory)?;
         let plan = Plan {
             summary: format!("{} user compile time", self.name),
-            output: required(self.output, "output directory")?,
-            package: required(self.package, "user package")?,
-            dependency: required(self.dependency, "dependency")?,
+            output: self.output.unwrap_or(layout.output),
+            package: self.package.unwrap_or(layout.package),
+            dependency: self.dependency.unwrap_or(layout.dependency),
             cases,
             runtime: self.runtime,
             repeats: self.repeats,
-            growth,
         };
         engine::execute(&plan)
     }
-}
-
-fn required<T>(value: Option<T>, label: &'static str) -> Result<T> {
-    value.ok_or(crate::error::ErrorKind::Unset { label }.into())
 }
 
 /// One filled-in [`Bench`].
@@ -178,6 +166,4 @@ pub(crate) struct Plan {
     pub(crate) runtime: Option<String>,
     /// Measured hyperfine runs per case.
     pub(crate) repeats: u32,
-    /// Growth claims checked after each measured group.
-    pub(crate) growth: Vec<growth::GrowthCheck>,
 }

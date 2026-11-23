@@ -35,9 +35,6 @@ pub(crate) enum ErrorKind {
     /// The downstream manifest could not be written.
     #[error(transparent)]
     Manifest(#[from] toml::ser::Error),
-    /// A required [`crate::Bench`] setter was skipped.
-    #[error("{label} is unset")]
-    Unset { label: &'static str },
     /// `case` is not a name this bench knows.
     #[error("unknown case {case}")]
     UnknownCase { case: String },
@@ -146,9 +143,22 @@ pub(crate) enum ErrorKind {
         exponent: f64,
         limit: f64,
     },
-    /// A measured group has no median for one scale of a series.
-    #[error("series {series} is missing a time for scale {scale}")]
-    SeriesUnmeasured { series: String, scale: u32 },
+    /// No workspace `Cargo.toml` was found walking up from `start`.
+    #[error("workspace root was not found from {start}")]
+    WorkspaceMissing { start: String },
+    /// `path` is not valid TOML.
+    #[error("{path} is not a readable manifest: {source}")]
+    ManifestRead {
+        path: String,
+        #[source]
+        source: toml::de::Error,
+    },
+    /// `package` is not a member of the workspace.
+    #[error("package {package} is not a workspace member")]
+    MemberMissing { package: String },
+    /// The rendered source uses a crate that is not in the workspace.
+    #[error("{series} uses {crate_name}, which is not a workspace member")]
+    SeriesCrate { series: String, crate_name: String },
 }
 
 impl Error {

@@ -163,8 +163,7 @@ fn a_series_declares_generator_scales_and_claim() {
         .group(Group::Debug)
         .scales([32, 8])
         .expect(Growth::NotQuadratic)
-        .render(|scale| format!("struct Item{};\n", scale.count()))
-        .unwrap();
+        .render(|scale| format!("struct Item{};\n", scale.count()));
     assert_eq!(series.name(), "items");
     assert_eq!(series.scale_values().len(), 2);
     assert_eq!(series.scale_values()[0].count(), 32);
@@ -175,43 +174,53 @@ fn a_series_declares_generator_scales_and_claim() {
 }
 
 #[test]
-fn an_unfinished_series_does_not_render() {
-    let missing_group = Series::new("items").scales([8, 16]).expect(Growth::Linear);
-    assert!(missing_group.render(source).is_err());
+fn an_unfinished_series_is_rejected() {
+    let missing_group = Series::new("items")
+        .scales([8, 16])
+        .expect(Growth::Linear)
+        .render(source);
+    assert!(missing_group.check_seconds(&[0.1, 0.2]).is_err());
 
     let one_scale = Series::new("items")
         .group(Group::Release)
         .scales([8])
-        .expect(Growth::Linear);
-    assert!(one_scale.render(source).is_err());
+        .expect(Growth::Linear)
+        .render(source);
+    assert!(one_scale.check_seconds(&[0.1]).is_err());
 
     let zero = Series::new("items")
         .group(Group::Debug)
         .scales([0, 8])
-        .expect(Growth::Linear);
-    assert!(zero.render(source).is_err());
+        .expect(Growth::Linear)
+        .render(source);
+    assert!(zero.check_seconds(&[0.1, 0.2]).is_err());
 
     let duplicate = Series::new("items")
         .group(Group::Debug)
         .scales([8, 8])
-        .expect(Growth::Linear);
-    assert!(duplicate.render(source).is_err());
+        .expect(Growth::Linear)
+        .render(source);
+    assert!(duplicate.check_seconds(&[0.1, 0.2]).is_err());
 
     let unnamed = Series::new("")
         .group(Group::Debug)
         .scales([8, 16])
-        .expect(Growth::Linear);
-    assert!(unnamed.render(source).is_err());
+        .expect(Growth::Linear)
+        .render(source);
+    assert!(unnamed.check_seconds(&[0.1, 0.2]).is_err());
 
-    let no_claim = Series::new("items").group(Group::Debug).scales([8, 16]);
-    assert!(no_claim.render(source).is_err());
+    let no_claim = Series::new("items")
+        .group(Group::Debug)
+        .scales([8, 16])
+        .render(source);
+    assert!(no_claim.check_seconds(&[0.1, 0.2]).is_err());
 
     let empty = Series::new("items")
         .group(Group::Incremental)
         .scales([8, 16])
         .expect(Growth::Linear)
         .render(|_| String::new());
-    assert!(empty.is_err());
+    assert!(empty.check_seconds(&[0.1, 0.2]).is_err());
 }
 
 #[test]
@@ -220,8 +229,7 @@ fn check_seconds_requires_a_time_per_scale() {
         .group(Group::Debug)
         .scales([8, 16])
         .expect(Growth::Linear)
-        .render(source)
-        .unwrap();
+        .render(source);
     let error = series.check_seconds(&[0.1]).unwrap_err().to_string();
     assert!(error.contains("2 scales"), "{error}");
     assert!(error.contains("but 1"), "{error}");

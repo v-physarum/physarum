@@ -6,10 +6,9 @@
 //! `ln(t2 / t1) / ln(n2 / n1)`.
 
 use std::fmt;
+use std::sync::{Mutex, PoisonError};
 
-use crate::cases::{Case, Groups};
 use crate::error::{Error, ErrorKind, Result};
-use crate::source::case_name;
 
 /// Exponent of exact linear growth, `time ∝ N`.
 pub const LINEAR_EXPONENT: f64 = 1.0;
@@ -129,7 +128,7 @@ impl fmt::Display for Character {
 
 /// Item count `N` for one generated case.
 ///
-/// [`Series::render`] and [`Growth::check`] reject a count below [`MIN_SCALE`].
+/// [`Series::check`] and [`Growth::check`] reject a count below [`MIN_SCALE`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Scale(u32);
 
@@ -184,18 +183,18 @@ impl Fit {
 
 /// One generator rendered at several scales, plus the growth those times must show.
 ///
-/// ```
-/// use ph_bench_build::{Group, Growth, Scale, Series};
+/// ```no_run
+/// use ph_bench_build::{Group, Growth, Series};
 ///
-/// fn main() -> ph_bench_build::Result<()> {
-///     let series = Series::new("items")
-///         .group(Group::Debug)
-///         .scales([8, 16, 32])
-///         .expect(Growth::Linear)
-///         .render(|scale: Scale| format!("struct Item{};\n", scale.count()))?;
-///     series.check_seconds(&[0.2, 0.4, 0.8])?;
-///     Ok(())
-/// }
+/// # fn main() {
+/// Series::new("hand_structs")
+///     .group(Group::Debug)
+///     .scales([64, 1024, 8192])
+///     .expect(Growth::Linear)
+///     .render(|n| format!("pub struct Ix{};\n", n.count()))
+///     .check()
+///     .unwrap();
+/// # }
 /// ```
 #[must_use]
 #[derive(Debug)]
@@ -246,29 +245,17 @@ impl Series {
 
     /// Renders one source per scale. `generate` receives `N`.
     ///
-    /// Call [`Self::group`], [`Self::scales`], and [`Self::expect`] first.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the name, group, scales, or claim is missing or
-    /// invalid, or when `generate` returns an empty source.
-    pub fn render(mut self, mut generate: impl FnMut(Scale) -> String) -> Result<Self> {
-        self.prepare()?;
-        let mut sources = Vec::with_capacity(self.scales.len());
+    /// The source is stored on the series. [`Self::check`] writes it to the
+    /// downstream crate. Call [`Self::group`], [`Self::scales`], and
+    /// [`Self::expect`] before [`Self::check`].
+    pub fn render(mut self, mut generate: impl FnMut(Scale) -> String) -> Self {
+        self.sources.clear();
+        self.sources.reserve(self.scales.len());
         for scale in &self.scales {
-            let source = generate(*scale);
-            if source.is_empty() {
-                return Err(ErrorKind::SeriesSource {
-                    series: self.name.clone(),
-                    scale: scale.count(),
-                }
-                .into());
-            }
-            sources.push(source);
+            self.sources.push(generate(*scale));
         }
-        self.sources = sources;
         self.rendered = true;
-        Ok(self)
+        self
     }
 
     /// Case kind, for example `flat_structs`.
@@ -288,6 +275,39 @@ impl Series {
     pub fn source(&self, scale: Scale) -> Option<&str> {
         let index = self.scales.iter().position(|item| *item == scale)?;
         self.sources.get(index).map(String::as_str)
+    }
+
+    /// Builds each rendered source and checks the measured times.
+    ///
+    /// The workspace root is the ancestor of `CARGO_MANIFEST_DIR` whose
+    /// manifest lists members. `use` paths in the rendered source that name a
+    /// member become path dependencies. The user package is `{name}_user`.
+    /// Output is `{target}/ph_bench_build/{name}-{group}`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the series is unfinished, a path cannot be
+    /// resolved, a build fails, or the measured times miss the claim.
+    pub fn check(&self) -> Result<Fit> {
+        static BUILD: Mutex<()> = Mutex::new(());
+        let _guard = BUILD.lock().unwrap_or_else(PoisonError::into_inner);
+        let (group, _) = self.ensure_ready()?;
+        let home = crate::workspace::series_home(&self.name, group, &self.sources)?;
+        let seconds = crate::engine::measure_series(&crate::engine::SeriesBuild {
+            name: &self.name,
+            group,
+            scales: &self.scales,
+            sources: &self.sources,
+            home: &home,
+        })?;
+        let fit = self.check_seconds(&seconds)?;
+        println!(
+            "{group} {} exponent {:.3} {}",
+            self.name,
+            fit.exponent(),
+            fit.character()
+        );
+        Ok(fit)
     }
 
     /// Checks `seconds` against this series.
@@ -347,8 +367,18 @@ impl Series {
     }
 
     fn ensure_ready(&self) -> Result<(Group, Growth)> {
+        self.prepare()?;
         if !self.rendered || self.sources.len() != self.scales.len() {
             return Err(ErrorKind::SeriesSources { series: self.name.clone() }.into());
+        }
+        for (scale, source) in self.scales.iter().zip(&self.sources) {
+            if source.is_empty() {
+                return Err(ErrorKind::SeriesSource {
+                    series: self.name.clone(),
+                    scale: scale.count(),
+                }
+                .into());
+            }
         }
         let group = self
             .group
@@ -358,79 +388,6 @@ impl Series {
             .ok_or_else(|| Error::from(ErrorKind::SeriesExpect { series: self.name.clone() }))?;
         Ok((group, expect))
     }
-}
-
-/// One series installed into the case groups.
-#[derive(Debug)]
-pub(crate) struct GrowthCheck {
-    name: String,
-    group: Group,
-    scales: Vec<Scale>,
-    expect: Growth,
-}
-
-/// A measured case median, keyed by `{kind}_{n}`.
-pub(crate) struct Median {
-    case: String,
-    seconds: f64,
-}
-
-impl Median {
-    pub(crate) fn new(case: impl Into<String>, seconds: f64) -> Self {
-        Self { case: case.into(), seconds }
-    }
-}
-
-/// Appends rendered series into `groups` and returns the claims to check later.
-///
-/// # Errors
-///
-/// Returns an error when a series was not rendered or repeats a case name.
-pub(crate) fn install(groups: &mut Groups, all: Vec<Series>) -> Result<Vec<GrowthCheck>> {
-    let mut checks = Vec::with_capacity(all.len());
-    for series in all {
-        let (group, expect) = series.ensure_ready()?;
-        let bucket = bucket(groups, group);
-        for (scale, source) in series.scales.iter().copied().zip(series.sources) {
-            let name = case_name(&series.name, scale.count());
-            if bucket.iter().any(|case| case.name == name) {
-                return Err(ErrorKind::DuplicateCase { case: name }.into());
-            }
-            insert_case(bucket, Case { name, source });
-        }
-        checks.push(GrowthCheck { name: series.name, group, scales: series.scales, expect });
-    }
-    Ok(checks)
-}
-
-/// Checks every claim in `group` against `medians`.
-///
-/// # Errors
-///
-/// Returns an error when a scale has no median or a claim misses.
-pub(crate) fn check_group(group: Group, checks: &[GrowthCheck], medians: &[Median]) -> Result<()> {
-    for check in checks.iter().filter(|check| check.group == group) {
-        let mut points = Vec::with_capacity(check.scales.len());
-        for scale in &check.scales {
-            let name = case_name(&check.name, scale.count());
-            let Some(median) = medians.iter().find(|median| median.case == name) else {
-                return Err(ErrorKind::SeriesUnmeasured {
-                    series: check.name.clone(),
-                    scale: scale.count(),
-                }
-                .into());
-            };
-            points.push(Point::new(*scale, median.seconds));
-        }
-        let fit = judge(&check.name, check.expect, &points)?;
-        println!(
-            "{group} {} exponent {:.3} {}",
-            check.name,
-            fit.exponent(),
-            fit.character()
-        );
-    }
-    Ok(())
 }
 
 fn judge(series: &str, expect: Growth, points: &[Point]) -> Result<Fit> {
@@ -505,98 +462,4 @@ fn slope(logs: &[(f64, f64)]) -> f64 {
         denom += dx * dx;
     }
     numer / denom
-}
-
-fn bucket(groups: &mut Groups, group: Group) -> &mut Vec<Case> {
-    match group {
-        Group::Debug => &mut groups.debug,
-        Group::Incremental => &mut groups.incremental,
-        Group::Release => &mut groups.release,
-    }
-}
-
-fn insert_case(group: &mut Vec<Case>, case: Case) {
-    let Some((kind, count)) = split_count(&case.name) else {
-        group.push(case);
-        return;
-    };
-    let index = group
-        .iter()
-        .position(|existing| comes_after(&existing.name, kind, count));
-    match index {
-        Some(index) => group.insert(index, case),
-        None => group.push(case),
-    }
-}
-
-fn comes_after(existing: &str, kind: &str, count: u32) -> bool {
-    match split_count(existing) {
-        Some((existing_kind, existing_count)) => (existing_kind, existing_count) > (kind, count),
-        None => false,
-    }
-}
-
-fn split_count(name: &str) -> Option<(&str, u32)> {
-    let (kind, count) = name.rsplit_once('_')?;
-    if kind.is_empty() || count.is_empty() || !count.bytes().all(|byte| byte.is_ascii_digit()) {
-        return None;
-    }
-    count.parse().ok().map(|count| (kind, count))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{Group, Growth, Series, install};
-    use crate::cases::{Case, Groups};
-
-    #[test]
-    fn series_merge_in_kind_then_count_order() {
-        let mut groups = Groups::default();
-        groups
-            .debug
-            .push(Case { name: "fan_take_16".to_owned(), source: "fan".to_owned() });
-        groups
-            .debug
-            .push(Case { name: "many_calls_256".to_owned(), source: "many".to_owned() });
-        let flat = series_at("flat_structs", Group::Debug, [1024, 64]);
-        let hand = series_at("hand_structs", Group::Release, [64, 8192]);
-        install(&mut groups, vec![flat, hand]).unwrap();
-        let names: Vec<&str> = groups.debug.iter().map(|case| case.name.as_str()).collect();
-        assert_eq!(
-            names,
-            [
-                "fan_take_16",
-                "flat_structs_64",
-                "flat_structs_1024",
-                "many_calls_256"
-            ]
-        );
-        assert_eq!(groups.debug[1].source, "n=64;");
-        assert_eq!(groups.release[0].source, "n=64;");
-        assert_eq!(groups.release[1].source, "n=8192;");
-    }
-
-    #[test]
-    fn a_file_case_blocks_the_same_series_name() {
-        let mut groups = Groups::default();
-        groups
-            .debug
-            .push(Case { name: "flat_structs_64".to_owned(), source: "file".to_owned() });
-        let error = install(
-            &mut groups,
-            vec![series_at("flat_structs", Group::Debug, [64, 128])],
-        )
-        .unwrap_err()
-        .to_string();
-        assert!(error.contains("duplicate case"), "{error}");
-    }
-
-    fn series_at<const LEN: usize>(name: &str, group: Group, scales: [u32; LEN]) -> Series {
-        Series::new(name)
-            .group(group)
-            .scales(scales)
-            .expect(Growth::Linear)
-            .render(|scale| format!("n={};", scale.count()))
-            .unwrap()
-    }
 }
