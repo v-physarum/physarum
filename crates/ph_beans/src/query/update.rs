@@ -30,9 +30,10 @@ where
 }
 
 // Generics: `E` builder event scope, `C` context, `M` module.
+// `C::Bean = M`: a pipeline built for one bean is not a tick of another.
 impl<E, C, M> Update<M> for Built<E, C>
 where
-    C: Context,
+    C: Context<Bean = M>,
     C::Tick: Drive,
     M: BeanInfo,
     M::Injects: ClaimShape,

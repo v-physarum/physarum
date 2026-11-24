@@ -6,7 +6,6 @@ TODO: the project purpose is not defined. The owner should replace this paragrap
 
 - `physarum` (repository root) — package skeleton. TODO: the owner fills in the purpose.
 - [`ph_beans`](crates/ph_beans/README.md) — static provide, inject, and tick container.
-- [`ph_beans_derive`](crates/ph_beans_derive/README.md) — `Component` derive for that container.
 - [`ph_util_foreach`](crates/util/ph_util_foreach/README.md) — `impl_foreach` procedural macro.
 
 ## Build

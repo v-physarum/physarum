@@ -9,7 +9,7 @@ TODO: the owner has not defined the project purpose (library, CLI, or service). 
 - `Cargo.toml`, `src/` — the `physarum` package and the workspace root.
 - `crates/benches/ph_bench_build/` — hyperfine runner. A bench selects scenarios and runs them.
 - `crates/util/ph_util_foreach/` — procedural macro `impl_foreach`.
-- Crate tests live in that crate’s `src/lib.rs` (`#[cfg(test)]`). See the test rules below.
+- `tests/crates/ph_util_foreach/` — tests of that macro. See the test rules below.
 - `benches/crates/ph_util_foreach/` — benchmarks of that macro. See the benchmark rules below.
 - `docs/adr/` — architecture decision records. See `docs/adr/README.md`.
 - `.github/` — CI workflow and issue and pull request templates.
@@ -25,7 +25,6 @@ TODO: the owner has not defined the project purpose (library, CLI, or service). 
 - `unsafe` is forbidden.
 - Public items need rustdoc. The crate-level purpose stays a TODO until the owner writes it.
 - Comments, docs, issues, and commit messages are in English.
-- A comment block is at most **10 lines**. Prefer shorter.
 - JSON is read and written with `serde` and `serde_json`. Do not assemble JSON text by hand.
 - Keep diffs small. Do not add a domain, product story, or sample use case.
 
@@ -45,30 +44,13 @@ Exception: if the last parameter is a block `{ ... }`, no name is required befor
 
 Numbered rules for tests and benchmarks in this repository. Numbering continues after rule 1. This section states rules 2 through 5. Later rules use the next integer and do not renumber these rules.
 
-### 2. Tests in `lib.rs`
+### 2. Repository root
 
-All crate tests live in that crate’s **`src/lib.rs`** under `#[cfg(test)]` (inline modules in that file are fine). Do **not** add root `/tests` targets or `/tests/crates/{crate_name}/` for crate behavior.
+Tests and benchmarks live at the repository root: `/tests` and `/benches`.
 
-Benchmarks stay at the repository root: `/benches` with per-crate layout `/benches/crates/{crate_name}/`.
+### 3. Per-crate layout
 
-### 3. Manual bases, `impl_foreach!` for the rest
-
-Write a few **manual** base cases in full. In a short comment (≤ 10 lines), point at those bases as the examples. Extrapolate the remaining cases with **`impl_foreach!`** (arity / shape sweeps). Do not hand-unroll the full matrix next to the bases.
-
-```rust
-// Bases (examples): empty claim; one Get; Get+Mut pair — see tests below.
-#[test]
-fn claim_empty_is_ready() { … }
-
-#[test]
-fn claim_one_get_is_ready() { … }
-
-impl_foreach!(1..8, {
-    // same shape as claim_one_get_is_ready, for N leaves
-});
-```
-
-Using `impl_foreach!` **in tests** is required for that extrapolation (owner-allowed for this rule). Production `ph_beans` src still follows its own macro rule unless the owner says otherwise.
+Per-crate layout: `/tests/crates/{crate_name}/` and `/benches/crates/{crate_name}/`.
 
 ### 4. Public API
 

@@ -14,7 +14,10 @@ pub trait Tick<M: BeanInfo>: Descriptor + Update<M>
 where
     M::Injects: ClaimShape,
 {
-    /// Runs maps for emit tree `N`. Init already ran in the builder.
+    /// Runs maps for emit tree `N`.
+    ///
+    /// TODO: the init function is stored and not called yet, and `injects`
+    /// is not passed to the maps yet.
     fn emit<N: Collect + crate::ScopeHost>(
         &mut self,
         event: N,
@@ -50,6 +53,14 @@ where
     /// struct App; impl BeanInfo for App { type Provides=(); type Injects=(); type Beans=(); type State=u8; }
     /// fn boot(_: ()) -> u8 { 1 }
     /// impl Setup for App { fn setup(self) -> impl Tick<Self> { App::query().init_state(boot) } }
+    /// ```
+    /// A pipeline built for another bean is rejected.
+    /// ```compile_fail
+    /// use ph_beans::{BeanInfo, Query, Setup, Tick};
+    /// struct App; impl BeanInfo for App { type Provides=(); type Injects=(); type Beans=(); type State=u8; }
+    /// struct Other; impl BeanInfo for Other { type Provides=(); type Injects=(); type Beans=(); type State=u8; }
+    /// fn boot(_: ()) -> u8 { 1 }
+    /// impl Setup for Other { fn setup(self) -> impl Tick<Self> { App::query().init_state(boot).build() } }
     /// ```
     fn setup(self) -> impl Tick<Self>;
 }
