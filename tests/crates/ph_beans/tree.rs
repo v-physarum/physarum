@@ -7,8 +7,8 @@
 #![allow(missing_docs)]
 
 use ph_beans::{
-    At, BeanInfo, EventInfo, Get, Ix, Marker, Module, Mut, OfInject, OfParent, OfProvide,
-    OfProvide1, Query, Setup, Tick,
+    At, BeanInfo, EventInfo, Get, Ix, Marker, Module, Mut, OfInject, OfParent, OfProvide, Query,
+    Setup, Tick,
 };
 
 struct Id(u8);
@@ -149,7 +149,7 @@ fn a_child_injects_the_parent_surface() {
     fn parent<C: Module<Logic, OfParent>>() {}
     fn from_inject<C: Module<Logic, OfInject>>() {}
     fn from_provide<C: Module<Logic, OfProvide>>() {}
-    fn second<C: Module<PairHost, OfProvide1>>() {}
+    fn second<C: Module<PairHost, OfProvide<1>>>() {}
     parent::<Render>();
     from_inject::<UsesApp>();
     from_provide::<UsesRender>();

@@ -11,9 +11,7 @@
 
 mod inject;
 
-pub use inject::{
-    FromParent, Module, OfInject, OfInject0, OfInject1, OfParent, OfProvide, OfProvide0, OfProvide1,
-};
+pub use inject::{FromParent, Module, OfInject, OfParent, OfProvide};
 
 use crate::filter::On;
 

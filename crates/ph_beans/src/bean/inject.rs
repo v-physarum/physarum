@@ -1,35 +1,32 @@
 //! Manual provide / inject against a parent surface.
 //!
-//! Membership is [`ClaimMark`] + list match. Slot markers (`OfProvide0`, …)
-//! exist only because two `Provides = (C, _)` / `Provides = (_, C)` blankets
-//! overlap (E0119) — not a Get×Mut matrix. Prefer collapsing further if a
-//! non-overlapping membership encoding appears; do not add Get/Mut arms.
+//! Membership is [`ClaimMark`] + list match. [`OfProvide`]`<N>` / [`OfInject`]`<N>`
+//! are Via slots (E0119 residual for head vs tail) — not a Get×Mut matrix.
+//! Prefer collapsing further if a non-overlapping membership encoding appears.
+//!
+//! Length-1 lists use the default (`OfProvide` / `OfInject`). Multi-item slots
+//! use `OfProvide<0>`, `OfProvide<1>`, … (same for inject).
 
 use crate::bean::BeanInfo;
 use crate::descriptor::{Get, Mut};
 
+/// Via code for a length-1 provide/inject list (default on [`OfProvide`] / [`OfInject`]).
+const VIA_LEN1: usize = usize::MAX;
+
 /// The child is injecting the parent bean itself.
 pub struct OfParent;
 
-/// The child is injecting the parent's single provide.
-pub struct OfProvide;
-
-/// The child is injecting the parent's single inject.
-pub struct OfInject;
-
-/// First item of a two-item provide list.
+/// Via into the parent's provide list.
 ///
-/// Residual Via for E0119 — not an accessor×slot product.
-pub struct OfProvide0;
+/// Default = length-1 exact match. `V` = 0-based slot in a longer list.
+/// Generics: `V` slot (default = length-1).
+pub struct OfProvide<const V: usize = { VIA_LEN1 }>;
 
-/// Second item of a two-item provide list.
-pub struct OfProvide1;
-
-/// First item of a two-item inject list.
-pub struct OfInject0;
-
-/// Second item of a two-item inject list.
-pub struct OfInject1;
+/// Via into the parent's inject list.
+///
+/// Default = length-1 exact match. `V` = 0-based slot in a longer list.
+/// Generics: `V` slot (default = length-1).
+pub struct OfInject<const V: usize = { VIA_LEN1 }>;
 
 /// `Self` may be injected from `P` via `V`. Generics: `P` parent, `V` via.
 /// ```compile_fail
@@ -72,7 +69,7 @@ impl<P, C> FromParent<P, OfParent> for C where C: IsParent<P> {}
 // Generics: `P` parent.
 impl<P> FromParent<P, ()> for () {}
 
-// Generics: `P` parent, `C` claim ([`ClaimMark`]).
+// Length-1 provide. Generics: `P` parent, `C` claim ([`ClaimMark`]).
 impl<P, C> FromParent<P, OfProvide> for C
 where
     P: BeanInfo<Provides = C>,
@@ -80,7 +77,7 @@ where
 {
 }
 
-// Generics: `P` parent, `C` claim ([`ClaimMark`]).
+// Length-1 inject. Generics: `P` parent, `C` claim ([`ClaimMark`]).
 impl<P, C> FromParent<P, OfInject> for C
 where
     P: BeanInfo<Injects = C>,
@@ -88,9 +85,9 @@ where
 {
 }
 
-// Two-item lists: Via distinguishes head vs tail (E0119 if both use OfProvide).
+// Two-item lists: slot Via (E0119 if head/tail shared one Via).
 // Generics: `P` parent, `C` claim, `R` rest.
-impl<P, C, R> FromParent<P, OfProvide0> for C
+impl<P, C, R> FromParent<P, OfProvide<0>> for C
 where
     P: BeanInfo<Provides = (C, R)>,
     C: ClaimMark,
@@ -98,7 +95,7 @@ where
 }
 
 // Generics: `P` parent, `C` claim, `L` left.
-impl<P, C, L> FromParent<P, OfProvide1> for C
+impl<P, C, L> FromParent<P, OfProvide<1>> for C
 where
     P: BeanInfo<Provides = (L, C)>,
     C: ClaimMark,
@@ -106,7 +103,7 @@ where
 }
 
 // Generics: `P` parent, `C` claim, `R` rest.
-impl<P, C, R> FromParent<P, OfInject0> for C
+impl<P, C, R> FromParent<P, OfInject<0>> for C
 where
     P: BeanInfo<Injects = (C, R)>,
     C: ClaimMark,
@@ -114,7 +111,7 @@ where
 }
 
 // Generics: `P` parent, `C` claim, `L` left.
-impl<P, C, L> FromParent<P, OfInject1> for C
+impl<P, C, L> FromParent<P, OfInject<1>> for C
 where
     P: BeanInfo<Injects = (L, C)>,
     C: ClaimMark,

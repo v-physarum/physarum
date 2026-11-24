@@ -15,10 +15,7 @@ pub mod descriptor;
 pub mod filter;
 pub mod query;
 
-pub use bean::{
-    BeanInfo, EventInfo, FromParent, Module, OfInject, OfInject0, OfInject1, OfParent, OfProvide,
-    OfProvide0, OfProvide1,
-};
+pub use bean::{BeanInfo, EventInfo, FromParent, Module, OfInject, OfParent, OfProvide};
 pub use borrow::{At, Ix, Off, Take, TakeMany};
 pub use context::{
     CarrierDesc, Context, ContextTick, Ctx, Direct, DirectFn, EventBuf, ExactDrive, Leaf, List,
