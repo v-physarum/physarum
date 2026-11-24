@@ -223,17 +223,19 @@ where
 
 impl<P, A, K> UnderVia<P, K> for Not<A> where A: UnderVia<P, K> {}
 
-impl<P, C, I, K> UnderVia<P, (crate::Own, K)> for On<C, I>
+impl<P, C, I, At, K> UnderVia<P, (crate::Own, At, K)> for On<C, I>
 where
-    C: EventInfo<Parents = P>,
+    C: EventInfo,
+    C::Parents: HasParent<P, At>,
     I: UnderVia<C, K>,
 {
 }
 
-impl<P, C, I, X, K> UnderVia<P, (crate::FromProxy, K)> for On<C, I>
+impl<P, C, I, X, At, K> UnderVia<P, (crate::FromProxy, At, K)> for On<C, I>
 where
     C: Proxied<Link: Marked<Target = X>>,
-    X: BeanInfo + EventInfo<Parents = P>,
+    X: BeanInfo + EventInfo,
+    X::Parents: HasParent<P, At>,
     I: UnderVia<C, K>,
 {
 }
@@ -244,18 +246,73 @@ pub trait ChainParents<P, K> {}
 
 trait TailParents<P, K> {}
 
-impl<O0, P> TailParents<P, crate::Own> for (O0,) where O0: EventInfo<Parents = P> {}
-
-impl<O0, O1, P> TailParents<P, crate::Own> for (O0, O1) where O0: EventInfo<Parents = P> {}
-
-impl<O0, O1, P, K> TailParents<P, (crate::FromProxy, K)> for (O0, O1) where (O1,): TailParents<P, K> {}
-
-impl<O0, O1, O2, P> TailParents<P, crate::Own> for (O0, O1, O2) where O0: EventInfo<Parents = P> {}
-
-impl<O0, O1, O2, P, K> TailParents<P, (crate::FromProxy, K)> for (O0, O1, O2) where
-    (O1, O2): TailParents<P, K>
+impl<O0, P, At> TailParents<P, (crate::Own, At)> for (O0,)
+where
+    O0: EventInfo,
+    O0::Parents: HasParent<P, At>,
 {
 }
+
+impl<O0, O1, P, At> TailParents<P, (crate::Own, At)> for (O0, O1)
+where
+    O0: EventInfo,
+    O0::Parents: HasParent<P, At>,
+{
+}
+
+impl<O0, O1, P, At> TailParents<P, (crate::FromProxy, (crate::Own, At))> for (O0, O1)
+where
+    O1: EventInfo,
+    O1::Parents: HasParent<P, At>,
+{
+}
+
+impl<O0, O1, O2, P, At> TailParents<P, (crate::Own, At)> for (O0, O1, O2)
+where
+    O0: EventInfo,
+    O0::Parents: HasParent<P, At>,
+{
+}
+
+impl<O0, O1, O2, P, At> TailParents<P, (crate::FromProxy, (crate::Own, At))> for (O0, O1, O2)
+where
+    O1: EventInfo,
+    O1::Parents: HasParent<P, At>,
+{
+}
+
+impl<O0, O1, O2, P, At> TailParents<P, (crate::FromProxy, (crate::FromProxy, (crate::Own, At)))>
+    for (O0, O1, O2)
+where
+    O2: EventInfo,
+    O2::Parents: HasParent<P, At>,
+{
+}
+
+/// `P` occupies one slot of this parent list. The slot is `At`.
+trait HasParent<P, At> {}
+
+impl<P> HasParent<P, ()> for P {}
+
+impl<P> HasParent<P, crate::Ix0> for (P,) {}
+
+impl<P, R> HasParent<P, crate::Ix0> for (P, R) {}
+
+impl<L, P> HasParent<P, crate::Ix1> for (L, P) {}
+
+impl<P, A, R> HasParent<P, crate::Ix0> for (P, A, R) {}
+
+impl<L, P, R> HasParent<P, crate::Ix1> for (L, P, R) {}
+
+impl<L, A, P> HasParent<P, crate::Ix2> for (L, A, P) {}
+
+impl<P, A, B, R> HasParent<P, crate::Ix0> for (P, A, B, R) {}
+
+impl<L, P, B, R> HasParent<P, crate::Ix1> for (L, P, B, R) {}
+
+impl<L, A, P, R> HasParent<P, crate::Ix2> for (L, A, P, R) {}
+
+impl<L, A, B, P> HasParent<P, crate::Ix3> for (L, A, B, P) {}
 
 impl<X, L, P, K> ChainParents<P, K> for X
 where

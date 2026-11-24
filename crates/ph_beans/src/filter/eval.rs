@@ -13,6 +13,7 @@ pub trait EventParent {
 }
 
 impl EventParent for () {
+    #[inline]
     fn listed(_emitted: &[TypeId]) -> bool {
         false
     }
@@ -22,8 +23,50 @@ impl<E> EventParent for E
 where
     E: crate::EventInfo + 'static,
 {
+    #[inline]
     fn listed(emitted: &[TypeId]) -> bool {
         emitted.contains(&TypeId::of::<E>())
+    }
+}
+
+impl<A, B> EventParent for (A, B)
+where
+    A: crate::EventInfo + 'static,
+    B: crate::EventInfo + 'static,
+{
+    #[inline]
+    fn listed(emitted: &[TypeId]) -> bool {
+        emitted.contains(&TypeId::of::<A>()) || emitted.contains(&TypeId::of::<B>())
+    }
+}
+
+impl<A, B, C> EventParent for (A, B, C)
+where
+    A: crate::EventInfo + 'static,
+    B: crate::EventInfo + 'static,
+    C: crate::EventInfo + 'static,
+{
+    #[inline]
+    fn listed(emitted: &[TypeId]) -> bool {
+        emitted.contains(&TypeId::of::<A>())
+            || emitted.contains(&TypeId::of::<B>())
+            || emitted.contains(&TypeId::of::<C>())
+    }
+}
+
+impl<A, B, C, D> EventParent for (A, B, C, D)
+where
+    A: crate::EventInfo + 'static,
+    B: crate::EventInfo + 'static,
+    C: crate::EventInfo + 'static,
+    D: crate::EventInfo + 'static,
+{
+    #[inline]
+    fn listed(emitted: &[TypeId]) -> bool {
+        emitted.contains(&TypeId::of::<A>())
+            || emitted.contains(&TypeId::of::<B>())
+            || emitted.contains(&TypeId::of::<C>())
+            || emitted.contains(&TypeId::of::<D>())
     }
 }
 
@@ -32,6 +75,7 @@ where
     P: crate::EventInfo,
     P::Parents: EventParent,
 {
+    #[inline]
     fn listed(emitted: &[TypeId]) -> bool {
         P::Parents::listed(emitted)
     }
@@ -129,6 +173,7 @@ impl<T> MatchEmit for Mut<T> {
     }
 }
 
+#[inline]
 fn listed(emitted: &[TypeId], id: TypeId) -> bool {
     emitted.contains(&id)
 }
@@ -144,6 +189,7 @@ impl<P> ChainEmit<Stop> for P
 where
     P: ParentList + 'static,
 {
+    #[inline]
     fn hit(emitted: &[TypeId]) -> bool {
         listed(emitted, TypeId::of::<P>()) || P::listed(emitted)
     }
@@ -154,6 +200,7 @@ where
     P: ParentList + 'static,
     O0: ParentList + 'static,
 {
+    #[inline]
     fn hit(emitted: &[TypeId]) -> bool {
         listed(emitted, TypeId::of::<P>())
             || P::listed(emitted)
@@ -168,6 +215,7 @@ where
     O0: ParentList + 'static,
     O1: ParentList + 'static,
 {
+    #[inline]
     fn hit(emitted: &[TypeId]) -> bool {
         listed(emitted, TypeId::of::<P>())
             || P::listed(emitted)
@@ -185,6 +233,7 @@ where
     O1: ParentList + 'static,
     O2: ParentList + 'static,
 {
+    #[inline]
     fn hit(emitted: &[TypeId]) -> bool {
         listed(emitted, TypeId::of::<P>())
             || P::listed(emitted)
@@ -203,6 +252,7 @@ where
     P: BeanInfo + ChainEmit<P::Chain>,
     I: MatchEmit,
 {
+    #[inline]
     fn matches(emitted: &[TypeId]) -> bool {
         (listed(emitted, TypeId::of::<E>()) || <P as ChainEmit<P::Chain>>::hit(emitted))
             && I::matches(emitted)

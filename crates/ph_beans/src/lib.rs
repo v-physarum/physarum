@@ -625,6 +625,117 @@ mod tests {
             let _pipeline = Room::query().filter(Alarm::ON[Core::ON]);
         }
 
+        struct DeepBean;
+        struct DeepNear;
+        struct DeepMid;
+        struct DeepFar;
+        struct DeepEdge;
+        struct DeepRoom;
+
+        impl BeanInfo for DeepBean {
+            type Provides = ();
+            type Injects = ();
+            type Beans = ();
+            type State = ();
+            type Proxy = DeepNear;
+            type Link = Get<DeepBean>;
+            type Chain = Stop;
+        }
+        impl EventInfo for DeepBean {
+            type Parents = ();
+        }
+
+        impl BeanInfo for DeepNear {
+            type Provides = ();
+            type Injects = ();
+            type Beans = ();
+            type State = ();
+            type Proxy = Proxy<DeepNear>;
+            type Link = Get<DeepNear>;
+            type Chain = (DeepMid, DeepFar, DeepEdge);
+        }
+        impl EventInfo for DeepNear {
+            type Parents = ();
+        }
+
+        impl BeanInfo for DeepMid {
+            type Provides = ();
+            type Injects = ();
+            type Beans = ();
+            type State = ();
+            type Proxy = Proxy<DeepMid>;
+            type Link = Get<DeepMid>;
+            type Chain = (DeepFar, DeepEdge);
+        }
+        impl EventInfo for DeepMid {
+            type Parents = ();
+        }
+
+        impl BeanInfo for DeepFar {
+            type Provides = ();
+            type Injects = ();
+            type Beans = ();
+            type State = ();
+            type Proxy = Proxy<DeepFar>;
+            type Link = Get<DeepFar>;
+            type Chain = (DeepEdge,);
+        }
+        impl EventInfo for DeepFar {
+            type Parents = ();
+        }
+
+        impl BeanInfo for DeepEdge {
+            type Provides = ();
+            type Injects = ();
+            type Beans = ();
+            type State = ();
+            type Proxy = Proxy<DeepEdge>;
+            type Link = Get<DeepEdge>;
+            type Chain = Stop;
+        }
+        impl EventInfo for DeepEdge {
+            type Parents = (Alarm, Main);
+        }
+
+        impl BeanInfo for DeepRoom {
+            type Provides = ();
+            type Injects = ();
+            type Beans = ();
+            type State = ();
+            type Proxy = Proxy<DeepRoom>;
+            type Link = Get<DeepRoom>;
+            type Chain = Stop;
+        }
+
+        #[test]
+        fn a_parent_on_the_furthest_proxy_allows_the_bean() {
+            let _pipeline = DeepRoom::query().filter(Alarm::ON[DeepBean::ON]);
+            let _other = DeepRoom::query().filter(Main::ON[DeepBean::ON]);
+        }
+
+        #[test]
+        fn either_parent_of_the_furthest_proxy_runs_the_bean() {
+            reset();
+            let mut tick = DeepRoom::query()
+                .filter(DeepBean::ON)
+                .map(hit)
+                .emit(Main::ON)
+                .init_state(idle)
+                .build();
+            Tick::<DeepRoom>::update(&mut tick, ());
+            assert_eq!(HITS.with(Cell::get), 1);
+
+            reset();
+            let mut tick = DeepRoom::query()
+                .filter(DeepBean::ON)
+                .map(hit)
+                .emit(Alarm::ON)
+                .init_state(idle)
+                .build();
+            Tick::<DeepRoom>::update(&mut tick, ());
+            assert_eq!(HITS.with(Cell::get), 1);
+        }
+
         type ChainEvent0 = Inner;
         type ChainEvent1 = Mid;
         type ChainEvent2 = Outer;
@@ -1238,6 +1349,41 @@ mod tests {
         impl Target for Update {}
         impl Target for Graphics {}
         impl Target for Main {}
+
+        struct Side;
+        struct Joint;
+
+        impl BeanInfo for Side {
+            type Provides = ();
+            type Injects = ();
+            type Beans = ();
+            type State = ();
+            type Proxy = Proxy<Side>;
+            type Link = ph_beans::Get<Side>;
+            type Chain = ph_beans::Stop;
+        }
+        impl EventInfo for Side {
+            type Parents = ();
+        }
+
+        impl BeanInfo for Joint {
+            type Provides = ();
+            type Injects = ();
+            type Beans = ();
+            type State = ();
+            type Proxy = Proxy<Joint>;
+            type Link = ph_beans::Get<Joint>;
+            type Chain = ph_beans::Stop;
+        }
+        impl EventInfo for Joint {
+            type Parents = (Update, Side);
+        }
+
+        #[test]
+        fn either_listed_parent_allows_the_nested_event() {
+            let _update = Sched::query().filter(Update::ON[Joint::ON]);
+            let _side = Sched::query().filter(Side::ON[Joint::ON]);
+        }
 
         fn graphics_under_update<A, S, P>(
             _pipeline: &Init<(Graphics, Update), Ctx<Sched, A, S, P>>,

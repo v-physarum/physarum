@@ -1138,7 +1138,7 @@ Derive (or manual impl) gives each event **only** `BeanInfo` + `EventInfo { type
 
 | Rule | Check | On failure |
 | --- | --- | --- |
-| Nested `On<Child, …>` under `On<Parent, …>` | `Child: EventInfo` and `Parent` appears in `Child::Parents` (trait-recursive over the `Parents` list) | `ErrBadEvent` / no `EmitAllowed` on that `.filter` / `.emit` |
+| Nested `On<Child, …>` under `On<Parent, …>` | `Child: EventInfo` and `Parent` appears in `Child::Parents`. Each list position is its own impl (`()`, one parent, or a tuple slot). | `ErrBadEvent` / no `EmitAllowed` on that `.filter` / `.emit` |
 | `.emit(tree)` | AST is well-formed (`And`/`Or`/`Not`/`On`/leaves); every `On<Ev, _>` event is an `EventInfo`; parent edges hold | same Status / refuse |
 | `.emit(…)` under module | Emitted events covered by module surface where required (Provides ∪ Injects / providers) | level-2 style bound |
 | `emit_providers()` | Emit the module’s provider events only | refuse if none / not a provider module |
