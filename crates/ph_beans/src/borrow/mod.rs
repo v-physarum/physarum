@@ -1,7 +1,6 @@
 //! Slot indexes and the provide check.
 //!
-//! [`Off`] and [`Ix0`] through [`Ix3`] are zero-sized. [`At`] names which
-//! slot a bean provides.
+//! [`Off`] and [`Ix`]`<N>` are zero-sized. [`At`] names which slot a bean provides.
 
 mod take;
 
@@ -11,23 +10,12 @@ pub use take::{Take, TakeMany};
 #[doc(hidden)]
 pub struct Off;
 
-/// Index of one provided bean.
+/// Index of one provided bean. `V` is the slot (0-based).
+/// Generics: `V` slot index.
 #[doc(hidden)]
-pub struct Ix0;
+pub struct Ix<const V: usize>;
 
-/// Index of one provided bean.
-#[doc(hidden)]
-pub struct Ix1;
-
-/// Index of one provided bean.
-#[doc(hidden)]
-pub struct Ix2;
-
-/// Index of one provided bean.
-#[doc(hidden)]
-pub struct Ix3;
-
-/// `Self` provides `P` at [`At::Ix`] ([`Ix0`]…[`Ix3`], not a number).
+/// `Self` provides `P` at [`At::Ix`] ([`Ix`]`<N>`, not a raw number).
 /// ```compile_fail
 /// use ph_beans::{BeanInfo, Marker, Query};
 /// struct Id; impl BeanInfo for Id { type Provides=(); type Injects=(); type Beans=(); type State=(); }

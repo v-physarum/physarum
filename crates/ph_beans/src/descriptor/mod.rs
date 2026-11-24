@@ -2,18 +2,17 @@
 
 mod accessors;
 mod dyn_view;
+pub(crate) mod error;
 pub(crate) mod live;
 pub(crate) mod op_desc;
 mod status;
 
 pub use accessors::{Accessors, Get, Marker, Mut, State};
 pub use dyn_view::{Dyn, DynView};
+pub use error::{ClaimError, FilterError, PipelineError};
 pub use live::{AccSet, ClaimDesc, Idle, Live};
-pub use op_desc::{ErrConflictAccess, ErrDuplicateResource, JoinStatus, OpDesc, OpOk};
-pub use status::{
-    ErrBadEvent, ErrInitAlreadySet, ErrNeedWaitFilter, ErrNotChild, ErrTooManySystems, NeedBuild,
-    NeedInit, PipelineOk, Valid, WarnUnusedArgs,
-};
+pub use op_desc::{JoinStatus, OpDesc, OpOk};
+pub use status::{NeedBuild, NeedInit, PipelineOk, Valid, WarnUnusedArgs};
 
 /// Pipeline health and the live accessor set.
 ///

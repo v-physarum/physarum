@@ -178,7 +178,7 @@ where
 
 impl<E, C> Init<E, C> {
     /// Stores a pure init `fn` (rule 18). Status → [`NeedBuild`](crate::NeedBuild).
-    /// A second call is [`ErrInitAlreadySet`](crate::ErrInitAlreadySet).
+    /// A second call is [`PipelineError`](crate::PipelineError)`<1>` (see `docs/errors.md`).
     /// ```compile_fail
     /// use ph_beans::{BeanInfo, Query};
     /// struct App; impl BeanInfo for App { type Provides=(); type Injects=(); type Beans=(); type State=u8; }

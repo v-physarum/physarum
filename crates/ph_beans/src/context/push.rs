@@ -12,9 +12,9 @@ use super::list::List;
 /// Appends one entry. Sixteen entries have no impl: that is the cap.
 #[doc(hidden)]
 #[diagnostic::on_unimplemented(
-    message = "at most 16 map systems are supported (Status = ErrTooManySystems)",
+    message = "at most 16 map systems are supported (Status = PipelineError<2>)",
     label = "fix Descriptor::Status",
-    note = "MAX_MAP_SYSTEMS = 16; split the pipeline or drop a map"
+    note = "MAX_MAP_SYSTEMS = 16; PipelineError<2> — docs/errors.md"
 )]
 // Generics: `E` entry.
 pub trait PushEntry<E> {
@@ -27,9 +27,9 @@ pub trait PushEntry<E> {
 /// One shared append step for a leaf or a group tuple.
 #[doc(hidden)]
 #[diagnostic::on_unimplemented(
-    message = "at most 16 map systems are supported (Status = ErrTooManySystems)",
+    message = "at most 16 map systems are supported (Status = PipelineError<2>)",
     label = "fix Descriptor::Status",
-    note = "MAX_MAP_SYSTEMS = 16; split the pipeline or drop a map"
+    note = "MAX_MAP_SYSTEMS = 16; PipelineError<2> — docs/errors.md"
 )]
 // Generics: `N` new entry.
 pub trait PushShape<N> {

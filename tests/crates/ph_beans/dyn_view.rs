@@ -7,7 +7,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use ph_beans::{At, BeanInfo, DynView, Ix0, Marker, Query};
+use ph_beans::{At, BeanInfo, DynView, Ix, Marker, Query};
 use ph_test_asm::AsmTester;
 
 struct Draw(u8);
@@ -28,7 +28,7 @@ impl BeanInfo for App {
 }
 
 impl At<Draw> for App {
-    type Ix = Ix0;
+    type Ix = Ix<0>;
 }
 
 trait Painter {

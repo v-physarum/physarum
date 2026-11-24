@@ -73,7 +73,7 @@ where
 // Generics: `E` event, `C` context / claim / child.
 impl<E, C> Init<E, C> {
     /// Stores a pure map `fn` (rule 18). Prefer a function item over a closure.
-    /// The 17th call is [`ErrTooManySystems`](crate::ErrTooManySystems).
+    /// The 17th call is [`PipelineError`](crate::PipelineError)`<2>` (see `docs/errors.md`).
     pub fn map<H>(self, handler: H) -> <Self as MapStep<H>>::Out
     where
         H: Fn(),

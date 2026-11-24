@@ -272,9 +272,9 @@ where
 
 /// Nested `On<C, _>` lists `P` in `C::Parents`.
 #[diagnostic::on_unimplemented(
-    message = "pipeline not ready: Descriptor::Status = `ErrBadEvent` (tip `{Self}`)",
+    message = "pipeline not ready: Descriptor::Status = `FilterError<1>` (tip `{Self}`)",
     label = "fix Descriptor::Status",
-    note = "a nested event must list the outer event in Parents"
+    note = "a nested event must list the outer event in Parents; FilterError<1> — docs/errors.md"
 )]
 // Generics: `P` parent.
 pub trait Under<P> {}
@@ -289,9 +289,9 @@ where
 
 /// The event node is well formed.
 #[diagnostic::on_unimplemented(
-    message = "pipeline not ready: Descriptor::Status = `ErrBadEvent` (tip `{Self}`)",
+    message = "pipeline not ready: Descriptor::Status = `FilterError<1>` (tip `{Self}`)",
     label = "fix Descriptor::Status",
-    note = "one Status for the whole chain (build, events, accessors, DI)"
+    note = "one Status for the whole chain; FilterError<1> — docs/errors.md"
 )]
 pub trait NestOk {}
 

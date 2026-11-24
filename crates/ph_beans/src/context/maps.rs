@@ -104,9 +104,9 @@ impl<N, E, S> ContextTick for MapList<N, E, S> {}
 /// Appends one map under the list's current filter.
 #[doc(hidden)]
 #[diagnostic::on_unimplemented(
-    message = "at most 16 map systems are supported (Status = ErrTooManySystems)",
+    message = "at most 16 map systems are supported (Status = PipelineError<2>)",
     label = "fix Descriptor::Status",
-    note = "MAX_MAP_SYSTEMS = 16; split the pipeline or drop a map"
+    note = "MAX_MAP_SYSTEMS = 16; PipelineError<2> — docs/errors.md"
 )]
 // Generics: `H` handler.
 pub trait PushMap<H> {

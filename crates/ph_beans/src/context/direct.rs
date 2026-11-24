@@ -66,9 +66,9 @@ where
 
 /// `C`'s parent is exactly the current event.
 #[diagnostic::on_unimplemented(
-    message = "pipeline not ready: Descriptor::Status = `ErrNotChild`",
+    message = "pipeline not ready: Descriptor::Status = `FilterError<3>`",
     label = "fix Descriptor::Status",
-    note = "direct emit only reaches a child of the current event"
+    note = "direct emit only reaches a child of the current event (FilterError<3>)"
 )]
 // Generics: `E` parent event.
 pub trait ChildOf<E> {}

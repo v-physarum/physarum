@@ -34,9 +34,9 @@ pub trait ContextTick {}
 /// status is named here instead of a second impl whose body is unreachable.
 #[doc(hidden)]
 #[diagnostic::on_unimplemented(
-    message = "pipeline not ready: Descriptor::Status = `ErrInitAlreadySet` (tip `{Self}`)",
+    message = "pipeline not ready: Descriptor::Status = `PipelineError<1>` (tip `{Self}`)",
     label = "fix Descriptor::Status",
-    note = "init_state stores one system"
+    note = "init_state stores one system (PipelineError<1>)"
 )]
 pub trait FreshInit: ContextTick {
     /// Tick after `init_state`.

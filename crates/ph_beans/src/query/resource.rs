@@ -100,18 +100,18 @@ where
 
 /// Live set may take the next `.inject_resources`. Generics: `N` new claim.
 /// ```compile_fail
-/// use ph_beans::{At, BeanInfo, EventInfo, Ix0, Marker, Query};
+/// use ph_beans::{At, BeanInfo, EventInfo, Ix, Marker, Query};
 /// struct Keys; struct Main; struct App;
 /// impl BeanInfo for Keys { type Provides=(); type Injects=(); type Beans=(); type State=(); }
 /// impl BeanInfo for Main { type Provides=(); type Injects=(); type Beans=(); type State=(); }
 /// impl EventInfo for Main { type Parents=(); } impl BeanInfo for App { type Provides=(); type Injects=(); type Beans=(); type State=(); }
-/// impl At<Keys> for App { type Ix = Ix0; }
+/// impl At<Keys> for App { type Ix = Ix<0>; }
 /// let _ = App::query().inject_resources(Keys::MUT).filter(Main::ON[Keys::T]).inject_resources(Keys::T);
 /// ```
 #[diagnostic::on_unimplemented(
-    message = "pipeline not ready: Descriptor::Status = `ErrNeedWaitFilter` (tip `{Self}`)",
+    message = "pipeline not ready: Descriptor::Status = `FilterError<2>` (tip `{Self}`)",
     label = "fix Descriptor::Status",
-    note = "a live Mut is still held; wait for it before the next .inject_resources"
+    note = "a live Mut is still held; wait before the next .inject_resources (FilterError<2>)"
 )]
 // Generics: `N` new claim.
 pub trait AllowInjectResources<N> {}

@@ -6,7 +6,7 @@
 use core::cell::Cell;
 
 use ph_beans::{
-    At, BeanInfo, Ctx, Dense, Direct, DirectFn, EmitBit, EventInfo, ExactDrive, Gate, Init, Ix0,
+    At, BeanInfo, Ctx, Dense, Direct, DirectFn, EmitBit, EventInfo, ExactDrive, Gate, Init, Ix,
     List, MapEntry, Marker, On, Pipe, Query, Sparse, Tick,
 };
 
@@ -83,7 +83,7 @@ impl BeanInfo for Keys {
 }
 
 impl At<Keys> for Sched {
-    type Ix = Ix0;
+    type Ix = Ix<0>;
 }
 
 fn graphics_under_update<A, S, P>(_pipeline: &Init<(Graphics, Update), Ctx<Sched, A, S, P>>) {}

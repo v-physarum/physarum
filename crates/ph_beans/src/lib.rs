@@ -19,16 +19,15 @@ pub use bean::{
     BeanInfo, EventInfo, FromParent, Module, OfInject, OfInject0, OfInject1, OfParent, OfProvide,
     OfProvide0, OfProvide1,
 };
-pub use borrow::{At, Ix0, Ix1, Ix2, Ix3, Off, Take, TakeMany};
+pub use borrow::{At, Ix, Off, Take, TakeMany};
 pub use context::{
     CarrierDesc, Context, ContextTick, Ctx, Direct, DirectFn, EventBuf, ExactDrive, Leaf, List,
     MAX_MAP_SYSTEMS, MapEntry, MapList, NoSystems, Pipe, ScopeHost, StartDesc, WithDefault,
     WithInit,
 };
 pub use descriptor::{
-    Accessors, ClaimDesc, Descriptor, Dyn, DynView, ErrBadEvent, ErrConflictAccess,
-    ErrDuplicateResource, ErrInitAlreadySet, ErrNeedWaitFilter, ErrNotChild, ErrTooManySystems,
-    Get, Idle, Live, Marker, Mut, NeedBuild, NeedInit, OpDesc, OpOk, PipelineOk, State, Valid,
+    Accessors, ClaimDesc, ClaimError, Descriptor, Dyn, DynView, FilterError, Get, Idle, Live,
+    Marker, Mut, NeedBuild, NeedInit, OpDesc, OpOk, PipelineError, PipelineOk, State, Valid,
     WarnUnusedArgs,
 };
 pub use filter::{

@@ -7,7 +7,7 @@
 #![allow(missing_docs)]
 
 use ph_beans::{
-    At, BeanInfo, EventInfo, Get, Ix0, Ix1, Marker, Module, Mut, OfInject, OfParent, OfProvide,
+    At, BeanInfo, EventInfo, Get, Ix, Marker, Module, Mut, OfInject, OfParent, OfProvide,
     OfProvide1, Query, Setup, Tick,
 };
 
@@ -49,11 +49,11 @@ impl EventInfo for Update {
 }
 
 impl At<Id> for App {
-    type Ix = Ix0;
+    type Ix = Ix<0>;
 }
 
 impl At<Keys> for App {
-    type Ix = Ix1;
+    type Ix = Ix<1>;
 }
 
 fn boot(args: (&Id, &mut Keys)) -> u8 {

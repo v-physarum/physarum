@@ -3,7 +3,7 @@
 //! [`Take`] leaves [`Off`] in the hole and keeps the width, so later indexes
 //! still name the same positions. [`TakeMany`] walks a list of those indexes.
 
-use super::{Ix0, Ix1, Ix2, Ix3, Off};
+use super::{Ix, Off};
 
 /// Pulls slot `I` out of a fixed-width tuple.
 /// Generics: `I` index.
@@ -71,7 +71,7 @@ where
 }
 
 // Generics: `T0` slot 0.
-impl<T0> Take<Ix0> for (T0,) {
+impl<T0> Take<Ix<0>> for (T0,) {
     type Out = T0;
     type Rest = (Off,);
 
@@ -81,7 +81,7 @@ impl<T0> Take<Ix0> for (T0,) {
     }
 }
 
-impl<T0, T1> Take<Ix0> for (T0, T1) {
+impl<T0, T1> Take<Ix<0>> for (T0, T1) {
     type Out = T0;
     type Rest = (Off, T1);
 
@@ -92,7 +92,7 @@ impl<T0, T1> Take<Ix0> for (T0, T1) {
 }
 
 // Generics: `T0` slot 0, `T1` slot 1.
-impl<T0, T1> Take<Ix1> for (T0, T1) {
+impl<T0, T1> Take<Ix<1>> for (T0, T1) {
     type Out = T1;
     type Rest = (T0, Off);
 
@@ -102,7 +102,7 @@ impl<T0, T1> Take<Ix1> for (T0, T1) {
     }
 }
 
-impl<T0, T1, T2> Take<Ix0> for (T0, T1, T2) {
+impl<T0, T1, T2> Take<Ix<0>> for (T0, T1, T2) {
     type Out = T0;
     type Rest = (Off, T1, T2);
 
@@ -113,7 +113,7 @@ impl<T0, T1, T2> Take<Ix0> for (T0, T1, T2) {
 }
 
 // Generics: `T0` slot 0, `T1` slot 1, `T2` slot 2.
-impl<T0, T1, T2> Take<Ix1> for (T0, T1, T2) {
+impl<T0, T1, T2> Take<Ix<1>> for (T0, T1, T2) {
     type Out = T1;
     type Rest = (T0, Off, T2);
 
@@ -123,7 +123,7 @@ impl<T0, T1, T2> Take<Ix1> for (T0, T1, T2) {
     }
 }
 
-impl<T0, T1, T2> Take<Ix2> for (T0, T1, T2) {
+impl<T0, T1, T2> Take<Ix<2>> for (T0, T1, T2) {
     type Out = T2;
     type Rest = (T0, T1, Off);
 
@@ -134,7 +134,7 @@ impl<T0, T1, T2> Take<Ix2> for (T0, T1, T2) {
 }
 
 // Generics: `T0` slot 0, `T1` slot 1, `T2` slot 2, `T3` slot 3.
-impl<T0, T1, T2, T3> Take<Ix0> for (T0, T1, T2, T3) {
+impl<T0, T1, T2, T3> Take<Ix<0>> for (T0, T1, T2, T3) {
     type Out = T0;
     type Rest = (Off, T1, T2, T3);
 
@@ -144,7 +144,7 @@ impl<T0, T1, T2, T3> Take<Ix0> for (T0, T1, T2, T3) {
     }
 }
 
-impl<T0, T1, T2, T3> Take<Ix1> for (T0, T1, T2, T3) {
+impl<T0, T1, T2, T3> Take<Ix<1>> for (T0, T1, T2, T3) {
     type Out = T1;
     type Rest = (T0, Off, T2, T3);
 
@@ -155,7 +155,7 @@ impl<T0, T1, T2, T3> Take<Ix1> for (T0, T1, T2, T3) {
 }
 
 // Generics: `T0` slot 0, `T1` slot 1, `T2` slot 2, `T3` slot 3.
-impl<T0, T1, T2, T3> Take<Ix2> for (T0, T1, T2, T3) {
+impl<T0, T1, T2, T3> Take<Ix<2>> for (T0, T1, T2, T3) {
     type Out = T2;
     type Rest = (T0, T1, Off, T3);
 
@@ -165,7 +165,7 @@ impl<T0, T1, T2, T3> Take<Ix2> for (T0, T1, T2, T3) {
     }
 }
 
-impl<T0, T1, T2, T3> Take<Ix3> for (T0, T1, T2, T3) {
+impl<T0, T1, T2, T3> Take<Ix<3>> for (T0, T1, T2, T3) {
     type Out = T3;
     type Rest = (T0, T1, T2, Off);
 

@@ -1,9 +1,9 @@
 # ph_beans
 
-A bean pipeline records resource claims (`.inject_resources`), init, maps/filters/emit, and `.build()`. [`Descriptor`](src/lib.rs) carries a single status for that chain. [`Setup::setup`](src/query/setup.rs) returns a tick only when the status is ready. Design: [`docs/sdd/design.md`](docs/sdd/design.md).
+A bean pipeline records resource claims (`.inject_resources`), init, maps/filters/emit, and `.build()`. [`Descriptor`](src/lib.rs) carries a single status for that chain. [`Setup::setup`](src/query/setup.rs) returns a tick only when the status is ready. Design: [`docs/sdd/design.md`](docs/sdd/design.md). Error codes: [`docs/errors.md`](docs/errors.md).
 
 ```rust
-use ph_beans::{At, BeanInfo, Ix0, Ix1, Marker, Query, Setup, Tick};
+use ph_beans::{At, BeanInfo, Ix, Marker, Query, Setup, Tick};
 
 struct Id(u8);
 struct Keys(u8);
@@ -31,11 +31,11 @@ impl BeanInfo for App {
 }
 
 impl At<Id> for App {
-    type Ix = Ix0;
+    type Ix = Ix<0>;
 }
 
 impl At<Keys> for App {
-    type Ix = Ix1;
+    type Ix = Ix<1>;
 }
 
 fn boot(args: (&Id, &mut Keys)) -> u8 {
