@@ -134,4 +134,9 @@ An empty hole-edge slice expands to no tokens.
 
 ## License
 
-Licensed under the [GNU GPL v3 or later](../../../LICENSE) (`GPL-3.0-or-later`).
+Dual-licensed under either of the following:
+
+- the [GNU General Public License, version 3 only](../../../LICENSE) (`GPL-3.0-only`);
+- a commercial license from the copyright holder, Fjodor Vershinin ([v-physarum](https://github.com/v-physarum)). [LICENSE-COMMERCIAL.md](../../../LICENSE-COMMERCIAL.md) is a notice that this license is available. The repository has no contact address yet. That notice contains a placeholder the owner fills in.
+
+The SPDX license expression is `GPL-3.0-only OR LicenseRef-Commercial`.
