@@ -6,6 +6,7 @@
 use super::{Ix0, Ix1, Ix2, Ix3, Off};
 
 /// Pulls slot `I` out of a fixed-width tuple.
+/// Generics: `I` index.
 #[doc(hidden)]
 pub trait Take<I> {
     /// The value that occupied slot `I`.
@@ -20,12 +21,12 @@ pub trait Take<I> {
 
 /// Pulls every index in `I` out of a tuple.
 ///
-/// `Out` is the projected argument list, in index order.
+/// Generics: `I` index list, `O` projected args in index order.
 #[doc(hidden)]
-pub trait TakeMany<I, Out> {
-    /// Projects `Out` from `self`.
+pub trait TakeMany<I, O> {
+    /// Projects `O` from `self`.
     #[must_use]
-    fn take_many(self) -> Out;
+    fn take_many(self) -> O;
 }
 
 impl<T> TakeMany<(), ()> for T {
@@ -42,6 +43,7 @@ where
     }
 }
 
+// Generics: `T` tuple, `I0` index 0, `I1` index 1, `O0` out 0, `O1` out 1.
 impl<T, I0, I1, O0, O1> TakeMany<(I0, I1), (O0, O1)> for T
 where
     T: Take<I0, Out = O0>,
@@ -68,6 +70,7 @@ where
     }
 }
 
+// Generics: `T0` slot 0.
 impl<T0> Take<Ix0> for (T0,) {
     type Out = T0;
     type Rest = (Off,);
@@ -88,6 +91,7 @@ impl<T0, T1> Take<Ix0> for (T0, T1) {
     }
 }
 
+// Generics: `T0` slot 0, `T1` slot 1.
 impl<T0, T1> Take<Ix1> for (T0, T1) {
     type Out = T1;
     type Rest = (T0, Off);
@@ -108,6 +112,7 @@ impl<T0, T1, T2> Take<Ix0> for (T0, T1, T2) {
     }
 }
 
+// Generics: `T0` slot 0, `T1` slot 1, `T2` slot 2.
 impl<T0, T1, T2> Take<Ix1> for (T0, T1, T2) {
     type Out = T1;
     type Rest = (T0, Off, T2);
@@ -128,6 +133,7 @@ impl<T0, T1, T2> Take<Ix2> for (T0, T1, T2) {
     }
 }
 
+// Generics: `T0` slot 0, `T1` slot 1, `T2` slot 2, `T3` slot 3.
 impl<T0, T1, T2, T3> Take<Ix0> for (T0, T1, T2, T3) {
     type Out = T0;
     type Rest = (Off, T1, T2, T3);
@@ -148,6 +154,7 @@ impl<T0, T1, T2, T3> Take<Ix1> for (T0, T1, T2, T3) {
     }
 }
 
+// Generics: `T0` slot 0, `T1` slot 1, `T2` slot 2, `T3` slot 3.
 impl<T0, T1, T2, T3> Take<Ix2> for (T0, T1, T2, T3) {
     type Out = T2;
     type Rest = (T0, T1, Off, T3);

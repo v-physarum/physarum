@@ -7,6 +7,7 @@ pub struct Yes;
 pub struct No;
 
 /// Combines two wait flags (`A | B`). Policy on the left flag — not a 2×2 table.
+/// Generics: `R` right flag.
 #[doc(hidden)]
 pub trait OrWith<R> {
     /// `Yes` if either side waited.

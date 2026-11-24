@@ -4,6 +4,7 @@ use core::marker::PhantomData;
 use core::ops::Index;
 
 /// `A & B`.
+/// Generics: `A` left child, `B` right child.
 pub struct And<A, B>(PhantomData<(A, B)>);
 
 impl<A, B> Copy for And<A, B> {}
@@ -20,6 +21,7 @@ impl<A, B> Default for And<A, B> {
     }
 }
 
+// Generics: `A` left / child, `B` right.
 impl<A, B> And<A, B> {
     /// Builds `A & B`.
     #[must_use]
@@ -29,6 +31,7 @@ impl<A, B> And<A, B> {
 }
 
 /// `A | B`.
+/// Generics: `A` left child, `B` right child.
 pub struct Or<A, B>(PhantomData<(A, B)>);
 
 impl<A, B> Copy for Or<A, B> {}
@@ -45,6 +48,7 @@ impl<A, B> Default for Or<A, B> {
     }
 }
 
+// Generics: `A` left / child, `B` right.
 impl<A, B> Or<A, B> {
     /// Builds `A | B`.
     #[must_use]
@@ -54,6 +58,7 @@ impl<A, B> Or<A, B> {
 }
 
 /// `!A`.
+/// Generics: `A` child.
 pub struct Not<A>(PhantomData<A>);
 
 impl<A> Copy for Not<A> {}
@@ -70,6 +75,7 @@ impl<A> Default for Not<A> {
     }
 }
 
+// Generics: `A` left / child.
 impl<A> Not<A> {
     /// Builds `!A`.
     #[must_use]
@@ -79,6 +85,7 @@ impl<A> Not<A> {
 }
 
 /// `E::ON[I]`.
+/// Generics: `E` event, `I` inner path.
 pub struct On<E, I>(PhantomData<(E, I)>);
 
 impl<E, I> Copy for On<E, I> {}
@@ -95,6 +102,7 @@ impl<E, I> Default for On<E, I> {
     }
 }
 
+// Generics: `E` event, `I` inner.
 impl<E, I> On<E, I> {
     /// Builds one event node.
     #[must_use]

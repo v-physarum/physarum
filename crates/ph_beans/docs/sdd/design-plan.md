@@ -10,7 +10,7 @@ This file tracks **what is done**, **what is still open**, and **coding MUST/FOR
 
 | Topic | `design.md` |
 | --- | --- |
-| Rules 1–19 (… pure systems; no silent API shape changes) | Crate module structure |
+| Rules 1–23 (**R23** wins: never duplicate a walk, accessor, or operator list; R8 strategy; R21 newtype; R22 const on type; R20 ClaimDesc) | Crate module structure |
 | DI / inject `&dyn`: thin `Dyn` + marker `DynView`; `Get`/`Mut` frozen (R19) | Modules (DI) → Inject `&dyn`; Accessors; rule 19 |
 | Proxy (`type = proxy`, `proxy = P::T`; no bare proxy inject; wrap on target inject) | Modules (DI) → Proxy |
 | `.inject_resources`, OpDesc L1/L2 | OpDesc; Accessors |
@@ -19,29 +19,34 @@ This file tracks **what is done**, **what is still open**, and **coding MUST/FOR
 | `E` inverted spine | Events → Operator `E` |
 | Filter AST + `FilterDesc` | Events → Filters; Filter effect descriptor |
 | Emit, Parents, runtime select | Events → Emit; Runtime selection |
-| Public runtime | Setup → `Tick::update` only (no `boot`) |
+| Direct (child only) vs deferred (next-tick buffer) | Events → Dispatch: direct and deferred |
+| Public runtime | Outside: `Tick::emit` (direct) and `Tick::defer` (next tick). Inside: direct child or defer |
 
 ---
 
 ## Coding MUST / FORBIDDEN
 
-Aligned with `design.md` rules. Prefer these IDs in review notes.
+Aligned with `design.md` rules. Prefer these IDs in review notes. **R23 outranks every row below.**
 
 | ID | MUST | FORBIDDEN |
 | --- | --- | --- |
 | **R5** Step return | Inherent builder method + **named step trait** with `type Out`. Signature returns `<Self as Step<…>>::Out`. | Inherent `-> Init<E, C::With<…>>` / `Ctx<…>` / `Pipe<…>` tip spelled inline. |
 | **R6** Macros | Explicit impls / trait recursion. | `macro_rules!` / proc-macros / `impl_foreach` without owner OK. |
-| **R8** No matrices | Collapse whenever possible (flag policy, `FilterOperand`, `ClaimMark`). | Product tables; new Get×Mut×slot; keeping a matrix “for clarity” when a thinner shape works. |
-| **R9** Context tip | One GAT: `Context::With<Cfg>` + `CtxConfig` (+ `ApplyPatch`). **`impl<C, …> CtxConfig<C>`** + seal. Type params on the config **only for a carried value**; bean-derived steps use a **unit** config (`SetDefault`, `SetProviders`) — seal reads `Bean` from `Ctx`. With the bound present, **`T::Assoc`**. Defaults: **`Default::default()`**. | `WithArgs`/`WithStatus`/`WithTick`; `CtxConfig<Ctx<B,A,S,T>>`; `SetDefault<D>` / step spelling `Bean::State`; `T::default()` / `<B as BeanInfo>::State::default()` when the type is inferred; stacked lenses; needless UFCS. |
-| **R10** Generics | **One letter** from the role (`B`,`A`,`S`,`T`,`E`,`H`,`F`,`N`,`O`,…), or **letter + digit** (`E0`). | Multi-letter params (`Bean`, `Args`, `Status`, `PrevE`, `New`, …); alphabet arity runs `A,B,C,…`. |
-| **R11–12** Lists | Shared `List` / `Leaf` / `Grow`; leaf ≤ **8**; opaque `E0…`; 9 → `(List, Grow)`; 16 → **4** `List`s. | Flat 9…16 megaimpls; `MapNode` / `room_*`; tuples of domain structs in arity heads (`MapEntry<…>, …`); bare `(E0,E1)` push that overlaps `(List, Grow)`. |
+| **R8** Strategy + no matrices | **Trait = strategy**, **structs = variants**, GAT `Args` when inputs differ; **one** blanket on fan-out carriers (`PathNode<S>`, flags, …). Sibling fan-out methods (`walk` / `walk_mask` / `walk_exact`) are one `walk<S: Strategy>`. A root bound such as `ExactDrive` sits on that method's `where`. | Parallel traits per mode (`PathWalk`+`RunDense`); Sparse×Dense×arity copies; the same forwarding body copied once per mode on every tuple; product tables; matrix “for clarity”; the same bound on the leaf `impl` header (solver overflow). |
+| **R9** Context tip | One GAT: `Context::With<Cfg>` + `CtxConfig` (+ `ApplyPatch`). **`impl<C, …> CtxConfig<C>`** + seal. Type params on the config **only for a carried value**; bean-derived steps use a **unit** config (`SetDefault`, `SetProviders`) — seal reads `Bean` from `Ctx`. With the bound present, **`T::Assoc`**. Defaults: **`Default::default()`**. | Hand-built `type Out = Ctx<B,A,NeedBuild, T::WithInit<<B::Proxy as ForwardInit<…>>::Out>>` (or any spelled tip); `WithArgs`/`WithStatus`/`WithTick`/`WithInit` GATs; `CtxConfig<Ctx<B,A,S,T>>`; `SetDefault<D>` / step spelling `Bean::State`; stacked lenses; needless UFCS. |
+| **R10** Generics | **One letter** from the role (`B`,`A`,`S`,`T`,`E`,`H`,`F`,`N`,`O`,`P`,…), or **letter + digit** (`E0`); **comment** on the item maps each letter to its role. | Multi-letter params (`Bean`, `Step`, `Strat`, …); alphabet arity runs; silent one-letter params with no role comment. |
+| **R7 / R11–12** Lists | Shared `List` / `Leaf` / `Grow`; **flat** leaf ≤ **8**; opaque `E0…`; 9 → `(List, Grow)`; 16 → **4** `List`s. | Cons spines `(Get<I0>, (Get<I1>, (…, ())))` / `MapNode` / `Cons` (solver re-proves); `room_*`; flat 9…16 megaimpls; domain structs in arity heads; bare `(E0,E1)` push ≡ `(List, Grow)`. |
 | **R13** Push | One `context/push.rs`; Args/`TakeMany` shape — one `PushShape` blanket + sealed `AddItem` (Cap6). | Split `push/{leaf,group,wide,add}.rs`; unsealed `AddItem` on 7-tuples; `MapEntry` (or other domain) in push arity heads. |
 | **R14** Meta | `BeanInfo` / `EventInfo` / `ProxyInfo` data-only; `Query` + `StartDesc` for entry tip. | Methods / new assoc types on meta traits without owner OK; spelling `Ctx`/`Pipe`/`MapList` on `query` / `BeanInfo`. |
 | **R15** Phantom | One phantom per struct; named field is always **`_markers`**. | Several phantoms; named phantom as `event` / `_filter` / `_path` / … |
 | **R16** Safety | `#![forbid(unsafe_code)]`; no owned `Box<dyn>`; inject cast → `&dyn` args (may inline). | `unsafe`; `Box<dyn>` in `State`; `dyn` / `as Trait` in **provides**. |
-| **R17** Trait bounds | Shared predicates on the **trait head** (`Update`/`Tick`/`Setup`: `BeanInfo` + `Injects: ArgsView`). `Update` only for `Built`. | Same bounds re-copied on every `fn`; stub `Update for Init`; dropping `injects` from `update` because the body ignores them. |
+| **R17** Trait bounds | Shared predicates on the **trait head** (`Update`/`Tick`/`Setup`: `BeanInfo` + `Injects: ArgsView`). `Update` only for `Built`. | Same bounds re-copied on every `fn`; stub `Update for Init`; dropping `injects` from `emit` because the body ignores them. |
 | **R18** Pure systems | Systems touch **only** args (+ init return). Bound `Fn`. Call site = **function item**. Under the hood = **pure `fn` / function item** (build speed + future SIMD store). | Capturing closures; `FnMut` / env mutation; storing systems as closure objects “for convenience”. |
 | **R19** Frozen shapes | Leave landed public/crate API types as-is; extend with **new** types beside them. Prior **owner OK** before any field/generic/signature change. | Quiet reshape of `Get`/`Mut`/`Marker`/meta/list carriers; “small” extra type params without OK. |
+| **R20** Claim wrappers | Pure forward carriers (`Live`/`Idle`/…) implement **`ClaimDesc`**; one `ClaimShape`/`Claim` blanket. | Per-wrapper `impl ClaimShape for Live/Idle/…`; copy-paste forwards. |
+| **R21** Domain values | Named **struct** + inherent methods (`EmitMask::or` / `contains`). | Raw `u128`/`u32` as the domain value; `type Alias = u128`. |
+| **R22** Consts | Associated const on the owning type (`EmitMask::BITS`). | Free `EMIT_BITS` beside the type. |
+| **R23** No copies | **One** descriptor names an operator set (`ClaimForm`, `ClaimDesc`, `CarrierDesc`, `FilterDesc`). The next trait is **one blanket**. Event state is `Get<State<Ev>>` / `Mut<State<Ev>>`, forwarded to `Get`/`Mut` of `EventBuf`. This row wins over the others. | A second copy of `()` / `Get` / `Mut` / `Dyn` / `And` on the next trait; a `StateGet` / `StateMut` accessor; any new accessor that only repeats an existing one. |
 
 Also always: Borrowing (`At`/`Ix*`/`TakeMany`); no API `type` aliases; no god modules; one-crate PRs (`ph_beans`); push only when asked.
 
@@ -60,7 +65,7 @@ cargo test -p ph_beans
 | Item | Status | Evidence / gap |
 | --- | --- | --- |
 | Descriptor / `PipelineOk` / linear `Ctx` | **Done** | `descriptor/`, `context/mod.rs` |
-| `Setup` / `Tick::update` / no `boot` | **Done** | `query/setup.rs`; `Update` only on `Built` |
+| `Setup` / `Tick::emit(event, injects)` / no `boot` | **Done** | `query/setup.rs`; `Update` only on `Built` |
 | **R17** trait-head bounds | **Done** | `Update`/`Tick`/`Setup` carry `BeanInfo` + `Injects: ArgsView`; no `Update for Init` |
 | `init_state` / `init_state_default` | **Done** | `SetInit<H>` / unit `SetDefault` + `SealDefault` (Bean::State in seal) |
 | **R9** unit configs (no fake `D`) | **Done** | `SetDefault`, `SetProviders` are unit; step = `ApplyPatch<SetDefault>` |
@@ -69,6 +74,9 @@ cargo test -p ph_beans
 | Accessors + wait / replace | **Done** | `descriptor/live.rs`, filters |
 | `FilterDesc` + one `ApplyFilter` | **Done** | `filter/apply.rs` |
 | Filter AST + `E` + emit / schedule | **Done** | `filter/`, `query/emit.rs`, `query/schedule.rs` |
+| Direct child emit + deferred `EmitMask` buffer | **Partial** | `Tick::defer` + drain in `Tick::emit`; `Direct` / `.map_at` / `ErrNotChild`. In-system defer shares the cell. No per-bit const drain |
+| Emit **bitmask** + build-time `NEED`/`MASK` | **Done** | `EmitMask` newtype (`BITS=128`, `from_bit`/`or`/`contains`); `Collect::MASK` / `MatchEmit::NEED`; Drive via `contains` |
+| Path **Gate** + `PathStrategy` (R8: Sparse/Dense structs, GAT `Args`, `PathNode<S>` blankets) | **Partial** | `filter/path.rs`; flat `Drive` unchanged; Query builder still flat — wire gates into Drive later |
 | **R9** `CtxConfig` / `Context::With` / `ApplyPatch` | **Partial** | Seals + unit/`payload` configs; keep sweeping leftover needless UFCS / any remaining `CtxConfig<Ctx<…>>` |
 | **R5** step trait + `Out` on inherent methods | **Done** | `InjectResourcesStep`, `FilterStep`, `MapStep`, `InitStateStep`, `EmitStep`, `BuildStep`, … |
 | **R11–13** shared list + push table | **Done** | `context/list.rs` (`List`/`Leaf`/`Grow`); one `context/push.rs` (`AddItem` + `PushShape`); no `push/` submods |
@@ -78,6 +86,8 @@ cargo test -p ph_beans
 | Inject `&dyn` (`as Trait`; claim `Bean::T`; only ArgsView is `&dyn`) | **Open** | No `as_dyn` on Get/Mut; marker-only `DynView`; `ph_test_asm` |
 | **Proxy** (`type = proxy`, wrap on target inject) | **Open** | Design under Modules → Proxy; `ProxyInfo` meta TBD; no code yet |
 | **R19** no silent structure changes | **Done** | Rule fixed; `Get`/`Mut`/`Marker` called out under Accessors |
+| **R20** `ClaimDesc` blankets | **Done** | `Live`/`Idle` → `ClaimDesc`; `Get<State<Ev>>`/`Mut<State<Ev>>` → `Get`/`Mut` of `EventBuf`; `ClaimShape`/`Claim` blankets in `query/args.rs` |
+| **R23** no duplicate walks | **Done** | `ClaimForm` + one `StateGate` blanket; state claim reuses `Get`/`Mut` |
 | Map cap 16 | **Done** | `MAX_MAP_SYSTEMS`; push refuses 17th |
 | No macros in crate src | **Done** | No `macro_rules!` under `ph_beans/src` |
 | **R8** filter ops / flags | **Done** | `FilterOperand` RHS; per-LHS orphan residual; `OrWith` / `WaitFlag`; `ops_node` removed |
@@ -99,7 +109,7 @@ Do in this order. Each item is a small PR on `ph_beans` only.
 2. **R10 generics sweep** — rename every multi-letter type param to one letter or letter+digit (`B`,`A`,`S`,`T`,`E0`,…); include `context/`, `query/`, `filter/`, `bean/`, docs examples that still show `Bean`/`PrevE`.
 3. **R8 DI** — keep `ClaimMark`; replace `OfProvide0`/`1` when a non-overlapping membership encoding exists (E0119 residual today).
 4. **OpDesc L1** — ensure `.inject_resources` refuses duplicates / `T`+`Mut` on that line; add/strengthen tests.
-5. **FilterDesc follow-ups (optional)** — align `Claim` / `ArgsView` / `OpLeaf` if still duplicated walks.
+5. **FilterDesc follow-ups (optional)** — `ArgsView`+`OpLeaf` merged into `ClaimShape` (+ `Claim<B>` indexes); rlib incr unchanged in local measure — revisit if a heavier claim probe shows solver cost.
 6. **Keep green** — fmt, clippy `-D warnings`, `cargo test -p ph_beans`.
 
 ---
@@ -115,7 +125,7 @@ Do in this order. Each item is a small PR on `ph_beans` only.
 
 - Proc-macro derive: **only** `BeanInfo` + `At` / `EventInfo` / `ProxyInfo` (+ dyn/`proxy` links) — see design Derive + Proxy (**owner OK required** — R6). Not `Query` / `Setup` / `Module` / …
 - Root `physarum` package rewrite
-- Full production scheduler beyond emit-mask rules
+- Derive for `EmitBit` (owner OK — R6); auto bit allocation / clash check
 
 ---
 

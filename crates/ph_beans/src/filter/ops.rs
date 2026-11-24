@@ -10,23 +10,36 @@ use core::ops::BitAnd;
 use core::ops::BitOr;
 use core::ops::Not as OpsNot;
 
+use super::shape::{Here, NodeForm, PairBody, Read, Skip, Yes};
 use super::{And, Not, On, Or};
 use crate::descriptor::{Get, Mut};
 
 /// A node that can sit on the right of `&` or `|`, or under `!`.
 pub trait FilterOperand: Sized {}
 
-impl<T> FilterOperand for Get<T> {}
+/// [`NodeForm::Body`](crate::filter::shape::NodeForm::Body) that may sit on the right of `&` / `|`.
+trait AsOperand {}
 
-impl<T> FilterOperand for Mut<T> {}
+impl AsOperand for Read {}
 
-impl<A, B> FilterOperand for And<A, B> {}
+impl AsOperand for Yes {}
 
-impl<A, B> FilterOperand for Or<A, B> {}
+// Generics: `A` left child, `B` right child, `K` join kind.
+impl<A, B, K> AsOperand for PairBody<A, B, K> {}
 
-impl<A> FilterOperand for Not<A> {}
+// Generics: `A` child.
+impl<A> AsOperand for Skip<A> {}
 
-impl<E, I> FilterOperand for On<E, I> {}
+// Generics: `E` event, `I` inner path.
+impl<E, I> AsOperand for Here<E, I> {}
+
+// Generics: `T` operator ([`NodeForm`](crate::filter::shape::NodeForm)).
+impl<T> FilterOperand for T
+where
+    T: NodeForm,
+    T::Body: AsOperand,
+{
+}
 
 impl<T, R> BitAnd<R> for Get<T>
 where
@@ -39,6 +52,7 @@ where
     }
 }
 
+// Generics: `T` claimed type, `R` RHS operand.
 impl<T, R> BitOr<R> for Get<T>
 where
     R: FilterOperand,
@@ -58,6 +72,7 @@ impl<T> OpsNot for Get<T> {
     }
 }
 
+// Generics: `T` claimed type, `R` RHS operand.
 impl<T, R> BitAnd<R> for Mut<T>
 where
     R: FilterOperand,
@@ -80,6 +95,7 @@ where
     }
 }
 
+// Generics: `T` claimed type.
 impl<T> OpsNot for Mut<T> {
     type Output = Not<Self>;
 
@@ -99,6 +115,7 @@ where
     }
 }
 
+// Generics: `A` left child, `B` right child, `R` RHS operand.
 impl<A, B, R> BitOr<R> for And<A, B>
 where
     R: FilterOperand,
@@ -118,6 +135,7 @@ impl<A, B> OpsNot for And<A, B> {
     }
 }
 
+// Generics: `A` left child, `B` right child, `R` RHS operand.
 impl<A, B, R> BitAnd<R> for Or<A, B>
 where
     R: FilterOperand,
@@ -140,6 +158,7 @@ where
     }
 }
 
+// Generics: `A` left child, `B` right child.
 impl<A, B> OpsNot for Or<A, B> {
     type Output = Not<Self>;
 
@@ -159,6 +178,7 @@ where
     }
 }
 
+// Generics: `A` left child, `R` RHS operand.
 impl<A, R> BitOr<R> for Not<A>
 where
     R: FilterOperand,
@@ -178,6 +198,7 @@ impl<A> OpsNot for Not<A> {
     }
 }
 
+// Generics: `E` event, `I` inner, `R` RHS operand.
 impl<E, I, R> BitAnd<R> for On<E, I>
 where
     R: FilterOperand,
@@ -200,6 +221,7 @@ where
     }
 }
 
+// Generics: `E` event, `I` inner.
 impl<E, I> OpsNot for On<E, I> {
     type Output = Not<Self>;
 

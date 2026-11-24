@@ -3,31 +3,37 @@
 use crate::bean::BeanInfo;
 use crate::descriptor::Descriptor;
 use crate::descriptor::PipelineOk;
-use crate::query::args::ArgsView;
+use crate::filter::eval::Collect;
+use crate::query::args::ClaimShape;
 use crate::query::update::Update;
 
-/// A finished pipeline for bean `M`.
+/// Finished pipeline for module `M`. Needs [`PipelineOk`] status and [`Update`].
 ///
-/// Implemented for every descriptor whose [`Descriptor::Status`] is
-/// [`PipelineOk`](crate::PipelineOk) and that can [`Tick::update`]. A missing
-/// `.build()` leaves [`NeedBuild`](crate::NeedBuild), so `impl Tick` fails
-/// on `setup`.
+/// Generics: `M` module ([`BeanInfo`]).
 pub trait Tick<M: BeanInfo>: Descriptor + Update<M>
 where
-    M::Injects: ArgsView,
+    M::Injects: ClaimShape,
 {
-    /// Runs this module on its inject references.
-    ///
-    /// Init already ran in the builder. This call does not initialize state.
-    fn update(&mut self, injects: <M::Injects as ArgsView>::View<'_>) {
-        Update::update(self, injects);
+    /// Runs maps for emit tree `N`. Init already ran in the builder.
+    fn emit<N: Collect + crate::ScopeHost>(
+        &mut self,
+        event: N,
+        injects: <M::Injects as ClaimShape>::View<'_>,
+    ) {
+        Update::emit(self, event, injects);
+    }
+
+    /// Stores `N` on its scope. The next enter of that scope runs it.
+    fn defer<N: Collect + crate::filter::NestOk + crate::ScopeHost>(&mut self, event: N) {
+        Update::defer(self, event);
     }
 }
 
+// Generics: `M` mask / match, `T` tick / type / tip.
 impl<M, T> Tick<M> for T
 where
     M: BeanInfo,
-    M::Injects: ArgsView,
+    M::Injects: ClaimShape,
     T: Descriptor + Update<M> + Sized,
     T::Status: PipelineOk<T>,
 {
@@ -36,34 +42,14 @@ where
 /// Builds the pipeline for a bean.
 pub trait Setup: BeanInfo + Sized
 where
-    Self::Injects: ArgsView,
+    Self::Injects: ClaimShape,
 {
-    /// Resources, init, then `.build()`.
-    ///
-    /// The return type is a [`Tick`] only when its status implements
-    /// [`PipelineOk`](crate::PipelineOk).
-    ///
+    /// Resources, init, then `.build()`. Needs [`PipelineOk`] for [`Tick`].
     /// ```compile_fail
     /// use ph_beans::{BeanInfo, Query, Setup, Tick};
-    ///
-    /// struct App;
-    ///
-    /// impl BeanInfo for App {
-    ///     type Provides = ();
-    ///     type Injects = ();
-    ///     type Beans = ();
-    ///     type State = u8;
-    /// }
-    ///
-    /// fn boot(_: ()) -> u8 {
-    ///     1
-    /// }
-    ///
-    /// impl Setup for App {
-    ///     fn setup(self) -> impl Tick<Self> {
-    ///         App::query().init_state(boot)
-    ///     }
-    /// }
+    /// struct App; impl BeanInfo for App { type Provides=(); type Injects=(); type Beans=(); type State=u8; }
+    /// fn boot(_: ()) -> u8 { 1 }
+    /// impl Setup for App { fn setup(self) -> impl Tick<Self> { App::query().init_state(boot) } }
     /// ```
     fn setup(self) -> impl Tick<Self>;
 }

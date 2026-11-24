@@ -5,10 +5,30 @@ use core::marker::PhantomData;
 use crate::filter::shape::{No, Yes};
 
 /// The claim `C` is live.
+/// Generics: `C` claim set.
 pub struct Live<C>(PhantomData<C>);
 
 /// A wait cleared the live claim. `C` is remembered for the init function.
 pub struct Idle<C>(PhantomData<C>);
+
+/// Wrapper whose claim shape / indexes are those of [`Inner`](ClaimDesc::Inner).
+///
+/// [`Live`] / [`Idle`] (and later similar carriers) implement this once;
+/// [`ClaimShape`](crate::ClaimShape) / [`Claim`](crate::Claim) blanket over it
+/// instead of per-wrapper walks.
+pub trait ClaimDesc {
+    /// Inner claim node (view + status + indexes).
+    type Inner: ?Sized;
+}
+
+// Generics: `C` claim.
+impl<C> ClaimDesc for Live<C> {
+    type Inner = C;
+}
+
+impl<C> ClaimDesc for Idle<C> {
+    type Inner = C;
+}
 
 /// Projects the live accessor set.
 pub trait AccSet {
@@ -20,6 +40,7 @@ impl<C> AccSet for Live<C> {
     type Set = C;
 }
 
+// Generics: `C` claim.
 impl<C> AccSet for Idle<C> {
     type Set = ();
 }
@@ -27,6 +48,7 @@ impl<C> AccSet for Idle<C> {
 /// Wait policy on [`Yes`] / [`No`]: what happens to a [`Live`] claim.
 ///
 /// Marker on the flag — not a Live×flag matrix.
+/// Generics: `C` claim set.
 #[doc(hidden)]
 pub trait WaitFlag<C> {
     /// Args after applying this wait to [`Live`]`<C>`.
@@ -44,6 +66,7 @@ impl<C> WaitFlag<C> for No {
 /// Applies a wait flag to the current args.
 ///
 /// One blanket for [`Live`] (via [`WaitFlag`]), one for [`Idle`] (always idle).
+/// Generics: `F` wait flag.
 #[doc(hidden)]
 pub trait Rewait<F> {
     /// Args after the filter.

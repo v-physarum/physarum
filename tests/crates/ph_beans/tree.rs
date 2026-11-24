@@ -1,4 +1,4 @@
-//! Query slice plus module injects and `Tick::update`.
+//! Query slice plus module injects and `Tick::emit`.
 //!
 //! A second `init_state` and a missing `.build()` are compile-fail doctests.
 //! `MUT` against an immutable provide is a compile-fail doctest on [`FromParent`].
@@ -140,7 +140,7 @@ fn default_state_is_ready_before_update() {
 fn a_module_updates_with_only_its_inject() {
     let mut tick = Render.setup();
     let mut logic = Logic(4);
-    tick.update(&mut logic);
+    tick.emit((), &mut logic);
     assert_eq!(logic.0, 4);
 }
 

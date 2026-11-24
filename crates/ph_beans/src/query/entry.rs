@@ -13,6 +13,7 @@ pub trait Query: Sized {
     fn query() -> Self::Out;
 }
 
+// Generics: `B` right / bean.
 impl<B> Query for B
 where
     B: StartDesc,

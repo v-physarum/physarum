@@ -27,35 +27,14 @@ pub struct Ix2;
 #[doc(hidden)]
 pub struct Ix3;
 
-/// `Self` provides `P` at [`At::Ix`].
-///
-/// The index is a slot type ([`Ix0`] through [`Ix3`]), not a number.
-///
-/// A resource claim that the bean does not provide fails here:
-///
+/// `Self` provides `P` at [`At::Ix`] ([`Ix0`]…[`Ix3`], not a number).
 /// ```compile_fail
 /// use ph_beans::{BeanInfo, Marker, Query};
-///
-/// struct Id;
-///
-/// impl BeanInfo for Id {
-///     type Provides = ();
-///     type Injects = ();
-///     type Beans = ();
-///     type State = ();
-/// }
-///
-/// struct App;
-///
-/// impl BeanInfo for App {
-///     type Provides = (Id,);
-///     type Injects = ();
-///     type Beans = (Id,);
-///     type State = ();
-/// }
-///
-/// let _claim = App::query().inject_resources(Id::T);
+/// struct Id; impl BeanInfo for Id { type Provides=(); type Injects=(); type Beans=(); type State=(); }
+/// struct App; impl BeanInfo for App { type Provides=(Id,); type Injects=(); type Beans=(Id,); type State=(); }
+/// let _ = App::query().inject_resources(Id::T);
 /// ```
+/// Generics: `P` provided bean.
 #[diagnostic::on_unimplemented(message = "`{Self}` does not provide `{P}`")]
 pub trait At<P> {
     /// Slot of `P` in `Self`'s provide list.

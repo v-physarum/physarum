@@ -22,6 +22,7 @@ pub trait StartDesc: Sized {
     fn start_ctx() -> Self::Ctx;
 }
 
+// Generics: `B` right / bean.
 #[allow(clippy::type_complexity)]
 impl<B> StartDesc for B
 where

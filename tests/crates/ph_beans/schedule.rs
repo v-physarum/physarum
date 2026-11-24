@@ -5,7 +5,10 @@
 
 use core::cell::Cell;
 
-use ph_beans::{At, BeanInfo, Ctx, EventInfo, Init, Ix0, Marker, Pipe, Query, Tick};
+use ph_beans::{
+    At, BeanInfo, Ctx, Dense, Direct, DirectFn, EmitBit, EventInfo, ExactDrive, Gate, Init, Ix0,
+    List, MapEntry, Marker, On, Pipe, Query, Sparse, Tick,
+};
 
 thread_local! {
     static HITS: Cell<u8> = const { Cell::new(0) };
@@ -38,6 +41,10 @@ impl EventInfo for Update {
     type Parents = ();
 }
 
+impl EmitBit for Update {
+    const BIT: u32 = 0;
+}
+
 impl BeanInfo for Graphics {
     type Provides = ();
     type Injects = ();
@@ -49,6 +56,10 @@ impl EventInfo for Graphics {
     type Parents = Update;
 }
 
+impl EmitBit for Graphics {
+    const BIT: u32 = 1;
+}
+
 impl BeanInfo for Main {
     type Provides = ();
     type Injects = ();
@@ -58,6 +69,10 @@ impl BeanInfo for Main {
 
 impl EventInfo for Main {
     type Parents = Update;
+}
+
+impl EmitBit for Main {
+    const BIT: u32 = 2;
 }
 
 impl BeanInfo for Keys {
@@ -79,6 +94,14 @@ fn bump_graphics() {
 
 fn bump_main() {
     HITS.with(|hits| hits.set(hits.get() + 10));
+}
+
+struct EmitGraphics;
+
+impl DirectFn<Update> for EmitGraphics {
+    fn run<L: ExactDrive>(&self, go: &Direct<Update, L>) {
+        go.emit(Graphics::ON);
+    }
 }
 
 fn reset_hits() {
@@ -174,8 +197,11 @@ fn emitted_branch_runs_and_the_other_is_skipped() {
         .emit(Update::ON[Main::ON])
         .init_state(idle)
         .build();
-    Tick::<Sched>::update(&mut tick, ());
+    Tick::<Sched>::emit(&mut tick, Update::ON[Main::ON], ());
     assert_eq!(HITS.with(Cell::get), 10);
+    reset_hits();
+    Tick::<Sched>::emit(&mut tick, Update::ON[Graphics::ON], ());
+    assert_eq!(HITS.with(Cell::get), 1);
 }
 
 #[test]
@@ -193,7 +219,7 @@ fn nine_maps_run_across_two_groups() {
         .map(map_8)
         .init_state(idle)
         .build();
-    Tick::<Sched>::update(&mut tick, ());
+    Tick::<Sched>::emit(&mut tick, (), ());
     assert_eq!(step_value(), 9);
 }
 
@@ -219,8 +245,132 @@ fn sixteen_maps_fit_in_the_list() {
         .map(map_15)
         .init_state(idle)
         .build();
-    Tick::<Sched>::update(&mut tick, ());
+    Tick::<Sched>::emit(&mut tick, (), ());
     assert_eq!(step_value(), 16);
+}
+
+#[test]
+fn a_deferred_event_runs_on_the_next_emit() {
+    reset_hits();
+    let mut tick = Sched::query()
+        .filter(Update::ON[Graphics::ON])
+        .map(bump_graphics)
+        .filter(Update::ON[Main::ON])
+        .map(bump_main)
+        .init_state(idle)
+        .build();
+    Tick::<Sched>::defer(&mut tick, Update::ON[Main::ON]);
+    assert_eq!(HITS.with(Cell::get), 0);
+    Tick::<Sched>::emit(&mut tick, Graphics::ON, ());
+    assert_eq!(HITS.with(Cell::get), 0);
+    Tick::<Sched>::emit(&mut tick, Update::ON, ());
+    assert_eq!(HITS.with(Cell::get), 10);
+}
+
+#[test]
+fn deferring_one_event_twice_runs_it_once() {
+    reset_hits();
+    let mut tick = Sched::query()
+        .filter(Update::ON[Main::ON])
+        .map(bump_main)
+        .init_state(idle)
+        .build();
+    Tick::<Sched>::defer(&mut tick, Update::ON[Main::ON]);
+    Tick::<Sched>::defer(&mut tick, Update::ON[Main::ON]);
+    Tick::<Sched>::emit(&mut tick, Update::ON, ());
+    assert_eq!(HITS.with(Cell::get), 10);
+}
+
+#[test]
+fn a_direct_child_runs_only_that_block() {
+    reset_hits();
+    let mut tick = Sched::query()
+        .filter(Update::ON)
+        .map_at(EmitGraphics)
+        .filter(Update::ON[Graphics::ON])
+        .map(bump_graphics)
+        .filter(Update::ON[Main::ON])
+        .map(bump_main)
+        .init_state(idle)
+        .build();
+    Tick::<Sched>::emit(&mut tick, Update::ON, ());
+    assert_eq!(HITS.with(Cell::get), 1);
+}
+
+#[test]
+fn star_mut_claims_the_event_state_inside_its_scope() {
+    let _pipeline = Sched::query()
+        .filter(Update::ON)
+        .inject_resources(*Update::MUT);
+}
+
+#[test]
+fn a_high_emit_bit_still_selects_the_branch() {
+    struct Hi;
+    impl BeanInfo for Hi {
+        type Provides = ();
+        type Injects = ();
+        type Beans = ();
+        type State = ();
+    }
+    impl EventInfo for Hi {
+        type Parents = Update;
+    }
+    impl EmitBit for Hi {
+        const BIT: u32 = 100;
+    }
+    reset_hits();
+    let mut tick = Sched::query()
+        .filter(Update::ON[Hi::ON])
+        .map(bump_graphics)
+        .emit(Update::ON[Hi::ON])
+        .init_state(idle)
+        .build();
+    Tick::<Sched>::emit(&mut tick, Update::ON[Hi::ON], ());
+    assert_eq!(HITS.with(Cell::get), 1);
+}
+
+// Bases (examples): cold Update gate; dense Graphics expands; sparse Main needs its bit.
+#[test]
+fn path_gate_cold_root_skips_dense_and_sparse() {
+    reset_hits();
+    let tree = Gate::<Update, Sparse, _>::new(List::new((
+        Gate::<Graphics, Dense, _>::new(List::new((
+            MapEntry::<(), fn()>::new(bump_graphics),
+            MapEntry::<(), fn()>::new(bump_graphics),
+        ))),
+        Gate::<Main, Sparse, _>::new(MapEntry::<On<Main, ()>, fn()>::new(bump_main)),
+    )));
+    tree.path_plan::<()>();
+    assert_eq!(HITS.with(Cell::get), 0);
+}
+
+#[test]
+fn path_gate_dense_graphics_runs_all_leaves() {
+    reset_hits();
+    let tree = Gate::<Update, Sparse, _>::new(List::new((
+        Gate::<Graphics, Dense, _>::new(List::new((
+            MapEntry::<(), fn()>::new(bump_graphics),
+            MapEntry::<(), fn()>::new(bump_graphics),
+        ))),
+        Gate::<Main, Sparse, _>::new(MapEntry::<On<Main, ()>, fn()>::new(bump_main)),
+    )));
+    tree.path_plan::<On<Update, On<Graphics, ()>>>();
+    assert_eq!(HITS.with(Cell::get), 2);
+}
+
+#[test]
+fn path_gate_sparse_main_needs_its_bit() {
+    reset_hits();
+    let tree = Gate::<Update, Sparse, _>::new(List::new((
+        Gate::<Graphics, Dense, _>::new(List::new((
+            MapEntry::<(), fn()>::new(bump_graphics),
+            MapEntry::<(), fn()>::new(bump_graphics),
+        ))),
+        Gate::<Main, Sparse, _>::new(MapEntry::<On<Main, ()>, fn()>::new(bump_main)),
+    )));
+    tree.path_plan::<On<Update, On<Main, ()>>>();
+    assert_eq!(HITS.with(Cell::get), 10);
 }
 
 #[test]

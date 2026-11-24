@@ -3,94 +3,59 @@
 use core::marker::PhantomData;
 
 use crate::descriptor::Valid;
-use crate::descriptor::live::{Idle, Live};
-use crate::filter::And;
 
 /// Per-operator lens. Pipeline [`crate::Descriptor`] stays the tip status.
+///
+/// Implemented for [`Claim`](crate::Claim) in `query/args.rs` (`Status` = claim status).
 pub trait OpDesc {
     /// `Valid`, or a named claim error.
     type Status;
 }
 
-/// `Status` may pass the next gated step.
+/// `Status` may pass the next gated step (`.inject_resources`, init, build).
+#[diagnostic::on_unimplemented(
+    message = "operator invalid: Status=`{Self}`",
+    label = "fix OpDesc::Status",
+    note = "`ErrDuplicateResource<T>` — same bean claimed twice; \
+            `ErrConflictAccess<T>` — `T` and `Mut` on one bean"
+)]
 pub trait OpOk {}
 
 impl OpOk for Valid {}
 
-/// Shape of one claim list.
-///
-/// Duplicate and `T`+`Mut` statuses are named below. Stable Rust rejects a
-/// second impl that would pick them out of a generic pair, so a well-formed
-/// list stays [`Valid`] until that selection exists.
-pub trait OpShape: OpDesc {}
-
-impl<T> OpDesc for T
-where
-    T: OpLeaf,
-{
-    type Status = T::Leaf;
-}
-
-/// Leaf or combination status.
-#[doc(hidden)]
-pub trait OpLeaf {
-    /// Operator status of this node.
-    type Leaf;
-}
-
-impl OpLeaf for () {
-    type Leaf = Valid;
-}
-
-impl<T> OpLeaf for crate::descriptor::Get<T> {
-    type Leaf = Valid;
-}
-
-impl<T> OpLeaf for crate::descriptor::Mut<T> {
-    type Leaf = Valid;
-}
-
-impl<C, V: ?Sized> OpLeaf for crate::descriptor::Dyn<C, V>
-where
-    C: OpLeaf,
-{
-    type Leaf = C::Leaf;
-}
-
-impl<A, B> OpLeaf for And<A, B>
-where
-    A: OpLeaf<Leaf = Valid>,
-    B: OpLeaf<Leaf = Valid>,
-{
-    type Leaf = Valid;
-}
-
-impl<A, B> OpLeaf for (A, B)
-where
-    A: OpLeaf<Leaf = Valid>,
-    B: OpLeaf<Leaf = Valid>,
-{
-    type Leaf = Valid;
-}
-
-impl<C> OpLeaf for Live<C>
-where
-    C: OpLeaf,
-{
-    type Leaf = C::Leaf;
-}
-
-impl<C> OpLeaf for Idle<C>
-where
-    C: OpLeaf,
-{
-    type Leaf = C::Leaf;
-}
-
-impl<T: OpLeaf> OpShape for T {}
-
-/// The same bean was claimed twice.
+/// The same bean was claimed twice. Generics: `T` bean.
 pub struct ErrDuplicateResource<T>(PhantomData<T>);
 
-/// `T` and `Mut` were both claimed for one bean.
+/// Shared and exclusive claims on one bean. Generics: `T` bean.
 pub struct ErrConflictAccess<T>(PhantomData<T>);
+
+/// Left claim status combined with right. Generics: `R` right status.
+#[doc(hidden)]
+pub trait JoinStatus<R> {
+    /// Combined status (first error wins).
+    type Out;
+}
+
+impl JoinStatus<Valid> for Valid {
+    type Out = Valid;
+}
+
+// Generics: `T` bean on the right error.
+impl<T> JoinStatus<ErrDuplicateResource<T>> for Valid {
+    type Out = ErrDuplicateResource<T>;
+}
+
+// Generics: `T` bean on the right error.
+impl<T> JoinStatus<ErrConflictAccess<T>> for Valid {
+    type Out = ErrConflictAccess<T>;
+}
+
+// Generics: `T` bean on the left error.
+impl<T, R> JoinStatus<R> for ErrDuplicateResource<T> {
+    type Out = ErrDuplicateResource<T>;
+}
+
+// Generics: `T` bean on the left error.
+impl<T, R> JoinStatus<R> for ErrConflictAccess<T> {
+    type Out = ErrConflictAccess<T>;
+}

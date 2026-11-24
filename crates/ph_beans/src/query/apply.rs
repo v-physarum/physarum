@@ -6,6 +6,7 @@ use crate::query::init::Init;
 
 /// Applies a [`CtxConfig`](crate::context::CtxConfig) and rebuilds [`Init`](super::init::Init)
 /// with [`CtxConfig::ScopeOf`](crate::context::CtxConfig::ScopeOf).
+/// Generics: `G` config.
 #[doc(hidden)]
 pub trait ApplyPatch<G> {
     /// Pipeline tip after the config.

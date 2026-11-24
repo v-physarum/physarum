@@ -5,16 +5,23 @@ use core::marker::PhantomData;
 use crate::descriptor::Descriptor;
 use crate::descriptor::live::AccSet;
 
+pub(crate) mod direct;
+mod event_buf;
 pub(crate) mod list;
 pub mod maps;
 mod patch;
 mod push;
+pub(crate) mod scope;
 mod start;
 pub mod tick;
 
-pub use list::{Grow, Leaf, List};
-pub use maps::{MAX_MAP_SYSTEMS, MapList};
+pub use direct::{ChildOf, Direct, DirectFn, PushInner, WithChild};
+pub use event_buf::EventBuf;
+pub use list::{CarrierDesc, ExactDrive, Grow, Leaf, List};
+pub use maps::{MAX_MAP_SYSTEMS, MapEntry, MapList};
 pub use patch::CtxConfig;
+#[doc(hidden)]
+pub use scope::{ScopeBufs, ScopeHost};
 pub use start::StartDesc;
 pub use tick::{ContextTick, DefaultState, FreshInit, NoSystems, Pipe, WithDefault, WithInit};
 
@@ -22,6 +29,7 @@ pub use tick::{ContextTick, DefaultState, FreshInit, NoSystems, Pipe, WithDefaul
 ///
 /// Operators stay flat. A step replaces fields through one config and
 /// [`With`](Context::With) instead of nesting another operator inside the context.
+/// Generics: `B` bean, `A` args, `S` status, `T` tick.
 pub struct Ctx<B, A, S, T> {
     pub(crate) tick: T,
     _markers: PhantomData<(B, S, A)>,
@@ -63,6 +71,7 @@ pub trait Context: Descriptor + Sized {
     fn configure<G: CtxConfig<Self>>(self, cfg: G) -> Self::With<G>;
 }
 
+// Generics: `B` right / bean, `A` left / args, `S` status / state / strategy, `T` tick / type / tip.
 impl<B, A, S, T> Context for Ctx<B, A, S, T>
 where
     A: AccSet,

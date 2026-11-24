@@ -7,6 +7,7 @@ use super::Context;
 /// [`ScopeOf`](CtxConfig::ScopeOf) is the operator event path after the config
 /// (unchanged, or replaced for a filter). [`crate::query::init::ApplyPatch`]
 /// builds `Init<ScopeOf<E>, C::With<G>>`.
+/// Generics: `C` context.
 pub trait CtxConfig<C: Context> {
     /// Context after this config.
     type Out: Context;

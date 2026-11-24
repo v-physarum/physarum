@@ -18,6 +18,7 @@ use crate::query::apply::ApplyPatch;
 use crate::query::init::Init;
 
 /// Unions `T` into the emit parameter. Hides `EmitOf` + `UnionEmit` + `Reemit`.
+/// Generics: `T` emit tree.
 pub trait EmitUnion<T>: Sized {
     /// Tick after the union.
     type Out: ContextTick;
@@ -44,6 +45,7 @@ pub trait ProviderEvent {
     type Tree: NestOk;
 }
 
+// Generics: `B` bean.
 impl<B> ProviderEvent for B
 where
     B: BeanInfo<Provides: EventInfo>,
@@ -53,6 +55,7 @@ where
 }
 
 /// Unions an emit tree on a concrete [`Ctx`] (hides `B`/`A`/`S`/`T` from [`CtxConfig`]).
+/// Generics: `E` event tip.
 #[doc(hidden)]
 pub trait SealEmit<E>: Sized {
     /// Context after the seal.
@@ -74,6 +77,7 @@ where
 }
 
 /// Config: union `E` into the emit tree.
+/// Generics: `E` event tip.
 #[doc(hidden)]
 pub struct SetEmit<E>(PhantomData<E>);
 
@@ -99,6 +103,7 @@ pub trait SealProviders: Sized {
     fn seal_providers(self) -> Self::Out;
 }
 
+// Generics: `B` bean, `A` args, `S` status, `T` emit tree.
 impl<B, A, S, T> SealProviders for Ctx<B, A, S, T>
 where
     A: AccSet,
@@ -116,6 +121,7 @@ where
 #[doc(hidden)]
 pub struct SetProviders;
 
+// Generics: `C` context.
 impl<C> CtxConfig<C> for SetProviders
 where
     C: Context + SealProviders,
@@ -129,6 +135,7 @@ where
 }
 
 /// Next pipeline after `.emit`.
+/// Generics: `T` emit tree.
 pub trait EmitStep<T> {
     /// Pipeline with `T` unioned into the emit tree.
     type Out;
@@ -157,6 +164,7 @@ pub trait EmitProvidersStep {
     fn emit_providers(self) -> Self::Out;
 }
 
+// Generics: `E` event, `C` context.
 impl<E, C> EmitProvidersStep for Init<E, C>
 where
     Self: ApplyPatch<SetProviders>,

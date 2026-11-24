@@ -30,13 +30,15 @@ Layout of `crates/ph_beans/src/`. Keep the surface readable: **small files**, **
 | `descriptor/` | Pipeline lens: `Descriptor`, named `Status` types, `PipelineOk`, `Accessors`, `Get`/`Mut`/`Marker`. Split files (`status.rs`, `accessors.rs`, …). |
 | `context/` | Linear `Ctx`, `Context`, `ContextTick` layout (init slot + map list). |
 | `bean/` | `BeanInfo`, `EventInfo`, DI (`FromParent` / `Module`, provide–inject). |
-| `query/` | Operators and steps: `Init`, `Built`, `Setup`/`Tick`, `update`, `.inject_resources`, `.map`, `.filter`, `.emit` — **separate files**, shallow `impl` heads (rule 8). |
+| `query/` | Operators and steps: `Init`, `Built`, `Setup`/`Tick`, `Tick::emit`, `.inject_resources`, `.map`, `.filter`, `.emit` — **separate files**, shallow `impl` heads (rule 8). |
 | `filter/` | Predicate AST: `And` / `Or` / `Not` / `On`, shape / eval — not dumped into `init.rs`. |
-| `context/` | `Ctx`, `Pipe`, map list as **`List` / `Leaf` / `Grow`** (rules 7, 11–13); push in **one** `push.rs` — not `MapNode`+`room_*`, not flat 9…16 impls, not `push/{leaf,group,wide}`. |
+| `context/` | `Ctx`, `Pipe`, map list as **`List` / `Leaf` / `Grow`** (rules 7, 11–13); push in **one** `push.rs` — not cons spines / `MapNode`+`room_*`, not flat 9…16 impls, not `push/{leaf,group,wide}`. |
 
 `lib.rs` re-exports the public API; it does not hold logic.
 
 ### Rules
+
+**Rule 23 is absolute.** Never duplicate existing functionality. No rule below allows a second copy of a walk, an accessor, or an operator list.
 
 1. **No god modules / god types** — aim ~150–200 lines per file. Grow by **adding a file** under the right module (`query/map.rs`, `descriptor/op_desc.rs`), not by fattening one hub. No single “engine” struct that owns status + accessors + systems + DI.
 2. **No `type Alias = …` in the API** — aliases hide structure and make errors/docs harder to read. Prefer a **named struct or enum** (or a clear tuple of named ZSTs). Associated types on traits (`Descriptor::Status`, `At::Ix`, `BeanInfo::Provides`) are fine; they are not file-level aliases.
@@ -65,17 +67,70 @@ Layout of `crates/ph_beans/src/`. Keep the surface readable: **small files**, **
 
    Same for **pipeline entry**: `query()` is a **named step trait** [`Query`] with `type Out` (not a method on [`BeanInfo`]). `Out = Init<(), B::Ctx>` — the empty tip comes from the **context start descriptor**, not a spelled `Ctx<…>` / `Pipe<…>` / `MapList<…>` on the call site.
 6. **No macros without owner permission** — do not add `macro_rules!`, `impl_foreach`, or proc-macros in `ph_beans` unless the owner explicitly allows that use. Default: **explicit impls** and **trait-recursive / extractor bounds** (as with `Claim`, `At`, `TakeMany`). Existing macros in the prototype (`maps`/`schedule`/`filter` helpers, future derive) need an explicit OK or must be removed/replaced.
-7. **Tuple / trait-recursive lists only — no nested “room” tables** — multi-value type lists (maps, claims, DI, …) use **tuples** (and optional wrapper structs — rules 12–13) with trait recursion over **groups**, not a cons spine of `MapNode<F, H, MapNode<…>>`. Role names for params (rule 10). Leaf arity and grouping: **rules 11–13**. **Forbidden:** hand-unrolled recursive nestings with a separate `Room` (or similar) impl per length (`room.rs` / `room_mid` / `room_hi` / `room_top` style).
-8. **No closed matrices when a thinner shape exists** — if there is **any** workable way to replace a product table (A×B×C impls, Live×Yes/No, Get×Mut×slot, …) with a **policy on a marker**, an **extractor / membership trait**, or **one blanket**, do that. Reviewers **reject** new matrices when a collapse is possible. Arity walks like `Take` / `AddItem` (one axis = length) are not this rule’s target.
+7. **Flat tuples / grouped carriers only — no recursive cons spines** — multi-value type lists (maps, claims, DI, injects, …) use **flat tuples** (and optional wrapper structs — rules 12–13) with trait recursion over **fixed-arity leaves / groups**, not a right-nested cons list. Role names for params (rule 10). Leaf arity and grouping: **rules 11–13**.
+
+   **Forbidden — recursive cons lists** (HList / “peel the tail” spines). The trait solver **re-proves** the same goals down the nest on every use; compile cost and error noise explode with length. That includes both named cons nodes and bare nested pairs:
+
+   ```rust
+   // Forbidden — cons spine (solver re-proves each nest)
+   (Get<I0>, (Get<I1>, (Get<I2>, ())))
+   MapNode<F0, H0, MapNode<F1, H1, MapNode<…>>>
+   Cons<Get<I0>, Cons<Get<I1>, Nil>>
+
+   // Required — flat leaf (≤ 8), then List / Leaf / Grow groups (rules 11–13)
+   (Get<I0>, Get<I1>, Get<I2>)
+   List<Leaf<(E0, E1, E2)>>
+   ```
+
+   **Also forbidden:** hand-unrolled recursive nestings with a separate `Room` (or similar) impl per length (`room.rs` / `room_mid` / `room_hi` / `room_top` style).
+8. **No closed matrices when a thinner shape exists — strategy trait first** — if there is **any** workable way to replace a product table (A×B×C impls, Live×Yes/No, Get×Mut×slot, Sparse×Dense×arity, …) with a **strategy / policy trait**, an **extractor / membership trait**, or **one blanket**, do that. Reviewers **reject** new matrices when a collapse is possible. Arity walks like `Take` / `AddItem` (one axis = length) are not this rule’s target.
+
+   **Priority — strategy + generalize:** when behavior forks by mode (sparse/dense, live/idle policy, flag yes/no, …):
+
+   1. **Trait = strategy** (`PathStrategy`, `WaitFlag`, …); **variants = structs** (`Sparse` / `Dense`, `Yes` / `No`) that implement it — not parallel free traits per mode (`PathWalk` + `RunDense`, …).
+   2. Runtime input differences go on a **GAT** (`type Args<'a>`, often `Copy`) on that strategy — not duplicated method shapes.
+   3. Carriers that only **fan out** (tuples, `List` / `Leaf` / `Grow`) get **one** blanket over the strategy param (`PathNode<S>`, …). Do **not** copy the same body once per variant.
+   4. Per-variant impls stay only where the **leaf policy** truly differs (`MapEntry` under `Sparse` vs `Dense`).
+   5. **Sibling methods on one fan-out are one strategy argument.** `walk` / `walk_mask` / `walk_exact` (or any set of methods that differ only by mode and are copied onto every tuple arity) collapse to `fn walk<S: Strategy + Copy>(&self, strategy: S, …)`. The strategy struct is the mode (const emit, runtime mask, exact child mask). Tuple / `List` / `Leaf` / `Grow` impls forward that single call. Do **not** stamp a second and third method beside it on each arity. Leaf policy (`MapEntry` vs `MapAt`) stays on the leaf, and may ask the strategy which mode it is in. A root capability such as `ExactDrive` sits on that method's `where`, not on the leaf `impl` header: a header bound makes `List: ExactDrive` require `Walk` require `ExactDrive`, and the solver overflows.
+
+   ```rust
+   // Forbidden — one forwarding body copied per mode, per arity
+   fn walk<E>(&self, lane: &Lane<L>) { self.0.walk::<E>(lane); self.1.walk::<E>(lane); }
+   fn walk_mask(&self, mask: EmitMask, lane: &Lane<L>) { self.0.walk_mask(mask, lane); … }
+   fn eq_mask<P>(&self, lane: &Lane<L>) { self.0.eq_mask::<P>(lane); … }
+
+   // Required — strategy struct + one fan-out
+   fn walk<S: WalkStrategy + Copy>(&self, strategy: S, lane: &Lane<L>) {
+       self.0.walk(strategy, lane);
+       self.1.walk(strategy, lane);
+   }
+   ```
+
+   ```rust
+   // Forbidden — mode × arity duplicate (Sparse and Dense each unroll tuples)
+   impl<E0, E1> PathNode<Sparse> for (E0, E1) where E0: PathNode<Sparse>, … { … }
+   impl<E0, E1> PathNode<Dense> for (E0, E1) where E0: PathNode<Dense>, … { … }
+
+   // Required — strategy trait + structs; one carrier blanket
+   trait PathStrategy { type Args<'a>: Copy; fn after_gate<C: PathNode<Self>>(…); }
+   struct Sparse; struct Dense;
+   impl PathStrategy for Sparse { type Args<'a> = EmitMask; … }
+   impl PathStrategy for Dense { type Args<'a> = (); … }
+   // Generics: `S` strategy; `E0`… child slots.
+   impl<S: PathStrategy + ?Sized, E0, E1> PathNode<S> for (E0, E1)
+   where E0: PathNode<S>, E1: PathNode<S> { … }
+   ```
 
    **Required shapes:**
 
    | Area | Do | Don’t |
    | --- | --- | --- |
+   | **Strategy forks** | Trait + variant structs + GAT `Args`; one blanket on carriers | Parallel traits per mode; Sparse×Dense×tuple tables |
    | Wait / flags | Policy on `Yes`/`No` (`WaitFlag`, `OrWith`) + blankets | `Live`×`Idle`×`Yes`×`No` / `(Yes\|No)×(Yes\|No)` tables |
    | Filter ops | RHS = `FilterOperand`; one thin op set per **local** LHS node | Get×Mut×And×Or×On product; macros to stamp the product (rule 6) |
    | DI | `ClaimMark` (Get\|Mut once) + membership; Via only if rustc forces it | Get×Mut × Provide/Inject × every slot |
    | Filter effects | Per-node descriptor + one `ApplyFilter` | Re-impl the step per AST node |
+   | Path / list walk | [`CarrierDesc`] once per newtype; one `walk<S: WalkStrategy>` on tuples; leaf asks the strategy | Per-wrapper walks; `walk` + `walk_mask` + `walk_exact` copied per arity |
 
    ```rust
    // Required — flag policy (Rewait / OrWith)
@@ -106,10 +161,10 @@ Layout of `crates/ph_beans/src/`. Keep the surface readable: **small files**, **
    ```
 
    **Same for filter *effects*:** policy on a descriptor, one blanket for the step — see **Filter effect descriptor**.
-9. **Flat trait bounds — no projection towers; next tip via config structs** — steps resolve complexity **inside traits**, with **shallow** `where` clauses (Borrowing / `Args` style). Do **not** nest `as` projections or chain `WithTick` / `WithArgs` / `WithStatus` in return types or associated types.
+9. **Flat trait bounds — no projection towers; next tip via config GAT** — steps resolve complexity **inside traits**, with **shallow** `where` clauses (Borrowing / `Args` style). Do **not** nest `as` projections, chain `WithTick` / `WithArgs` / `WithStatus` / `WithInit`, or **spell the next `Ctx<…>` tip** in `type Out` / return types. The only public next-tip pattern is the **configurator through a GAT**: **`Context::With<Cfg>`** + [`CtxConfig`] (+ step `ApplyPatch` / `Out`).
 
    ```rust
-   // Forbidden — today’s query/emit.rs / init.rs style
+   // Forbidden — deep tip / lens towers (any feature: init, emit, proxy, …)
    -> Init<E, C::WithTick<<C::Tick as Reemit<<<C::Tick as EmitOf>::Emit as UnionEmit<T>>::Out>>::Out>>
    where
        C::Tick: Reemit<<<C::Tick as EmitOf>::Emit as UnionEmit<T>>::Out>,
@@ -117,11 +172,23 @@ Layout of `crates/ph_beans/src/`. Keep the surface readable: **small files**, **
 
    type Next =
        <C::WithTick<<C::Tick as FreshInit>::WithInit<H>> as Context>::WithStatus<NeedBuild>;
+
+   // Forbidden — hand-built Ctx with nested WithInit / Proxy / Forward* projections
+   type Out = Ctx<
+       B,
+       A,
+       NeedBuild,
+       T::WithInit<<B::Proxy as ForwardInit<B, H, <B::Proxy as ProxyInfo>::Chain>>::Out>,
+   >;
+
+   // Required — configurator via GAT (complexity inside SetInit / seal, not on Out)
+   type Out = <Self as ApplyPatch<SetInit<H>>>::Out;
+   // equivalently: Init<…, C::With<SetInit<H>>> only via ApplyPatch / configure, never a spelled Ctx<…>
    ```
 
-   **Forbidden:** stacking context lenses (`WithTick<…>` then `as Context` then `WithStatus<…>`, or `WithArgs` + `WithTick` in one associated type); recursive `<<<… as …>::… as …>::Out` chains in `where` or `type Out` / `type Next`; unpacking `Ctx`/`Pipe`/`MapList` in the `impl` head; spelling the next tip as a deep return type.
+   **Forbidden:** stacking context lenses (`WithTick` / `WithInit` / `WithStatus` / `WithArgs` in one assoc or tip); recursive `<<<… as …>::… as …>::Out` chains in `where` or `type Out` / `type Next`; unpacking `Ctx`/`Pipe`/`MapList` in the `impl` head; spelling `type Out = Ctx<B, A, S, T::WithInit<…>>` (or the same with `Proxy` / `ForwardInit` / `Chain` nests).
 
-   **Required:** one GAT on the context — **`Context::With<Cfg>`** — driven by a **config struct** + [`CtxConfig`]. **Forbidden:** separate `WithArgs` / `WithStatus` / `WithTick` GATs (they are the same pattern three times). Single-field and multi-field steps both use configs (`SetArgs`, `SetStatus`, `SetInit`, `SetFilter`, …).
+   **Required:** one GAT on the context — **`Context::With<Cfg>`** — driven by a **config struct** + [`CtxConfig`]. **Forbidden:** separate `WithArgs` / `WithStatus` / `WithTick` / `WithInit` GATs on `Context` (same lens pattern repeated). Single-field and multi-field steps both use configs (`SetArgs`, `SetStatus`, `SetInit`, `SetFilter`, …). Proxy / forward / chain work belongs **inside** the config or its seal — not in the step’s `Out`.
 
    ```rust
    trait CtxConfig<C: Context> {
@@ -141,20 +208,21 @@ Layout of `crates/ph_beans/src/`. Keep the surface readable: **small files**, **
    type Out = <Self as ApplyPatch<SetFilter<F, E>>>::Out;
    ```
 
-   Nesting of `EmitOf` / `UnionEmit` / `FreshInit::WithInit` / `ApplyFilter` stays **inside** the config impl (and `ScopeOf`), not at the step’s `type Out`.
+   Nesting of `EmitOf` / `UnionEmit` / `FreshInit::WithInit` / `ForwardInit` / `ProxyInfo::Chain` / `ApplyFilter` stays **inside** the config impl (and `ScopeOf`), not at the step’s `type Out`.
 
    **Mandatory — no needless `<T as Trait>::Assoc`:** when `T` is a **type parameter** already bound `T: Trait` (or `T: Trait<…>`), write **`T::Assoc`** / **`T::Assoc<…>`**, not `<T as Trait>::Assoc` (e.g. `F::NextArgs`, `T::Out`, `C::Out`, `B::Ctx`, `G::ScopeOf<E>`, `A::Out`).
 
    ```rust
-   // Forbidden — redundant UFCS when the bound is present
+   // Forbidden — redundant UFCS when the bound is present (and do not put this on a step Out)
    F: ApplyFilter<E, A>,
    <F as ApplyFilter<E, A>>::NextArgs: AccSet,
    type Out = Ctx<B, <F as ApplyFilter<E, A>>::NextArgs, S, <T as Rescope<F>>::Out>;
 
-   // Required
+   // Required — shallow assoc names; a spelled Ctx belongs only in a seal, never as a step tip
    F: ApplyFilter<E, A>,
    F::NextArgs: AccSet,
-   type Out = Ctx<B, F::NextArgs, S, T::Out>;
+   // seal: Ctx<B, F::NextArgs, S, T::Out>
+   // step: type Out = <Self as ApplyPatch<SetFilter<F, E>>>::Out;
    ```
 
    **Keep** UFCS when rustc needs it: inherent step returns (`<Self as Step>::Out`, rule 5); disambiguating another trait’s `Out` (`<Self as ApplyPatch<…>>::Out`); projecting through an **associated type path** (`<C::Bean as BeanInfo>::State`, `<M::Injects as ArgsView>::View`, `<F::Scope as ScopeOf<E>>::NextE` — E0223 without the cast); or when several traits could supply the same name.
@@ -243,19 +311,24 @@ Layout of `crates/ph_beans/src/`. Keep the surface readable: **small files**, **
        …
    }
    ```
-10. **Generic names — one letter, or letter + digit** — a type parameter is **exactly one letter** taken from the role word (`B` bean, `A` args, `S` status, `T` tick, `E` event, `H` handler, `F` filter, `N` new, `O` old, …). For a position in a list, **that letter + index digit(s)** only: `E0`, `E1`, `S0` (two or more characters **only** when a digit is present).
+10. **Generic names — one letter, or letter + digit; meaning in a comment** — a type parameter is **exactly one letter** taken from the role word (`B` bean, `A` args, `S` status, `T` tick, `E` event, `H` handler, `F` filter, `N` new, `O` old, `P` path step, …). For a position in a list, **that letter + index digit(s)** only: `E0`, `E1`, `S0` (two or more characters **only** when a digit is present). On the **item** that introduces those params (struct, enum, trait, or `impl` head), a short **comment** states what each letter stands for (role word). Do not rely on multi-letter param names for readability.
 
    ```rust
-   // Forbidden — multi-letter params; alphabet as bare arity numbering
+   // Forbidden — multi-letter params; alphabet as bare arity numbering; silent letters
    impl<Bean, Args, Status, Tick, S> CtxConfig<Ctx<Bean, Args, Status, Tick>> for SetStatus<S> { … }
    impl<New, A, B, C, D, E, F, G, H, I, J, K, L> PushEntry<New> for (A, B, …) { … }
+   pub struct Gate<Step, Strat, C> { … } // no comment, multi-letter names
 
-   // Required — one letter per role; letter+digit for slots (≤ 8 — rule 11)
+   // Required — one letter per role; letter+digit for slots (≤ 8 — rule 11); comment maps letters
+   // Generics: `B` bean, `A` args, `O` old status, `T` tick; `S` new status on the config.
    impl<B, A, O, T, S> CtxConfig<Ctx<B, A, O, T>> for SetStatus<S> { … }
+   // Generics: `N` new entry; `E0`…`E7` opaque leaf slots.
    impl<N, E0, E1, E2, E3, E4, E5, E6, E7> PushEntry<N> for (E0, E1, E2, E3, E4, E5, E6, E7) { … }
+   /// Generics: `P` path step, `S` strategy, `C` children.
+   pub struct Gate<P, S, C> { … }
    ```
 
-   **Forbidden:** multi-letter type params (`Bean`, `Args`, `Status`, `PrevE`, `Inner`, `Head`, …); `A, B, C, D, …` solely to count slots without a role letter. Same in docs examples and new code.
+   **Forbidden:** multi-letter type params (`Bean`, `Args`, `Status`, `PrevE`, `Inner`, `Head`, `Step`, `Strat`, …); `A, B, C, D, …` solely to count slots without a role letter; one-letter params **without** a comment that names the roles. Same in docs examples and new code.
 11. **Leaf list arity ≤ 8 — no long unrolled tables** — a single flat tuple (or one `impl` over that tuple) holds **at most 8** elements. Do **not** add arity-9…16 megaimpls that list `F0,H0,…,F14,H14` and one `if` per slot.
 
    ```rust
@@ -268,10 +341,10 @@ Layout of `crates/ph_beans/src/`. Keep the surface readable: **small files**, **
 
 12. **List carriers and grouping** — a type-level list is only:
 
-   - a **tuple of opaque element generics**: `(E0, E1, …)` with ≤ 8 slots, or
+   - a **flat** tuple of opaque element generics: `(E0, E1, …)` with ≤ 8 slots, or
    - a **struct whose only payload is such a tuple**: `List` / `Leaf` / `Grow` (shared carriers below).
 
-   **Forbidden:** ad-hoc list shapes (parallel type-param bags without a tuple, cons `MapNode` spines, parallel `F0,H0,F1,H1,…` outside entries); **`impl` heads on tuples of domain structs** (`(MapEntry<F0,H0>, MapEntry<F1,H1>, …)` — pull the element through an opaque `E0` / `N` instead).
+   **Forbidden:** recursive cons lists (`(Get<I0>, (Get<I1>, (Get<I2>, ())))`, `MapNode` / `Cons` spines) — trait solver re-proves each nest (rule 7); ad-hoc list shapes (parallel type-param bags without a tuple, parallel `F0,H0,F1,H1,…` outside entries); **`impl` heads on tuples of domain structs** (`(MapEntry<F0,H0>, MapEntry<F1,H1>, …)` — pull the element through an opaque `E0` / `N` instead).
 
    **Shared grouped list (reuse, not copy):** the leaf + group layout is **one common structure** for the whole crate — not a private regrouping inside `push`, another inside `query/run`, another for claims. Carriers live in `context/list.rs`; append lives in **one** `context/push.rs` (rule 13). Domain code **bounds** walk/push; it does **not** re-invent arity tables or group shapes per feature.
 
@@ -280,7 +353,7 @@ Layout of `crates/ph_beans/src/`. Keep the surface readable: **small files**, **
    struct Leaf<I>(I);  // flat growth 0..=8 (coherence vs bare (E0,E1) ≡ (List, Grow))
    struct Grow<I>(I);  // second group 9..=15 (coherence vs reshape / List rest)
 
-   impl<I: Walk> Walk for List<I> { … }
+   impl<T: CarrierDesc> Walk for T where T::Inner: Walk { … }
    impl<I, N> PushEntry<N> for List<I> where I: PushShape<N> { … }
    ```
 
@@ -376,7 +449,7 @@ Layout of `crates/ph_beans/src/`. Keep the surface readable: **small files**, **
    ```rust
    // Forbidden — same bounds repeated on the method
    pub trait Update<M> {
-       fn update(&mut self, injects: <M::Injects as ArgsView>::View<'_>)
+       fn emit<Ev: Collect>(&mut self, event: Ev, injects: <M::Injects as ArgsView>::View<'_>)
        where
            M: BeanInfo,
            M::Injects: ArgsView;
@@ -387,13 +460,13 @@ Layout of `crates/ph_beans/src/`. Keep the surface readable: **small files**, **
    where
        M::Injects: ArgsView,
    {
-       fn update(&mut self, injects: <M::Injects as ArgsView>::View<'_>);
+       fn emit<Ev: Collect>(&mut self, event: Ev, injects: <M::Injects as ArgsView>::View<'_>);
    }
    ```
 
    Same for [`Tick`] / [`Setup`]: `M: BeanInfo` and `M::Injects: ArgsView` (or `Self: BeanInfo` + `Self::Injects: ArgsView` on `Setup`) sit on the trait. An `impl` only adds **extra** bounds that that impl needs (e.g. `C: Context`, `C::Tick: Drive` on `Update for Built`).
 
-   **Runtime surface:** [`Update`] is implemented for **`Built`** only (ready tip after `.build()`). Do **not** stub `Update for Init` — `Init` is not a `Tick` (`PipelineOk`). `injects` on `update` is the **API contract** (typed inject view for `M`); the body may ignore it until maps/module tick consume it — that is not a reason to drop the parameter or to implement `Update` on the builder tip.
+   **Runtime surface:** [`Update`] is implemented for **`Built`** only (ready tip after `.build()`). Do **not** stub `Update for Init` — `Init` is not a `Tick` (`PipelineOk`). `injects` on `emit` is the **API contract** (typed inject view for `M`); the body may ignore it until maps/module tick consume it — that is not a reason to drop the parameter or to implement `Update` on the builder tip.
 
 18. **Systems are pure — no captures; store as `fn`, not closures** — a system (init or map) may touch **only** its resource/inject args (and return init `State`). It must **not** capture, borrow, or mutate anything from the surrounding environment. Bound is **`Fn`**, never `FnMut` / `FnOnce` with captures.
 
@@ -412,7 +485,7 @@ Layout of `crates/ph_beans/src/`. Keep the surface readable: **small files**, **
    .map(on_tick)
    ```
 
-19. **Do not change existing structures without prior owner approval** — public (and crate-visible API) types already in the tree — structs, enums, traits, and their **signatures** (fields, generics, associated items, inherent methods that define the shape) — stay as they are unless the **owner explicitly allows** the change first. Prefer a **new** type / wrapper / view (`Dyn<…>`, seal, config) beside the frozen one. Applies in particular to [`Get`] / [`Mut`] / [`Marker`], [`BeanInfo`] / [`EventInfo`], list carriers, and other landed API. Drive-by “small” renames, extra type params, or field reshuffles are **forbidden** without that OK (stronger than taste: same bar as rule 14 for practical review).
+19. **Do not change existing structures without prior owner approval** — public (and crate-visible API) types already in the tree — structs, enums, traits, and their **signatures** (fields, generics, associated items, inherent methods that define the shape) — stay as they are unless the **owner explicitly allows** the change first. Prefer a **new** type / wrapper / view (`Dyn<…>`, seal, config) beside the frozen one. That side type still uses an existing walk (rule 23). Applies in particular to [`Get`] / [`Mut`] / [`Marker`], [`BeanInfo`] / [`EventInfo`], list carriers, and other landed API. Drive-by “small” renames, extra type params, or field reshuffles are **forbidden** without that OK (stronger than taste: same bar as rule 14 for practical review).
 
    ```rust
    // Forbidden without owner OK — reshape a landed type
@@ -424,7 +497,65 @@ Layout of `crates/ph_beans/src/`. Keep the surface readable: **small files**, **
    .inject_resources(Draw::T)   // same claim shape as any other bean
    ```
 
-(Rules 8–9: extractors + `CtxConfig` / shallow assoc. Rule 10: role names. Rules 11–16: lists / push / meta / phantom / safety. Rule 17: trait-head bounds. Rule 18: pure systems. Rule 19: no silent API shape changes.)
+20. **Claim wrappers use [`ClaimDesc`] — one blanket, not per-carrier walks** — a type that only **forwards** claim shape / indexes to an inner node (`Live<C>`, `Idle<C>`, and later similar carriers) **must** implement [`ClaimDesc`] (`type Inner = …`) and rely on the **shared** blankets `ClaimShape for T where T: ClaimDesc` / `Claim<B> for T where T: ClaimDesc`. Do **not** add another `impl ClaimShape for Live<…>` / `Idle<…>` (or copy-paste the same forward for each new wrapper).
+
+   Leaves and real combinators stay direct: `()`, `Get`, `Mut`, `And`, pairs, and **`Dyn`** (View is `&V` / `&mut V`, not a pure forward) keep their own `ClaimShape` / `Claim` impls. An event-state claim is the same accessor on [`State`]: `Get<State<Ev>>` / `Mut<State<Ev>>`, forwarded by [`ClaimDesc`] to `Get`/`Mut` of `EventBuf` (rule 23).
+
+   ```rust
+   // Forbidden — per-wrapper ClaimShape / Claim forward
+   impl<C: ClaimShape> ClaimShape for Live<C> { type View<'a> = C::View<'a>; … }
+   impl<C: ClaimShape> ClaimShape for Idle<C> { … }
+   impl<C: ClaimShape> ClaimShape for NextWrapper<C> { … }
+
+   // Required — descriptor once; blankets cover every ClaimDesc carrier
+   trait ClaimDesc { type Inner: ?Sized; }
+   impl<C> ClaimDesc for Live<C> { type Inner = C; }
+   impl<C> ClaimDesc for Idle<C> { type Inner = C; }
+   impl<T: ClaimDesc> ClaimShape for T where T::Inner: ClaimShape { … }
+   impl<B, T: ClaimDesc> Claim<B> for T where T::Inner: Claim<B> { … }
+   ```
+
+21. **Domain values are structs with impls — not raw primitives, not aliases** — a value with a domain role (mask, id, index-with-meaning, status word, …) is a **named struct** (newtype). Operations are **inherent methods** (or trait impls) on that struct. Do **not** thread the raw primitive (`u128`, `u32`, `usize`, …) through the API, and do **not** hide it as `type Alias = u128` (rule 2). Call sites use the struct’s methods, not `&` / `|` / shifts on the stored bits.
+
+   ```rust
+   // Forbidden — raw word, or an alias that is still the raw word
+   pub type EmitMask = u128;
+   fn match_need(mask: u128, need: u128) -> bool { mask & need == need }
+   const MASK: EmitMask = emit_bit_mask(E::BIT) | I::MASK;
+
+   // Required — newtype; bits stay inside; callers use methods
+   pub struct EmitMask(u128);
+   impl EmitMask {
+       pub const BITS: u32 = 128;
+       pub const EMPTY: Self = Self(0);
+       pub const fn from_bit(bit: u32) -> Self { … }
+       pub const fn or(self, other: Self) -> Self { … }
+       pub const fn contains(self, need: Self) -> bool { … }
+   }
+   ```
+
+22. **Constants live on the type they belong to** — a `const` that states a property of a struct or trait is an **associated const** on that type (`EmitMask::BITS`, `EmitBit::BIT`). Do **not** park it as a free item beside the type (`EMIT_BITS`). A free const is only for a value that has no owning type.
+
+23. **Never duplicate existing functionality** — this rule wins over every other rule here, including rule 19’s side-type escape. If a walk, an accessor, a view, or an operator list **already exists**, the next feature uses **that**. It does not copy the impls. It does not add a second accessor whose body only repeats `()` / [`Get`] / [`Mut`] / [`Dyn`] / [`And`].
+
+   The operators are named **once**, on a shared descriptor ([`ClaimForm`], [`ClaimDesc`], [`CarrierDesc`], [`FilterDesc`], …). The new trait is **one blanket** over that descriptor. A claim that is an existing accessor on another referent is that accessor (`Get<EventBuf<S>>`, `Mut<EventBuf<S>>`) through [`ClaimDesc`].
+
+   ```rust
+   // Forbidden — operator list copied onto the next trait; a second accessor
+   impl<E> StateGate<E> for () {}
+   impl<E, T> StateGate<E> for Get<T> {}
+   impl<E, T> StateGate<E> for Mut<T> {}
+   impl<P> ClaimShape for StateGet<P> { type View<'a> = &'a EventBuf<P::State>; }
+
+   // Required — one descriptor, one blanket; the state claim is Get / Mut
+   impl<T: LeafClaim> ClaimForm for T { type Body = (); }
+   impl<E, T: ClaimForm> StateGate<E> for T where T::Body: GateParts<E> {}
+   impl<P: BeanInfo> ClaimDesc for Get<State<P>> {
+       type Inner = Get<EventBuf<P::State>>;
+   }
+   ```
+
+(**Rule 23** wins: never duplicate a walk, accessor, or operator list. Rule 8: **strategy trait + generalize** — no matrices / no per-mode carrier copies. Rules 8–9: extractors + `CtxConfig` / shallow assoc. Rule 10: role names + comment. Rules 11–16: lists / push / meta / phantom / safety. Rule 17: trait-head bounds. Rule 18: pure systems. Rule 19: no silent API shape changes. Rule 20: `ClaimDesc` blankets for claim wrappers. Rule 21: domain newtypes, not raw / alias. Rule 22: consts on the owning type.)
 
 ### How pieces talk
 
@@ -878,7 +1009,7 @@ Ctx<Bean, Args, Status, Tick>
                          └─ Tick = (InitSlot, MapList)
                               InitSlot: NoSystems | WithInit<H> | WithDefault<S>
                               MapList:  List<Leaf<…>> → (List, Grow) → four Lists
-                                        // NOT MapNode; NOT MapEntry arity heads; NOT push/*.rs split
+                                        // NOT cons spines; NOT MapNode; NOT MapEntry arity heads; NOT push/*.rs split
 ```
 
 Push / run / schedule go through the **shared `List`** (groups then leaves — rules 11–13). Cap refusal stays at total length 16. Do **not** encode capacity as `room_*`, arity-9…16 megaimpls, domain structs in push heads, or a second list layout beside `List`/`Leaf`/`Grow`.
@@ -910,16 +1041,17 @@ Two behaviours for state init on the builder:
 1. **No `Default` on state** — tip requires `.init_state(…)`.
 2. **`Default` available** — may use `.init_state_default()` instead.
 
-`setup` returns a ready `Tick`. The **only** public runtime call is `Tick::update` with inject refs (`Get` vs `Mut` as claimed). There is **no** `boot` / `tick.init` — those were prototype names; init stays inside `setup`, runtime is `update` only.
+`setup` returns a ready `Tick`. From **outside** a system the tick has both channels ([Dispatch](#dispatch-direct-and-deferred)): `Tick::emit(event, injects)` runs now, `Tick::defer(event)` stores the event for the next tick. `injects` are the inject refs (`Get` vs `Mut` as claimed) and are passed only to `emit` — a borrow is not stored in the buffer. There is **no** `boot` / `tick.init` — those were prototype names; init stays inside `setup`. From **inside** a system the same two channels exist, and direct is limited to children of the current event.
 
-Bounds for that surface sit on the traits (rule 17): `Update<M: BeanInfo> where M::Injects: ArgsView`, `Tick<M: BeanInfo> where …`, `Setup: BeanInfo where Self::Injects: ArgsView`. `Update` is only for `Built` (not `Init`).
+Bounds for that surface sit on the traits (rule 17): `Update<M: BeanInfo> where M::Injects: ArgsView`, `Tick<M: BeanInfo> where …`, `Setup: BeanInfo where Self::Injects: ArgsView`. `Ev: Collect` stays on `emit` (per call). `Update` is only for `Built` (not `Init`).
 
 ```rust
 let tick: impl Tick<Render> = Render::setup(); // builder finished; init already applied inside
-tick.update(injects: /* … */); // only #[inject] refs; Get vs Mut distinguished
+tick.emit(Update::ON[Main::ON], injects); // direct — this call
+tick.defer(Update::ON);                    // deferred — next tick's emit drains it
 ```
 
-Each module can be **tested alone** without the full app tree: pass only that module’s injects into `tick.update(…)`. The `injects` argument is required by the contract even if a given tip still only drives maps and does not read the refs yet.
+Each module can be **tested alone** without the full app tree: pass that call's event and only that module’s injects into `tick.emit(…)`. The `injects` argument is required on `emit` even if a given tip still only drives maps and does not read the refs yet. `defer` takes the event only.
 
 ---
 
@@ -934,6 +1066,7 @@ Each module can be **tested alone** without the full app tree: pass only that mo
 | No `.build()` (`NeedBuild`) | `setup` → `impl Tick` | Pipeline `Descriptor`. |
 | `MUT` inject of immutable provide | Attribute / inject site | DI / Descriptor. |
 | Bad / incomplete event / bad parent edge | `.filter` / `.emit` / `setup` | Pipeline `Descriptor` (`ErrBadEvent`). |
+| Direct emit is not a child of the current event (self, parent, sibling, unrelated) | That direct call | Pipeline `Descriptor` (`ErrNotChild`). |
 | Accessor conflict across filters | Offending `.inject_resources` / `.filter` | `Accessors` + Status. |
 | Warning status | User `.build()` | Pipeline `Descriptor`. |
 
@@ -1059,13 +1192,14 @@ Use a per-node (or per-leaf) descriptor + one blanket whenever the code today is
 | `filter/ops.rs` | Get×Mut×node product | RHS `FilterOperand`; per-LHS ops only (orphan E0210); **no** `ops_node` |
 | `filter/flag.rs` | `(Yes\|No)×(Yes\|No)` `OrFlag` | **`OrWith` on the left flag** |
 | `bean/inject.rs` | Get×Mut×slot | `ClaimMark` + Via **only** for E0119 head/tail |
-| `query/args.rs` `Claim` / `ArgsView` | near-duplicate walks over `()` / `Get` / `Mut` / `And` / `Live` / `Idle` | shared claim-shape descriptor; step blankets over it |
-| `descriptor/op_desc.rs` `OpLeaf` | parallel walk of the same claim nodes | stay aligned with that claim-shape descriptor (one Status lens, not a second matrix) |
+| `query/args.rs` `ClaimShape` / `Claim` | leaves + combinators walk once; wrappers via **`ClaimDesc`** (rule 20). `Get<State<Ev>>` / `Mut<State<Ev>>` forward to `Get` / `Mut` of `EventBuf` | per-wrapper `ClaimShape for Live/Idle`; a second accessor beside `Get` / `Mut`; parallel `ArgsView`/`OpLeaf` tables |
+| `query/resource.rs` `StateGate` | **`ClaimForm`** once; one blanket (rule 23) | `()` / `Get` / `Mut` / `Dyn` / `And` each re-implemented on the trait |
+| `descriptor/op_desc.rs` | `OpDesc` blankets from `ClaimShape::Status` | a second `OpLeaf` walk of the same nodes |
 | `descriptor/live.rs` `Rewait` | `Live`/`Idle` × `Yes`/`No` table | **`WaitFlag` on `Yes`/`No`** + one blanket for `Live`, one for `Idle` |
-| `filter/eval.rs` | `Collect` / `MatchEmit` / `UnionEmit` per node | **keep** per-node *behavior* when semantics differ; factor only shared “fold over AST” scaffolding if several traits share the same skeleton |
+| `filter/eval.rs` | `UnionEmit` per `On`/`And`/`Or`/`Not` | **one** blanket on [`FilterOperand`] (`And<Self, N>`); `()` stays `N` because that join differs |
 | `filter/shape.rs` `HasMut` / `SpineTail` / `Under` | recursive policy walks | **keep** — these *are* the descriptors’ inputs; do not replace them with another ApplyFilter-style matrix |
 
-Rule of thumb: **policy on the node, one impl for the step.** Forbidden: step matrices and macros that only hide those matrices.
+Rule of thumb: **policy on the node, one impl for the step** (same spirit as rule 8 strategy + generalize). Forbidden: step matrices and macros that only hide those matrices.
 
 ```rust
 .filter(Update::ON[Valid::T & Alive::T])  // On<Update, And<Get<Valid>, Get<Alive>>>
@@ -1138,11 +1272,16 @@ Parent check is **required** for nesting and emit (not optional). Multi-parent e
 
 Events form a **tree** (parents + nested `On`). Runtime does **not** enter an event scope unless that event was **emitted**.
 
+**Emit mask (build-time prep):** each event implements [`EmitBit`] (`const BIT` in `0..EmitMask::BITS`, **128** bits; separate from [`EventInfo`] — rule 14). [`EmitMask`] is a newtype (rule 21); `BITS` sits on that struct (rule 22). Apps assign unique bits (manual registry; derive later). `.emit` AST folds to a const [`EmitMask`] via `Collect::MASK` / `EmitMask::from_bit` + `or`. Each map filter folds to `MatchEmit::NEED`. Drive loads one mask; And-of-`On` paths match with **`mask.contains(NEED)`**. `Or` / `Not` compose in `matches` (a few bit-tests, not AST walks).
+
+**Const plan:** [`Gate::path_plan`]`<M>` and [`Walk::walk`]`<Ev>` intersect the node with the emit const `M::MASK` / `Ev::MASK`. A miss deletes the subtree. A hit does not re-test at runtime: [`Dense`] calls every child; [`Sparse`] lets each child repeat the same const test. [`Drive`] uses `walk::<Ev>` for the event passed to [`Tick::emit`]. Query `.map` still builds the flat list.
+
 | Rule | Meaning |
 | --- | --- |
 | No emit → no enter | A system under `.filter(…::ON[Ev::ON…])` runs only if every event on that path was emitted for this tick. |
 | Multi-level | Outer level first: parent/root must be active; then each nested child is considered only if **it** was emitted. Missing emit at a level **skips that subtree** — no jump *into* the missing event. |
 | Siblings / other branches | Other emitted branches at the same level still run (independent subtrees). Skipping one child does not invent a transition into it. |
+| Sparse vs Dense | After the const gate opens: Sparse children repeat the const test; Dense children are direct calls. |
 | `And` in filters | All conjuncts must pass (events emitted + predicates). |
 | `Or` in filters | Alternative **filter** arms (match if any arm passes); not a “fallback jump into an un-emitted event”. Un-emitted events still never become the current scope. |
 | `Not` | Negation of a leaf/subtree match; still cannot enter an event that was not emitted. |
@@ -1160,7 +1299,50 @@ emit Main          // Graphics not emitted this tick
 
 **Interrupt / “прыжок”:** leaving or skipping a level means **not scheduling** maps under the non-emitted node; control continues with other matching emitted paths in the tree. There is no silent transition onto an event that nobody emitted.
 
-Compile-time graph/accessors still go only through `Descriptor` / `OpDesc`. Beans hold state; emit updates masks; the scheduler walks the tree with the rules above.
+Compile-time graph/accessors still go only through `Descriptor` / `OpDesc`. Beans hold state; emit folds to a bit mask; the flat scheduler walks maps with `NEED` tests; path scheduling uses `Gate` + `DELTA` (rules above).
+
+### Dispatch: direct and deferred
+
+Two channels, both **outside** (on `Tick`) and **inside** a system. Outside, direct may start a root such as `Update`. Inside, the current event is the innermost event of that map’s filter scope (`Here`), and direct may name only a child of `Here`.
+
+| Caller | Direct (now) | Defer (next tick) |
+| --- | --- | --- |
+| Outside | `Tick::emit(event, injects)` — any well-formed event, including a root | `Tick::defer(event)` — stored on that event's scope |
+| Inside | `Direct<E>::emit` — **child of `E` only** | `defer(event)` — stored on `E`, runs the next time `E` is entered |
+
+#### Direct
+
+`Direct<E, L, P>` is an argument of the map (rule 18: the system does not capture the tick). Generics: `E` current (innermost) event, `L` list, `P` filter path.
+
+```rust
+fn in_update(go: Direct<Update>) {
+    go.emit(Graphics::ON); // child of Update — direct call into that block
+    go.emit(Main::ON);     // also a child
+}
+```
+
+The call monomorphizes on the child the same way `Tick::emit(Update::ON[Graphics::ON], …)` keeps only the Graphics maps. The parent is already the current scope, so the specialization **is** the enter: no mask test, no walk of the other children.
+
+**Child** means one step down: `Child: EventInfo` and `E` is in `Child::Parents`. Not a grandchild (that child emits its own children), not a sibling, not a parent, not `E` itself.
+
+From inside `Update`, `Update` is not a child of `Update`, so a direct emit of `Update` does not compile. From inside `Main`, `Update` (parent) and `Graphics` (sibling) do not compile either. Only events that list `Main` in `Parents` do.
+
+Validation is a pipeline `Descriptor` status, same channel as other event errors:
+
+| Call | Status |
+| --- | --- |
+| `Child` lists `E` in `Parents` | allowed (`Direct<E>::emit`) |
+| self, parent, sibling, unrelated, ill-formed tree | `ErrNotChild` — no `emit` impl |
+
+#### Deferred
+
+Defer does not enter the event. Each event is a bean ([`BeanInfo`](crate::BeanInfo)) and keeps its own buffer, one [`EmitMask`] slot keyed by [`EmitBit::BIT`](crate::EmitBit::BIT). A defer writes into **that scope's** slot. The bits run the next time that scope is entered (`Tick::emit` of that event, or a path whose outermost event it is), together with the scope's own mask — not as a root emit on an empty path.
+
+Outside, `Tick::defer(Update::ON[Main::ON])` stores the mask on `Update`. `tick.emit(Graphics::ON, …)` does not see it. `tick.emit(Update::ON, …)` does: Main's maps run inside Update. Inside a system, `go.defer(event)` writes the current `Here` slot.
+
+`*Ev::MUT` / `*Ev::T` are [`Mut`](crate::Mut)`<`[`State`](crate::State)`<Ev>>` / [`Get`](crate::Get)`<State<Ev>>`. [`ClaimDesc`](crate::ClaimDesc) forwards that to [`Mut`](crate::Mut) / [`Get`](crate::Get) of [`EventBuf`](crate::EventBuf)`<Ev::State>` (rule 23): the event's state plus its defer buffer. The claim is legal only while the pipeline scope contains `Ev` (`InScope`). [`Get`](crate::Get) / [`Mut`](crate::Mut) stay frozen.
+
+A repeated defer of the same bits in one visit stays one mask. No heap alloc (the slots are the event table, [`EmitMask::BITS`](crate::EmitMask::BITS) of them). Inject refs are still not stored in the buffer.
 
 ---
 
@@ -1202,7 +1384,8 @@ impl Setup for App {
 
 ```rust
 let tick: impl Tick<Render> = Render::setup();
-tick.update(/* only Render’s #[inject] refs */);
+tick.emit((), /* only Render’s #[inject] refs */);
+tick.defer(Update::ON); // next tick.emit drains it with that call's injects
 ```
 
 ## System callbacks

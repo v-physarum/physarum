@@ -13,6 +13,7 @@ use crate::query::apply::ApplyPatch;
 use crate::query::init::Init;
 
 /// Rescopes the tick on a concrete [`Ctx`] (hides `B`/`A`/`S`/`T` from [`CtxConfig`]).
+/// Generics: `F` filter, `E` event.
 #[doc(hidden)]
 pub trait SealFilter<F, E>: Sized {
     /// Context after the seal.
@@ -36,6 +37,7 @@ where
 }
 
 /// Config: new event path and the filter's rescoped tick.
+/// Generics: `F` filter, `E` event.
 #[doc(hidden)]
 pub struct SetFilter<F, E>(PhantomData<(F, E)>);
 
@@ -54,6 +56,7 @@ where
 }
 
 /// Next pipeline after `.filter`.
+/// Generics: `F` filter.
 pub trait FilterStep<F> {
     /// Pipeline with this filter applied.
     type Out;
@@ -73,6 +76,7 @@ where
     }
 }
 
+// Generics: `E` event, `C` context / claim / child.
 impl<E, C> Init<E, C> {
     /// Installs a filter. An `On` spine replaces `E`. A predicate leaves `E`.
     ///

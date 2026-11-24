@@ -4,6 +4,7 @@
 pub struct NoSystems;
 
 /// The init function item `H`.
+/// Generics: `H` init handler.
 pub struct WithInit<H> {
     handler: H,
 }
@@ -18,6 +19,7 @@ impl<H> WithInit<H> {
 }
 
 /// State built by [`init_state_default`](crate::Init::init_state_default).
+/// Generics: `S` default state.
 pub struct WithDefault<S> {
     pub(crate) state: S,
 }
@@ -47,6 +49,7 @@ pub trait FreshInit: ContextTick {
     fn install_default<S>(self, state: S) -> Self::WithDefault<S>;
 }
 
+// Generics: `L` list.
 impl<L> FreshInit for Pipe<NoSystems, L>
 where
     L: ContextTick,
@@ -72,6 +75,7 @@ pub trait DefaultState {
     fn state(&self) -> &Self::State;
 }
 
+// Generics: `L` list, `S` state.
 impl<L, S> DefaultState for Pipe<WithDefault<S>, L> {
     type State = S;
 
@@ -89,6 +93,7 @@ impl<S> ContextTick for WithDefault<S> {}
 impl ContextTick for () {}
 
 /// Init slot plus the map list.
+/// Generics: `I` init, `L` map list.
 pub struct Pipe<I, L> {
     pub(crate) init: I,
     pub(crate) list: L,

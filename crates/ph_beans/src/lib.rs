@@ -21,13 +21,18 @@ pub use bean::{
 };
 pub use borrow::{At, Ix0, Ix1, Ix2, Ix3, Off, Take, TakeMany};
 pub use context::{
-    Context, ContextTick, Ctx, Leaf, List, MAX_MAP_SYSTEMS, MapList, NoSystems, Pipe, StartDesc,
-    WithDefault, WithInit,
+    CarrierDesc, Context, ContextTick, Ctx, Direct, DirectFn, EventBuf, ExactDrive, Leaf, List,
+    MAX_MAP_SYSTEMS, MapEntry, MapList, NoSystems, Pipe, ScopeHost, StartDesc, WithDefault,
+    WithInit,
 };
 pub use descriptor::{
-    Accessors, Descriptor, Dyn, DynView, ErrBadEvent, ErrConflictAccess, ErrDuplicateResource,
-    ErrInitAlreadySet, ErrNeedWaitFilter, ErrTooManySystems, Get, Idle, Live, Marker, Mut,
-    NeedBuild, NeedInit, OpDesc, OpOk, OpShape, PipelineOk, Valid, WarnUnusedArgs,
+    Accessors, ClaimDesc, Descriptor, Dyn, DynView, ErrBadEvent, ErrConflictAccess,
+    ErrDuplicateResource, ErrInitAlreadySet, ErrNeedWaitFilter, ErrNotChild, ErrTooManySystems,
+    Get, Idle, Live, Marker, Mut, NeedBuild, NeedInit, OpDesc, OpOk, PipelineOk, State, Valid,
+    WarnUnusedArgs,
 };
-pub use filter::{And, ApplyFilter, NestOk, Not, On, Or};
-pub use query::{Built, Init, Query, Setup, Tick, Update};
+pub use filter::{
+    And, ApplyFilter, Dense, EmitBit, EmitMask, Gate, NestOk, Not, On, Or, PathNode, PathStep,
+    PathStrategy, Sparse,
+};
+pub use query::{Built, Claim, ClaimShape, Init, Query, Setup, Tick, Update};

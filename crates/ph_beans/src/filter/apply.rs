@@ -5,15 +5,17 @@
 use core::marker::PhantomData;
 
 use crate::descriptor::live::Rewait;
-use crate::descriptor::{Get, Mut};
-use crate::filter::shape::{ApplyFilter, HasMut, NestOk, Spine};
-use crate::filter::{And, Not, On, Or};
+use crate::filter::On;
+use crate::filter::shape::{
+    ApplyFilter, HasMut, IdleEmit, NestOk, NodeForm, PairBody, Skip, Spine,
+};
 
 /// Event scope stays the previous `E`.
 #[doc(hidden)]
 pub struct Keep;
 
 /// Event scope becomes the path `P`.
+/// Generics: `P` path.
 #[doc(hidden)]
 pub struct Replace<P> {
     _markers: PhantomData<P>,
@@ -30,6 +32,7 @@ impl<E> ScopeOf<E> for Keep {
     type NextE = E;
 }
 
+// Generics: `E` event, `P` path.
 impl<E, P> ScopeOf<E> for Replace<P> {
     type NextE = P;
 }
@@ -45,20 +48,28 @@ pub trait FilterDesc {
     type Scope;
 }
 
+/// Predicate bodies leave `E` unchanged. [`Here`](crate::filter::shape::Here) does not.
+trait Keeps {}
+
+// Generics: `T` tick / type / tip.
+impl<T: IdleEmit> Keeps for T {}
+
+// Generics: `A` left child, `B` right child, `K` join kind.
+impl<A, B, K> Keeps for PairBody<A, B, K> {}
+
+// Generics: `A` child.
+impl<A> Keeps for Skip<A> {}
+
 /// Predicate nodes leave `E` unchanged. `On` does not implement this.
 trait KeepsScope {}
 
-impl KeepsScope for () {}
-
-impl<T> KeepsScope for Get<T> {}
-
-impl<T> KeepsScope for Mut<T> {}
-
-impl<A, B> KeepsScope for And<A, B> {}
-
-impl<A, B> KeepsScope for Or<A, B> {}
-
-impl<A> KeepsScope for Not<A> {}
+// Generics: `F` operator ([`NodeForm`]).
+impl<F> KeepsScope for F
+where
+    F: NodeForm,
+    F::Body: Keeps,
+{
+}
 
 impl<F> FilterDesc for F
 where
@@ -68,6 +79,7 @@ where
     type Scope = Keep;
 }
 
+// Generics: `E` event, `I` inner / index.
 impl<E, I> FilterDesc for On<E, I>
 where
     On<E, I>: HasMut + Spine + NestOk,

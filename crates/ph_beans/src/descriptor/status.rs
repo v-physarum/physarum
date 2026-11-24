@@ -24,6 +24,9 @@ pub struct ErrNeedWaitFilter;
 /// `.map` was called more than [`crate::MAX_MAP_SYSTEMS`] times.
 pub struct ErrTooManySystems;
 
+/// Direct emit named an event that is not a child of the current one.
+pub struct ErrNotChild;
+
 /// `Status` may leave `setup`.
 ///
 /// Blocking statuses do not implement this. The message names the status
@@ -33,6 +36,7 @@ pub struct ErrTooManySystems;
     label = "fix Descriptor::Status",
     note = "one Status for the whole chain (build, events, accessors, DI)"
 )]
+// Generics: `T` tip.
 pub trait PipelineOk<T> {}
 
 impl<T> PipelineOk<T> for Valid {}

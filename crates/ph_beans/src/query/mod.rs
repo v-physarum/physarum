@@ -13,7 +13,7 @@ mod schedule;
 mod setup;
 mod update;
 
-pub use args::{ArgsView, Claim};
+pub use args::{Claim, ClaimShape};
 pub use built::Built;
 pub use entry::Query;
 pub use init::Init;

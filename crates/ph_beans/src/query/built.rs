@@ -8,16 +8,19 @@ use crate::context::ContextTick;
 use crate::context::Ctx;
 use crate::context::CtxConfig;
 use crate::context::DefaultState;
+use crate::context::list::WalkStrategy;
 use crate::descriptor::Descriptor;
 use crate::descriptor::NeedBuild;
 use crate::descriptor::OpOk;
-use crate::descriptor::OpShape;
 use crate::descriptor::Valid;
 use crate::descriptor::live::AccSet;
+use crate::filter::eval::EmitMask;
+use crate::query::args::ClaimShape;
 use crate::query::init::Init;
 use crate::query::schedule::Drive;
 
 /// Replaces status on a concrete [`Ctx`] (hides `B`/`A`/`O`/`T` from [`CtxConfig`]).
+/// Generics: `S` status.
 #[doc(hidden)]
 pub trait SealStatus<S>: Sized {
     /// Context after the seal.
@@ -39,6 +42,7 @@ where
 }
 
 /// Config: replace status with `S`.
+/// Generics: `S` status.
 #[doc(hidden)]
 pub struct SetStatus<S>(pub(crate) PhantomData<S>);
 
@@ -56,7 +60,8 @@ where
 }
 
 /// Pipeline after `.build()`. Status is [`Valid`](crate::Valid).
-#[must_use = "the pipeline is ready to update"]
+/// Generics: `E` event, `C` context.
+#[must_use = "the pipeline is ready to emit"]
 pub struct Built<E, C> {
     context: C,
     _markers: PhantomData<E>,
@@ -84,11 +89,12 @@ pub trait BuildStep {
     fn build(self) -> Self::Out;
 }
 
+// Generics: `E` event, `C` context.
 impl<E, C> BuildStep for Init<E, C>
 where
     C: Context<Status = NeedBuild>,
     C::Bean: BeanInfo,
-    C::Args: OpShape<Status: OpOk>,
+    C::Args: ClaimShape<Status: OpOk>,
     SetStatus<Valid>: CtxConfig<C>,
 {
     type Out = Built<E, C::With<SetStatus<Valid>>>;
@@ -98,6 +104,7 @@ where
     }
 }
 
+// Generics: `E` event, `C` context.
 impl<E, C> Init<E, C> {
     /// Seals the pipeline. Status becomes [`Valid`](crate::Valid).
     pub fn build(self) -> <Self as BuildStep>::Out
@@ -121,12 +128,29 @@ where
     }
 }
 
+// Generics: `E` event, `C` context.
 impl<E, C> Built<E, C>
 where
     C: Context,
-    C::Tick: Drive,
 {
-    pub(crate) fn drive_maps(&mut self) {
-        self.context.tick_mut().drive();
+    pub(crate) fn drive<G: WalkStrategy + Copy>(&mut self, strategy: G)
+    where
+        C::Tick: Drive,
+    {
+        self.context.tick().drive(strategy);
+    }
+
+    pub(crate) fn defer_into(&mut self, bit: u32, mask: EmitMask)
+    where
+        C::Tick: Drive,
+    {
+        self.context.tick().defer_into(bit, mask);
+    }
+
+    pub(crate) fn take_scope(&mut self, bit: u32) -> EmitMask
+    where
+        C::Tick: Drive,
+    {
+        self.context.tick().take_scope(bit)
     }
 }

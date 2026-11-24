@@ -16,6 +16,7 @@ use super::list::List;
     label = "fix Descriptor::Status",
     note = "MAX_MAP_SYSTEMS = 16; split the pipeline or drop a map"
 )]
+// Generics: `E` entry.
 pub trait PushEntry<E> {
     /// The list with `E` appended.
     type Out;
@@ -30,6 +31,7 @@ pub trait PushEntry<E> {
     label = "fix Descriptor::Status",
     note = "MAX_MAP_SYSTEMS = 16; split the pipeline or drop a map"
 )]
+// Generics: `N` new entry.
 pub trait PushShape<N> {
     /// List after `N` is appended.
     type Out;
@@ -62,6 +64,7 @@ mod seal {
 }
 
 /// Appends `N` onto a short leaf. Only lengths 1..=6; sealed vs the 15→16 reshape.
+/// Generics: `N` new entry.
 #[doc(hidden)]
 pub trait AddItem<N>: seal::Cap6 {
     /// Leaf after `N` is appended.
@@ -78,6 +81,7 @@ impl<N, E0> AddItem<N> for (E0,) {
     }
 }
 
+// Generics: `N` new entry, `E0` slot 0, `E1` slot 1.
 impl<N, E0, E1> AddItem<N> for (E0, E1) {
     type Out = (E0, E1, N);
 
@@ -94,6 +98,7 @@ impl<N, E0, E1, E2> AddItem<N> for (E0, E1, E2) {
     }
 }
 
+// Generics: `N` new entry, `E0` slot 0, `E1` slot 1, `E2` slot 2, `E3` slot 3.
 impl<N, E0, E1, E2, E3> AddItem<N> for (E0, E1, E2, E3) {
     type Out = (E0, E1, E2, E3, N);
 
@@ -110,6 +115,7 @@ impl<N, E0, E1, E2, E3, E4> AddItem<N> for (E0, E1, E2, E3, E4) {
     }
 }
 
+// Generics: `N` new entry, `E0` slot 0, `E1` slot 1, `E2` slot 2, `E3` slot 3, `E4` slot 4, `E5` slot 5.
 impl<N, E0, E1, E2, E3, E4, E5> AddItem<N> for (E0, E1, E2, E3, E4, E5) {
     type Out = (E0, E1, E2, E3, E4, E5, N);
 
@@ -128,6 +134,7 @@ impl<N> PushShape<N> for Leaf<()> {
     }
 }
 
+// Generics: `N` new entry, `T` tick / type / tip.
 impl<N, T> PushShape<N> for Leaf<T>
 where
     T: AddItem<N>,
@@ -148,6 +155,7 @@ impl<N, E0, E1, E2, E3, E4, E5, E6> PushShape<N> for Leaf<(E0, E1, E2, E3, E4, E
     }
 }
 
+// Generics: `N` new entry, `E0` slot 0, `E1` slot 1, `E2` slot 2, `E3` slot 3, `E4` slot 4, `E5` slot 5, `E6` slot 6, `E7` slot 7.
 impl<N, E0, E1, E2, E3, E4, E5, E6, E7> PushShape<N> for Leaf<(E0, E1, E2, E3, E4, E5, E6, E7)> {
     type Out = (List<(E0, E1, E2, E3, E4, E5, E6, E7)>, Grow<(N,)>);
 
@@ -173,6 +181,7 @@ where
 
 // --- Wide 15→16 ----------------------------------------------------------------
 
+// Generics: `N` new entry, `E0` slot 0, `E1` slot 1, `E2` slot 2, `E3` slot 3, `E4` slot 4, `E5` slot 5, `E6` slot 6, `E7` slot 7, `R0` rest group 0, `R1` rest group 1, `R2` rest group 2, `R3` rest group 3, `R4` rest group 4, `R5` rest group 5, `R6` rest group 6.
 impl<N, E0, E1, E2, E3, E4, E5, E6, E7, R0, R1, R2, R3, R4, R5, R6> PushShape<N>
     for (
         List<(E0, E1, E2, E3, E4, E5, E6, E7)>,
