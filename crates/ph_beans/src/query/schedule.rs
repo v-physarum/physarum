@@ -7,7 +7,7 @@
 //! Path gates use the same const ([`crate::Gate::path_plan`]).
 
 use crate::context::Pipe;
-use crate::context::list::{ExactDrive, Invoke, Lane, WalkOp, WalkStrategy};
+use crate::context::list::{ExactDrive, Hand, Lane, WalkOp, WalkStrategy};
 use crate::context::maps::MapList;
 use crate::filter::eval::EmitMask;
 
@@ -15,10 +15,10 @@ use crate::filter::eval::EmitMask;
 impl<N, E, S> MapList<N, E, S> {
     pub(crate) fn drive<G: WalkStrategy + Copy>(&self, strategy: G)
     where
-        N: Invoke + ExactDrive,
+        N: Hand + ExactDrive,
     {
         let lane = Lane { root: &self.entries, scopes: &self.scopes };
-        self.entries.invoke(WalkOp { strategy, lane: &lane });
+        self.entries.hand(WalkOp { strategy, lane: &lane });
     }
 
     pub(crate) fn defer_into(&self, bit: u32, mask: EmitMask) {
@@ -44,7 +44,7 @@ pub(crate) trait Drive {
 
 impl<I, N, E, S> Drive for Pipe<I, MapList<N, E, S>>
 where
-    N: Invoke + ExactDrive,
+    N: Hand + ExactDrive,
 {
     fn drive<G: WalkStrategy + Copy>(&self, strategy: G) {
         self.list.drive(strategy);

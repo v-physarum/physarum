@@ -1,10 +1,9 @@
 //! Hierarchical emit walk: DELTA gates + strategy structs.
 //!
 //! Design **rule 8**: [`PathStrategy`] is the trait; [`Sparse`] / [`Dense`] are
-//! the variants; siblings are a flat leaf ≤8 (often inside [`List`](crate::List));
-//! carriers share [`Invoke`](crate::context::list::Invoke); [`PathNode`] is one blanket.
-//! Beside flat [`Invoke`](crate::context::list::Invoke) /
-//! [`Drive`](crate::query::schedule::Drive).
+//! the variants; siblings are a flat leaf ≤8 (often inside [`List`](crate::List)).
+//! The tuple list is [`Invoke`](crate::context::list::Invoke). [`PathNode`] is the
+//! gate and map-leaf trait, beside [`Drive`](crate::query::schedule::Drive).
 //!
 //! Each gate intersects [`PathStep::DELTA`] with the emit const `M::MASK`.
 //! A miss deletes the subtree. A hit runs children with no runtime bit test
@@ -12,7 +11,7 @@
 
 use core::marker::PhantomData;
 
-use crate::context::list::{Invoke, Visit};
+use crate::context::list::{Grow, Hand, Invoke, Leaf, List, Visit};
 use crate::context::maps::MapEntry;
 use crate::filter::EmitMask;
 use crate::filter::eval::{Collect, ConstMatch, EmitBit, MatchEmit};
@@ -132,10 +131,11 @@ where
     where
         P: PathStep,
         St: PathStrategy,
-        C: Invoke,
+        C: Hand,
     {
-        let _ = self;
-        gate.path_plan::<M>();
+        if const { M::MASK.contains(P::DELTA) } {
+            gate.children.hand(PathTag::<St, M>(PhantomData));
+        }
     }
 }
 
@@ -174,14 +174,14 @@ where
     }
 }
 
-// Generics: `P` path step, `S` strategy, `C` children.
-impl<P, S, C> Invoke for Gate<P, S, C>
+// Gate stays on [`PathNode`] and [`Hand`]. It is not an [`Invoke`] tuple list.
+impl<P, S, C> Hand for Gate<P, S, C>
 where
     P: PathStep,
     S: PathStrategy,
-    C: Invoke,
+    C: Hand,
 {
-    fn invoke<Op>(&self, op: Op)
+    fn hand<Op>(&self, op: Op)
     where
         Op: Copy + Visit,
     {
@@ -189,8 +189,66 @@ where
     }
 }
 
-// One blanket: every [`Invoke`] node is a path node. The op is [`PathTag`].
-// Generics: `S` strategy, `M` emit tree, `T` node ([`Invoke`]).
+impl<P, S, C, St, M> PathNode<St, M> for Gate<P, S, C>
+where
+    P: PathStep,
+    S: PathStrategy,
+    St: PathStrategy,
+    M: Collect,
+    C: PathNode<S, M>,
+{
+    fn visit(&self) {
+        self.path_plan::<M>();
+    }
+}
+
+// A map leaf stays on [`PathNode`]. The strategy's `run_map` is the body.
+impl<S, M, F, H> PathNode<S, M> for MapEntry<F, H>
+where
+    S: PathStrategy,
+    M: Collect,
+    F: MatchEmit,
+    H: Fn(),
+{
+    fn visit(&self) {
+        S::run_map::<M, F, H>(&self.handler);
+    }
+}
+
+impl<S, M, I> PathNode<S, M> for List<I>
+where
+    S: PathStrategy,
+    M: Collect,
+    I: PathNode<S, M>,
+{
+    fn visit(&self) {
+        self.0.visit();
+    }
+}
+
+impl<S, M, I> PathNode<S, M> for Leaf<I>
+where
+    S: PathStrategy,
+    M: Collect,
+    I: PathNode<S, M>,
+{
+    fn visit(&self) {
+        self.0.visit();
+    }
+}
+
+impl<S, M, I> PathNode<S, M> for Grow<I>
+where
+    S: PathStrategy,
+    M: Collect,
+    I: PathNode<S, M>,
+{
+    fn visit(&self) {
+        self.0.visit();
+    }
+}
+
+// The tuple list is the only [`Invoke`] node. Visiting it places [`PathTag`].
 impl<S, M, T> PathNode<S, M> for T
 where
     S: PathStrategy,
