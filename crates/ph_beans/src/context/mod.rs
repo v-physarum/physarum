@@ -2,6 +2,7 @@
 
 use core::marker::PhantomData;
 
+use crate::core::config::OfConfig;
 use crate::descriptor::Descriptor;
 use crate::descriptor::live::AccSet;
 
@@ -10,16 +11,15 @@ mod event_buf;
 pub(crate) mod list;
 pub mod maps;
 mod patch;
-mod push;
 pub(crate) mod scope;
 mod start;
 pub mod tick;
 
 pub use direct::{ChildOf, Direct, DirectFn, PushInner, WithChild};
 pub use event_buf::EventBuf;
-pub use list::{CarrierDesc, ExactDrive, Grow, Leaf, List};
+pub use list::{CarrierDesc, End, ExactDrive, Full, Group, Head, List};
 pub use maps::{MAX_MAP_SYSTEMS, MapEntry, MapList};
-pub use patch::CtxConfig;
+pub use patch::{ApplyCfg, CtxConfig};
 #[doc(hidden)]
 pub use scope::{ScopeBufs, ScopeHost};
 pub use start::StartDesc;
@@ -51,7 +51,7 @@ where
 
 /// The context half of a descriptor: which bean, which args, which systems.
 ///
-/// The next tip is always [`With`](Context::With)`<G>` for a [`CtxConfig`].
+/// The next tip is [`OfConfig`]`<`[`ApplyCfg`]`<G, Self>>`.
 /// There is no separate `WithArgs` / `WithStatus` / `WithTick` GAT.
 pub trait Context: Descriptor + Sized {
     /// Bean the pipeline builds.
@@ -60,7 +60,7 @@ pub trait Context: Descriptor + Sized {
     type Args;
     /// Systems stored for this pipeline.
     type Tick: ContextTick;
-    /// Context after `G` — [`CtxConfig::Out`].
+    /// Context after `G` — [`OfConfig`]`<`[`ApplyCfg`]`<G, Self>>`.
     type With<G: CtxConfig<Self>>: Context;
 
     /// Borrows the systems.
@@ -80,7 +80,7 @@ where
     type Bean = B;
     type Args = A;
     type Tick = T;
-    type With<G: CtxConfig<Self>> = G::Out;
+    type With<G: CtxConfig<Self>> = OfConfig<ApplyCfg<G, Self>>;
 
     fn tick(&self) -> &Self::Tick {
         &self.tick

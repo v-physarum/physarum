@@ -5,8 +5,11 @@ use core::marker::PhantomData;
 use crate::context::ContextTick;
 use crate::context::Pipe;
 use crate::context::direct::{DirectFn, TipEvent};
-use crate::context::push::PushEntry;
+use crate::core::list::PushEntry;
+
+use crate::context::list::EmptySlots;
 use crate::context::scope::ScopeBufs;
+use crate::core::config::Config;
 
 /// Hard cap on `.map` handlers in one pipeline.
 pub const MAX_MAP_SYSTEMS: usize = 16;
@@ -33,9 +36,8 @@ impl<F, H> MapEntry<F, H> {
 
 /// Shared [`List`](super::list::List) of entries, the emit tree, and the filter in scope.
 ///
-/// `N` is `List<Leaf<()>>` or a longer [`List`](super::list::List): one leaf
-/// through eight entries, then groups (eight plus the rest, and four leaves of
-/// four at sixteen). It is not a cons spine.
+/// `N` is a [`List`](super::list::List): a [`Head`](super::list::Head) of closed
+/// [`Full`](super::list::Full) groups plus one open slot. It is not a cons spine.
 /// Generics: `N` entries list, `E` event tip, `S` scope status.
 pub struct MapList<N, E, S> {
     pub(crate) entries: N,
@@ -43,13 +45,13 @@ pub struct MapList<N, E, S> {
     _markers: PhantomData<(E, S)>,
 }
 
-impl MapList<super::list::List<super::list::Leaf<()>>, (), ()> {
-    pub(crate) const fn empty() -> Self {
-        Self {
-            entries: super::list::List(super::list::Leaf(())),
-            scopes: ScopeBufs::empty(),
-            _markers: PhantomData,
-        }
+// Generics: `L` entries ([`Config::Type`](crate::core::config::Config::Type)).
+impl<L> MapList<L, (), ()>
+where
+    EmptySlots: Config<Type = L>,
+{
+    pub(crate) fn empty() -> Self {
+        Self { entries: EmptySlots::empty(), scopes: ScopeBufs::empty(), _markers: PhantomData }
     }
 }
 

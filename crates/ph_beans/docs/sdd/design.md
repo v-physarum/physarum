@@ -555,7 +555,38 @@ Layout of `crates/ph_beans/src/`. Keep the surface readable: **small files**, **
    }
    ```
 
-(**Rule 23** wins: never duplicate a walk, accessor, or operator list. Rule 8: **strategy trait + generalize** — no matrices / no per-mode carrier copies. Rules 8–9: extractors + `CtxConfig` / shallow assoc. Rule 10: role names + comment. Rules 11–16: lists / push / meta / phantom / safety. Rule 17: trait-head bounds. Rule 18: pure systems. Rule 19: no silent API shape changes. Rule 20: `ClaimDesc` blankets for claim wrappers. Rule 21: domain newtypes, not raw / alias. Rule 22: consts on the owning type.)
+24. **A type in a signature fits on one line** — `type` aliases, associated types, and return types are a single line at `max_width` (100). If rustfmt would break the type, **do not wrap it**. Name the inner part on its owner (a descriptor associated type) until every signature type fits. A wrapped `Ctx<…>` / `Pipe<…>` / `MapList<…>` is a failed signature.
+
+   ```rust
+   // Forbidden — the type does not fit, so it was wrapped
+   type Out = Ctx<
+       H,
+       Live<()>,
+       NeedInit,
+       Pipe<NoSystems, MapList<EmptySlots::List, (), ()>>,
+   >;
+
+   // Required — each type is one line; the long piece has its own name
+   type Type = Pipe<NoSystems, OfConfig<EmptyMap>>;
+   type Out = Ctx<H, Live<()>, NeedInit, OfConfig<NoSystems>>;
+   ```
+
+25. **`PhantomData` is only a struct field** — it records a type the struct does not store. Do **not** write `let _ = PhantomData::<T>` (or the same inside a tuple) to mark a generic as used. A parameter that appears in the signature is already used. If the body does not read it, leave it unread.
+
+   ```rust
+   // Forbidden — dummy value so a generic looks used
+   fn apply(self) -> Self::Out {
+       let _ = PhantomData::<H>;
+       Ctx::new(…)
+   }
+
+   // Required — the parameter is named by `Out`; the body does not mention it
+   fn apply(self) -> Self::Out {
+       Ctx::new(…)
+   }
+   ```
+
+(**Rule 23** wins: never duplicate a walk, accessor, or operator list. Rule 8: **strategy trait + generalize** — no matrices / no per-mode carrier copies. Rules 8–9: extractors + `CtxConfig` / shallow assoc. Rule 10: role names + comment. Rules 11–16: lists / push / meta / phantom / safety. Rule 17: trait-head bounds. Rule 18: pure systems. Rule 19: no silent API shape changes. Rule 20: `ClaimDesc` blankets for claim wrappers. Rule 21: domain newtypes, not raw / alias. Rule 22: consts on the owning type. Rule 24: a signature type fits on one line. Rule 25: `PhantomData` is only a struct field.)
 
 ### How pieces talk
 

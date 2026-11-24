@@ -1,13 +1,11 @@
-//! Shared list carrier.
+//! Map walk over the shared list in [`crate::core::list`].
 //!
-//! A leaf is a tuple of at most eight items. Past that, items sit in groups
-//! of those leaves. Push and the map walk both use this carrier.
-//!
-//! The trait and the carrier cannot both be named `List` (E0428). The carrier
-//! is [`List`]. [`Invoke`] is only the tuple list (`()` and lengths 1..=8).
-//! [`MapEntry`](crate::MapEntry), [`MapAt`](super::maps::MapAt), [`Gate`](crate::Gate), and the
-//! carriers hand the visitor through [`Hand`] and do not implement [`Invoke`].
-//! Append is [`PushShape`](super::push::PushShape).
+//! [`Invoke`] is only the tuple list (`()` and lengths 1..=8).
+//! [`MapEntry`](crate::MapEntry), [`MapAt`](super::maps::MapAt), [`Gate`](crate::Gate),
+//! [`Group`], [`Full`], [`Head`], and [`End`] hand the visitor through [`Hand`]
+//! and do not implement [`Invoke`].
+
+pub use crate::core::list::{EmptySlots, End, Full, Group, Head, List};
 
 use crate::context::direct::{Direct, DirectFn, TipEvent};
 use crate::context::maps::{MapAt, MapEntry};
@@ -15,38 +13,11 @@ use crate::context::scope::ScopeBufs;
 use crate::filter::eval::{Collect, ConstMatch, EmitMask, MatchEmit};
 use crate::filter::{Gate, PathStep, PathStrategy};
 
-/// Tuple of at most eight items, or a tuple of such groups.
-/// Generics: `I` inner payload.
-pub struct List<I>(pub(crate) I);
-
-// Generics: `I` inner payload.
-impl<I> List<I> {
-    /// Wraps a flat leaf or group payload.
-    #[must_use]
-    pub const fn new(inner: I) -> Self {
-        Self(inner)
-    }
-}
-
-/// Flat leaf while the list is growing through lengths 0..=8.
-///
-/// Distinct from a bare tuple so [`PushShape`](super::push::PushShape) can use
-/// opaque element params (`E0`, …) without overlapping `(List, Grow)`.
-pub struct Leaf<I>(pub(crate) I);
-
-/// Second group while the list is growing through lengths 9..=15.
-///
-/// Distinct from [`List`] so `(List<H>, Grow<R>)` can have one
-/// [`PushShape`](super::push::PushShape) blanket (`R: AddItem`) without
-/// overlapping the sixteen-item reshape (E0119). At sixteen the shape
-/// becomes four [`List`] leaves again.
-/// Generics: `I` inner payload.
-pub struct Grow<I>(pub(crate) I);
-
 /// Newtype list carrier: payload is [`Inner`](CarrierDesc::Inner).
 ///
-/// [`List`] / [`Leaf`] / [`Grow`] set this once ([`ClaimDesc`](crate::ClaimDesc)
-/// style). They do not implement [`Invoke`]. [`Hand`] forwards to [`Inner`](Self::Inner).
+/// [`List`], [`Head`], [`Group`], [`Full`], and [`End`] set this once
+/// ([`ClaimDesc`](crate::ClaimDesc) style). They do not implement [`Invoke`].
+/// [`Hand`] forwards to [`Inner`](Self::Inner).
 #[doc(hidden)]
 pub trait CarrierDesc {
     /// Inner payload.
@@ -60,25 +31,42 @@ impl<I> CarrierDesc for List<I> {
     type Inner = I;
 
     fn carrier_inner(&self) -> &I {
-        &self.0
+        self.inner()
     }
 }
 
-// Generics: `I` inner payload.
-impl<I> CarrierDesc for Leaf<I> {
-    type Inner = I;
+impl CarrierDesc for End {
+    type Inner = Self;
 
-    fn carrier_inner(&self) -> &I {
-        &self.0
+    fn carrier_inner(&self) -> &Self {
+        self
     }
 }
 
-// Generics: `I` inner payload.
-impl<I> CarrierDesc for Grow<I> {
+// Generics: `I` items.
+impl<I> CarrierDesc for Group<I> {
     type Inner = I;
 
     fn carrier_inner(&self) -> &I {
-        &self.0
+        self.inner()
+    }
+}
+
+// Generics: `I` items.
+impl<I> CarrierDesc for Full<I> {
+    type Inner = I;
+
+    fn carrier_inner(&self) -> &I {
+        self.inner()
+    }
+}
+
+// Generics: `I` closed groups.
+impl<I> CarrierDesc for Head<I> {
+    type Inner = I;
+
+    fn carrier_inner(&self) -> &I {
+        self.inner()
     }
 }
 
@@ -103,7 +91,7 @@ where
 {
     fn drive_exact<P: Collect>(&self, scopes: &ScopeBufs) {
         let lane = Lane { root: self, scopes };
-        self.0
+        self.inner()
             .hand(WalkOp { strategy: Exact::<P>(core::marker::PhantomData), lane: &lane });
     }
 }
@@ -181,7 +169,7 @@ impl<P: Collect> WalkStrategy for Exact<P> {
     }
 
     fn enter_at<F: Kept>(&self) -> bool {
-        let _ = (self, core::marker::PhantomData::<F>);
+        let _ = self;
         false
     }
 }
@@ -317,25 +305,46 @@ impl<I: Hand> Hand for List<I> {
     where
         Op: Copy + Visit,
     {
-        self.0.hand(op);
+        self.inner().hand(op);
     }
 }
 
-impl<I: Hand> Hand for Leaf<I> {
+impl Hand for End {
     fn hand<Op>(&self, op: Op)
     where
         Op: Copy + Visit,
     {
-        self.0.hand(op);
+        let _ = (self, op);
     }
 }
 
-impl<I: Hand> Hand for Grow<I> {
+// Generics: `I` items ([`Hand`]).
+impl<I: Hand> Hand for Group<I> {
     fn hand<Op>(&self, op: Op)
     where
         Op: Copy + Visit,
     {
-        self.0.hand(op);
+        self.inner().hand(op);
+    }
+}
+
+// Generics: `I` items ([`Hand`]).
+impl<I: Hand> Hand for Full<I> {
+    fn hand<Op>(&self, op: Op)
+    where
+        Op: Copy + Visit,
+    {
+        self.inner().hand(op);
+    }
+}
+
+// Generics: `I` closed groups ([`Hand`]).
+impl<I: Hand> Hand for Head<I> {
+    fn hand<Op>(&self, op: Op)
+    where
+        Op: Copy + Visit,
+    {
+        self.inner().hand(op);
     }
 }
 

@@ -3,12 +3,14 @@
 use core::marker::PhantomData;
 
 use crate::bean::BeanInfo;
+use crate::context::ApplyCfg;
 use crate::context::Context;
 use crate::context::ContextTick;
 use crate::context::Ctx;
 use crate::context::CtxConfig;
 use crate::context::DefaultState;
 use crate::context::list::WalkStrategy;
+use crate::core::config::OfConfig;
 use crate::descriptor::Descriptor;
 use crate::descriptor::NeedBuild;
 use crate::descriptor::OpOk;
@@ -92,12 +94,15 @@ pub trait BuildStep {
 // Generics: `E` event, `C` context.
 impl<E, C> BuildStep for Init<E, C>
 where
-    C: Context<Status = NeedBuild>,
+    C: Context<
+            Status = NeedBuild,
+            With<SetStatus<Valid>> = OfConfig<ApplyCfg<SetStatus<Valid>, C>>,
+        >,
     C::Bean: BeanInfo,
     C::Args: ClaimShape<Status: OpOk>,
     SetStatus<Valid>: CtxConfig<C>,
 {
-    type Out = Built<E, C::With<SetStatus<Valid>>>;
+    type Out = Built<E, OfConfig<ApplyCfg<SetStatus<Valid>, C>>>;
 
     fn build(self) -> Self::Out {
         Built::new(self.into_context().configure(SetStatus(PhantomData)))

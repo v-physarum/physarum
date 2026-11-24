@@ -47,6 +47,8 @@ Aligned with `design.md` rules. Prefer these IDs in review notes. **R23 outranks
 | **R21** Domain values | Named **struct** + inherent methods (`EmitMask::or` / `contains`). | Raw `u128`/`u32` as the domain value; `type Alias = u128`. |
 | **R22** Consts | Associated const on the owning type (`EmitMask::BITS`). | Free `EMIT_BITS` beside the type. |
 | **R23** No copies | **One** descriptor names an operator set (`ClaimForm`, `ClaimDesc`, `CarrierDesc`, `FilterDesc`). The next trait is **one blanket**. Event state is `Get<State<Ev>>` / `Mut<State<Ev>>`, forwarded to `Get`/`Mut` of `EventBuf`. This row wins over the others. | A second copy of `()` / `Get` / `Mut` / `Dyn` / `And` on the next trait; a `StateGet` / `StateMut` accessor; any new accessor that only repeats an existing one. |
+| **R24** One-line types | A type in a signature (`type` alias, associated type, return type) fits on **one** line at `max_width`. If it would wrap, name the inner piece on its owner until it fits. | Wrapping `Ctx<…>` / `Pipe<…>` / `MapList<…>` across lines instead of changing the signature. |
+| **R25** PhantomData | `PhantomData` is a **struct field** for a type the struct does not store. | `let _ = PhantomData::<T>` (or inside a discarded tuple) to pretend a generic is used. |
 
 Also always: Borrowing (`At`/`Ix*`/`TakeMany`); no API `type` aliases; no god modules; one-crate PRs (`ph_beans`); push only when asked.
 

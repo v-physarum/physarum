@@ -11,7 +11,7 @@
 
 use core::marker::PhantomData;
 
-use crate::context::list::{Grow, Hand, Invoke, Leaf, List, Visit};
+use crate::context::list::{Hand, Invoke, List, Visit};
 use crate::context::maps::MapEntry;
 use crate::filter::EmitMask;
 use crate::filter::eval::{Collect, ConstMatch, EmitBit, MatchEmit};
@@ -88,7 +88,6 @@ impl PathStrategy for Dense {
         F: MatchEmit,
         H: Fn(),
     {
-        let _ = PhantomData::<(M, F)>;
         handler();
     }
 }
@@ -222,29 +221,7 @@ where
     I: PathNode<S, M>,
 {
     fn visit(&self) {
-        self.0.visit();
-    }
-}
-
-impl<S, M, I> PathNode<S, M> for Leaf<I>
-where
-    S: PathStrategy,
-    M: Collect,
-    I: PathNode<S, M>,
-{
-    fn visit(&self) {
-        self.0.visit();
-    }
-}
-
-impl<S, M, I> PathNode<S, M> for Grow<I>
-where
-    S: PathStrategy,
-    M: Collect,
-    I: PathNode<S, M>,
-{
-    fn visit(&self) {
-        self.0.visit();
+        self.inner().visit();
     }
 }
 
