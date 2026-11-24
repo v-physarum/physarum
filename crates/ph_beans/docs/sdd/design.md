@@ -206,10 +206,10 @@ Layout of `crates/ph_beans/src/`. Keep the surface readable: **small files**, **
 
    ```rust
    // Forbidden
-   FreshInit::install_default(self.tick, <B as BeanInfo>::State::default())
+   self.tick.install_config(DefaultInit { state: <B as BeanInfo>::State::default() })
 
-   // Required
-   FreshInit::install_default(self.tick, Default::default())
+   // Required — one `FreshInit::Config` GAT; the slot wrapper lives in the config
+   self.tick.install_config(DefaultInit { state: Default::default() })
    ```
 
    **Target shape** for ordinary bounds (like root `Args` + `TakeMany` / `At`):
@@ -318,7 +318,7 @@ Layout of `crates/ph_beans/src/`. Keep the surface readable: **small files**, **
 
    **Carriers for coherence:** `Leaf` for flat 0..=8; `Grow` for the growing second group. **`AddItem` is sealed** (only lengths 1..=6) so it cannot apply to a 7-tuple and collide with the 15→16 reshape. Opaque `E0`… / `N` only — no domain type in the push arity table.
 
-14. **Meta traits are frozen** — [`BeanInfo`], [`EventInfo`], [`ProxyInfo`] (and any trait this rule later lists) hold **only** their declared associated types / consts. Do **not** add methods, associated types, supertraits, or default bodies to them without **owner approval**. Pipeline entry and steps live on **separate** traits (`Query`, `Setup`, `InjectResourcesStep`, …). Context tip at start lives on [`StartDesc`], not on `BeanInfo`.
+14. **Meta traits are frozen** — [`BeanInfo`] and [`EventInfo`] (and any trait this rule later lists) hold **only** their declared associated types / consts. Do **not** add methods, associated types, supertraits, or default bodies to them without **owner approval**. Pipeline entry and steps live on **separate** traits (`Query`, `Setup`, `InjectResourcesStep`, …). Context tip at start lives on [`StartDesc`], not on `BeanInfo`. The proxy gate lives on [`BeanInfo`] as one tuple, `Gate = (proxy, link, chain)`. Those three parts are read off the tuple.
 
    ```rust
    // Forbidden — growing BeanInfo with entry / tip spelling
@@ -328,7 +328,7 @@ Layout of `crates/ph_beans/src/`. Keep the surface readable: **small files**, **
    }
 
    // Required — meta stays data; Query + StartDesc own the tip
-   trait BeanInfo { type Provides; type Injects; type Beans; type State; }
+   trait BeanInfo { type Provides; type Injects; type Beans; type State; type Gate; }
    trait StartDesc { type Ctx: Context<Bean = Self>; fn start_ctx() -> Self::Ctx; }
    trait Query { type Out; fn query() -> Self::Out; } // Out = Init<(), Ctx>
    ```
@@ -458,7 +458,7 @@ Proc-macro / derive (when owner-allowed under rule 6) **emits only** these trait
 | --- | --- | --- |
 | **Module** (`#[config(type = module)]`) | [`BeanInfo`], one [`At`]`<P>` per entry in `Beans` | `Query`, `Setup`, `StartDesc`, `Module`, `FromParent`, pipeline steps, … |
 | **Event** | [`BeanInfo`] + [`EventInfo`] (`Parents`, `ON`); if `proxy = …`, also the proxied link (see **Proxy**) | same exclusion |
-| **Proxy** (`#[config(type = proxy)]`) | [`BeanInfo`] + [`ProxyInfo`] (+ `At` for its `Beans` / provides) | bare inject of the proxy; pipeline steps |
+| **Proxy** (`#[config(type = proxy)]`) | [`BeanInfo`] (`Link` is `Get<Self>` or `Mut<Self>`, `Chain` is [`Stop`] or a tuple of outer proxies) + `At` for its `Beans` / provides | bare inject of the proxy; pipeline steps |
 
 Manual impls in the prototype must match this surface so derive is a drop-in.
 
@@ -470,6 +470,7 @@ Manual impls in the prototype must match this surface so derive is a drop-in.
 | `Injects` | ordered list from `#[inject(…)]` — **concrete bean keys** (a cast `Bean::T as Trait` still records `Bean`, not the trait; see **Inject `&dyn`**) |
 | `Beans` | **`Provides` then `Injects`** (stable concat of concrete keys). |
 | `State` | module’s owned state type (field / attribute as the derive defines) |
+| `Gate` | `(proxy, link, chain)`. `proxy` is `Proxy<Self>` or a named proxy. `link` is `Get<Self>` or `Mut<Self>`. `chain` is [`Stop`], or the outer proxies, nearest first |
 
 **`At` (module):** for each concrete `P` at position `n` in `Beans`, emit `impl At<P> for Module { type Ix = IxN; }`. Membership for claims is `Provides ∪ Injects` (a cast inject still requires the parent to provide/inject that concrete `Bean`). Duplicate concrete `P` is a derive error.
 
@@ -482,13 +483,14 @@ impl BeanInfo for App {
     type Injects = ();
     type Beans = (Logic,); // Provides ++ Injects
     type State = …;
+    type Gate = (Proxy<App>, Get<App>, Stop);
 }
 impl At<Logic> for App {
     type Ix = Ix0;
 }
 
 // Event — derive emits only:
-impl BeanInfo for Update { type Provides = (); type Injects = (); type Beans = (); type State = (); }
+impl BeanInfo for Update { type Provides = (); type Injects = (); type Beans = (); type State = (); type Gate = (Proxy<Update>, Get<Update>, Stop); }
 impl EventInfo for Update {
     type Parents = (); // or (Main,) / (Main, Other)
 }
@@ -513,16 +515,22 @@ struct GameTick; // event (or other bean) wrapped by Update
 
 | Piece | Role |
 | --- | --- |
-| `#[config(type = proxy)]` | This type **is** a proxy. Emits [`BeanInfo`] + [`ProxyInfo`]. May `#[provide]` / `#[inject]` like a module surface. |
-| `proxy = Update::T` on the target | Target bean/event is **proxied by** `Update`. Marker strength follows `T` / `MUT`. |
-| [`ProxyInfo`] | Meta (rule 14): data-only link proxy ↔ target(s). Exact assoc names TBD with owner; do not grow without OK. |
+| `#[config(type = proxy)]` | This type **is** a proxy. Emits [`BeanInfo`]. Its gate is `(Proxy<Self>, Get<Self>, Stop)`, or `Mut<Self>` in the link slot, or outer proxies in the chain slot. May `#[provide]` / `#[inject]` like a module surface. |
+| `proxy = Update::T` on the target | Target bean/event is **proxied by** `Update`. The target's gate is `(Update, Get<Self>, Stop)`. Marker strength is the proxy's own link. |
+| [`BeanInfo::Gate`] | The one tuple `(proxy, link, chain)`. `proxy` is [`Proxy<Self>`] or a named proxy. `link` is `Get<Self>` or `Mut<Self>`. `chain` is [`Stop`], or the outer proxies, nearest first (`(Mid, Outer)`). [`LevelDesc::Rows`] is the direct proxy plus that chain, as one `List<Leaf<...>>`. |
+| [`Proxy`]<`B`> | The proxy a bean or event uses when it has no `proxy = ...`. Gate `(Proxy<Proxy<B>>, Get<Proxy<B>>, Stop)`, no provides, no parent events. |
+| [`Proxied`] | Blanket for every [`BeanInfo`]. `Link` is the link element of the wrapping proxy's gate: `Get<Proxy<Self>>`, or the named proxy's `Get` / `Mut`. |
 
 **Rules:**
 
 1. **Cannot inject the proxy alone** — `Update::T` / `Update::MUT` as a claim / `#[inject(Update::…)]` / `.inject_resources(Update::T)` is a **compile error** (Descriptor / `FromParent` / claim gate). The proxy is not a free-standing inject key.
-2. **Inject the target → proxy comes as wrapper** — injecting the ordinary proxied bean (`GameTick`, …) **defaults** to injecting through its proxy: the claim/view is a **wrapper** (proxy around the bean), not a bare target-only slot. Call sites still name the **bean** (`GameTick::T`), not the proxy.
-3. **Target sees proxy providers** — a bean that has a proxy has access to that proxy’s **`Provides`** (union into the target’s usable surface / `At` membership for those beans), as if the proxy’s provides were available while working under the target.
+2. **Inject the target → proxy comes as wrapper** — injecting the ordinary proxied bean (`GameTick`, …) **defaults** to injecting through its proxy: the stored claim is a **list** of the proxy levels and then the bean, not a bare target-only slot. A chain is one leaf, nearest config first: `List<Leaf<(Inner, Mid, Outer, Get<T>)>>`. Call sites still name the **bean** (`GameTick::T`), not the proxy. The system argument stays the target reference; each proxy forwards it.
+3. **Target sees proxy providers** — a bean that has a proxy has access to that proxy’s **`Provides`**, and to the provides of every outer proxy in the chain (union into the target’s usable surface / `At` membership for those beans). The claim asks [`At`] on one [`Surface`] of the proxy list and the module list. That [`At`] forwards to the inner structure that already has [`At`] (a proxy must also list the bean in `Provides`). A blanket `impl At<S> for Target` is not expressible next to hand-written [`At`] impls (coherence). Two inners that both [`At`] the same bean stay ambiguous: the forward does not pick one. A bean that is an item of the module's `Beans` and of a proxy's `Provides` fails `.inject_resources`: `bean is already on the proxy`.
 4. **Emit from proxy → bean** — from the proxy you can **reach the proxied bean via emit** (proxy emit / schedule path activates the target). Exact emit sugar stays on the emit / event channel; the proxy does not replace `EventInfo::Parents`.
+5. **Default proxy** — a bean or event with no `proxy = ...` uses [`Proxy`]. Its gate starts with `Proxy<Self>`, and [`Proxied::Link`] is `Get` of that type. A named proxy puts that type first in the gate, and the link is that proxy's `Get` or `Mut`. Injection, init, and scheduling go through it the same way. The default proxy adds no provides and no parent events.
+6. **Init goes through the proxy** — the init stage ([`Init`] / [`InitStateStep`] / `init_state` / `init_state_default`) of a proxied bean runs through its whole proxy chain, outer then inner. The stored handler is `Fwd` of the level list. The direct proxy produces default state. [`Update`] stays on [`Built`] only (rule 17).
+7. **Proxy events apply to the target** — [`EventInfo`], `Parents`, and emit/schedule wiring on any proxy in the chain also cover the proxied bean (an explicit proxy or [`Proxy`]). This does **not** write those parents into the target's [`EventInfo::Parents`].
+8. **Proxies are multi-level** — a proxy may itself declare `proxy = ...`. The levels are the chain slot of `Gate`, nearest outer first. The attribute form is `#[config(proxy = Cfg0::T << Cfg1::T)]`: `Cfg0` is the direct proxy, each `<<` names the next outer config, and [`Corresponds`] rejects a route that is not those levels. Injecting any proxy in the chain alone is still a **compile error** (proxy types are not injectable beans). An explicit outermost proxy that names no further proxy ends the chain with `Stop`. [`Proxy`] is not added outside that chain.
 
 ```rust
 // Forbidden — inject proxy by itself
@@ -532,6 +540,10 @@ struct GameTick; // event (or other bean) wrapped by Update
 // Required — inject the bean; proxy wraps by default
 #[inject(GameTick::T)]   // wrapper: Update around GameTick
 .inject_resources(GameTick::T)
+
+// A chain is one leaf, nearest config first. The default proxy is not added outside it.
+// #[config(proxy = Inner::T << Mid::T << Outer::T)]
+// List<Leaf<(Inner, Mid, Outer, Get<Bean>)>>
 
 // Target may use beans from Update’s #[provide(…)]
 // From Update’s pipeline / emit path → activate GameTick
@@ -662,7 +674,7 @@ trait DynView<T> { type Shared<'a>; … }  // keep marker-only
 struct State { p: Box<dyn Painter> }     // rule 16
 ```
 
-Derive still emits only `BeanInfo` / `At` / `EventInfo` / `ProxyInfo` as listed, plus the **`DynView` marker impl** for `#[config(type = dyn)]` traits (and cast encoding in `Injects`).
+Derive still emits only `BeanInfo` / `At` / `EventInfo` as listed, plus the **`DynView` marker impl** for `#[config(type = dyn)]` traits (and cast encoding in `Injects`). A proxy's `Link` and `Chain` are fields of that `BeanInfo` impl.
 
 ---
 
@@ -1120,7 +1132,7 @@ Derive (or manual impl) gives each event **only** `BeanInfo` + `EventInfo { type
 
 | Rule | Check | On failure |
 | --- | --- | --- |
-| Nested `On<Child, …>` under `On<Parent, …>` | `Child: EventInfo` and `Parent` appears in `Child::Parents` (trait-recursive over the `Parents` list) | `ErrBadEvent` / no `EmitAllowed` on that `.filter` / `.emit` |
+| Nested `On<Child, …>` under `On<Parent, …>` | `Child: EventInfo` and `Parent` appears in `Child::Parents`. Each list position is its own impl (`()`, one parent, or a tuple slot). | `ErrBadEvent` / no `EmitAllowed` on that `.filter` / `.emit` |
 | `.emit(tree)` | AST is well-formed (`And`/`Or`/`Not`/`On`/leaves); every `On<Ev, _>` event is an `EventInfo`; parent edges hold | same Status / refuse |
 | `.emit(…)` under module | Emitted events covered by module surface where required (Provides ∪ Injects / providers) | level-2 style bound |
 | `emit_providers()` | Emit the module’s provider events only | refuse if none / not a provider module |

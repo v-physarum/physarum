@@ -1,6 +1,7 @@
 //! Spine, wait, and parent checks over the filter AST.
 
-use crate::bean::EventInfo;
+use crate::bean::{BeanInfo, EventInfo, Marked, Parts, Proxied};
+use crate::context::{Leaf, List};
 use crate::descriptor::{Get, Mut};
 use crate::filter::{And, Not, On, Or};
 
@@ -25,6 +26,34 @@ impl<T> HasMut for Get<T> {
 
 impl<T> HasMut for Mut<T> {
     type Mut = Yes;
+}
+
+impl<P, C> HasMut for List<Leaf<(P, C)>>
+where
+    C: HasMut,
+{
+    type Mut = C::Mut;
+}
+
+impl<P, O, C> HasMut for List<Leaf<(P, O, C)>>
+where
+    C: HasMut,
+{
+    type Mut = C::Mut;
+}
+
+impl<P, O0, O1, C> HasMut for List<Leaf<(P, O0, O1, C)>>
+where
+    C: HasMut,
+{
+    type Mut = C::Mut;
+}
+
+impl<P, O0, O1, O2, C> HasMut for List<Leaf<(P, O0, O1, O2, C)>>
+where
+    C: HasMut,
+{
+    type Mut = C::Mut;
 }
 
 impl<A, B> HasMut for And<A, B>
@@ -155,6 +184,155 @@ impl<P, C, I> Under<P> for On<C, I>
 where
     C: EventInfo<Parents = P>,
     I: Under<C>,
+{
+}
+
+/// Parent check that also accepts the proxy's [`EventInfo::Parents`].
+///
+/// `K` is inferred. [`()`][unit] is a predicate. [`Own`](crate::Own) is the
+/// event's own parents. [`FromProxy`](crate::FromProxy) is the proxy's parents.
+/// The target's [`EventInfo::Parents`] is not rewritten.
+///
+/// [unit]: https://doc.rust-lang.org/std/primitive.unit.html
+#[doc(hidden)]
+pub trait ParentsOk<K> {}
+
+/// `I` lists outer event `P` on its own [`EventInfo::Parents`] or on its proxy.
+#[doc(hidden)]
+pub trait UnderVia<P, K> {}
+
+impl<P> UnderVia<P, ()> for () {}
+
+impl<P, T> UnderVia<P, ()> for Get<T> {}
+
+impl<P, T> UnderVia<P, ()> for Mut<T> {}
+
+impl<P, A, B, Ka, Kb> UnderVia<P, (Ka, Kb)> for And<A, B>
+where
+    A: UnderVia<P, Ka>,
+    B: UnderVia<P, Kb>,
+{
+}
+
+impl<P, A, B, Ka, Kb> UnderVia<P, (Ka, Kb)> for Or<A, B>
+where
+    A: UnderVia<P, Ka>,
+    B: UnderVia<P, Kb>,
+{
+}
+
+impl<P, A, K> UnderVia<P, K> for Not<A> where A: UnderVia<P, K> {}
+
+impl<P, C, I, At, K> UnderVia<P, (crate::Own, At, K)> for On<C, I>
+where
+    C: EventInfo,
+    C::Parents: HasParent<P, At>,
+    I: UnderVia<C, K>,
+{
+}
+
+impl<P, C, I, X, At, K> UnderVia<P, (crate::FromProxy, At, K)> for On<C, I>
+where
+    C: Proxied<Link: Marked<Target = X>>,
+    X: BeanInfo + EventInfo,
+    X::Parents: HasParent<P, At>,
+    I: UnderVia<C, K>,
+{
+}
+
+/// `P` is a parent of some outer proxy, not of the direct proxy.
+#[doc(hidden)]
+pub trait ChainParents<P, K> {}
+
+trait TailParents<P, K> {}
+
+impl<O0, P, At> TailParents<P, (crate::Own, At)> for (O0,)
+where
+    O0: EventInfo,
+    O0::Parents: HasParent<P, At>,
+{
+}
+
+impl<O0, O1, P, At> TailParents<P, (crate::Own, At)> for (O0, O1)
+where
+    O0: EventInfo,
+    O0::Parents: HasParent<P, At>,
+{
+}
+
+impl<O0, O1, P, At> TailParents<P, (crate::FromProxy, (crate::Own, At))> for (O0, O1)
+where
+    O1: EventInfo,
+    O1::Parents: HasParent<P, At>,
+{
+}
+
+impl<O0, O1, O2, P, At> TailParents<P, (crate::Own, At)> for (O0, O1, O2)
+where
+    O0: EventInfo,
+    O0::Parents: HasParent<P, At>,
+{
+}
+
+impl<O0, O1, O2, P, At> TailParents<P, (crate::FromProxy, (crate::Own, At))> for (O0, O1, O2)
+where
+    O1: EventInfo,
+    O1::Parents: HasParent<P, At>,
+{
+}
+
+impl<O0, O1, O2, P, At> TailParents<P, (crate::FromProxy, (crate::FromProxy, (crate::Own, At)))>
+    for (O0, O1, O2)
+where
+    O2: EventInfo,
+    O2::Parents: HasParent<P, At>,
+{
+}
+
+/// `P` occupies one slot of this parent list. The slot is `At`.
+trait HasParent<P, At> {}
+
+impl<P> HasParent<P, ()> for P {}
+
+impl<P> HasParent<P, crate::Ix0> for (P,) {}
+
+impl<P, R> HasParent<P, crate::Ix0> for (P, R) {}
+
+impl<L, P> HasParent<P, crate::Ix1> for (L, P) {}
+
+impl<P, A, R> HasParent<P, crate::Ix0> for (P, A, R) {}
+
+impl<L, P, R> HasParent<P, crate::Ix1> for (L, P, R) {}
+
+impl<L, A, P> HasParent<P, crate::Ix2> for (L, A, P) {}
+
+impl<P, A, B, R> HasParent<P, crate::Ix0> for (P, A, B, R) {}
+
+impl<L, P, B, R> HasParent<P, crate::Ix1> for (L, P, B, R) {}
+
+impl<L, A, P, R> HasParent<P, crate::Ix2> for (L, A, P, R) {}
+
+impl<L, A, B, P> HasParent<P, crate::Ix3> for (L, A, B, P) {}
+
+impl<X, L, P, K> ChainParents<P, K> for X
+where
+    X: Parts<Chain = L>,
+    L: TailParents<P, K>,
+{
+}
+
+impl<P, C, I, X, Kc, Ki> UnderVia<P, (crate::FromChain, Kc, Ki)> for On<C, I>
+where
+    C: Proxied<Link: Marked<Target = X>>,
+    X: BeanInfo + ChainParents<P, Kc>,
+    I: UnderVia<C, Ki>,
+{
+}
+
+impl<E, I, K> ParentsOk<K> for On<E, I>
+where
+    E: EventInfo,
+    I: UnderVia<E, K>,
 {
 }
 

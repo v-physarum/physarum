@@ -8,14 +8,19 @@ mod entry;
 mod filter;
 mod init;
 mod map;
+mod overlap;
 mod resource;
 mod schedule;
 mod setup;
 mod update;
 
-pub use args::{ArgsView, Claim};
+pub use args::{
+    ArgsView, Claim, ClaimVia, Find, FromChain, FromProxy, Hit, InAt, InProvides, OnModule,
+    OnProxy, Own, Pick, Skip, Surface,
+};
 pub use built::Built;
 pub use entry::Query;
 pub use init::Init;
+pub use overlap::BeanTag;
 pub use setup::{Setup, Tick};
 pub use update::Update;

@@ -36,7 +36,7 @@ Aligned with `design.md` rules. Prefer these IDs in review notes.
 | **R10** Generics | **One letter** from the role (`B`,`A`,`S`,`T`,`E`,`H`,`F`,`N`,`O`,…), or **letter + digit** (`E0`). | Multi-letter params (`Bean`, `Args`, `Status`, `PrevE`, `New`, …); alphabet arity runs `A,B,C,…`. |
 | **R11–12** Lists | Shared `List` / `Leaf` / `Grow`; leaf ≤ **8**; opaque `E0…`; 9 → `(List, Grow)`; 16 → **4** `List`s. | Flat 9…16 megaimpls; `MapNode` / `room_*`; tuples of domain structs in arity heads (`MapEntry<…>, …`); bare `(E0,E1)` push that overlaps `(List, Grow)`. |
 | **R13** Push | One `context/push.rs`; Args/`TakeMany` shape — one `PushShape` blanket + sealed `AddItem` (Cap6). | Split `push/{leaf,group,wide,add}.rs`; unsealed `AddItem` on 7-tuples; `MapEntry` (or other domain) in push arity heads. |
-| **R14** Meta | `BeanInfo` / `EventInfo` / `ProxyInfo` data-only; `Query` + `StartDesc` for entry tip. | Methods / new assoc types on meta traits without owner OK; spelling `Ctx`/`Pipe`/`MapList` on `query` / `BeanInfo`. |
+| **R14** Meta | `BeanInfo` / `EventInfo` data-only (`BeanInfo` also holds `Link` and `Chain`); `Query` + `StartDesc` for entry tip. | Methods / new assoc types on meta traits without owner OK; spelling `Ctx`/`Pipe`/`MapList` on `query` / `BeanInfo`. |
 | **R15** Phantom | One phantom per struct; named field is always **`_markers`**. | Several phantoms; named phantom as `event` / `_filter` / `_path` / … |
 | **R16** Safety | `#![forbid(unsafe_code)]`; no owned `Box<dyn>`; inject cast → `&dyn` args (may inline). | `unsafe`; `Box<dyn>` in `State`; `dyn` / `as Trait` in **provides**. |
 | **R17** Trait bounds | Shared predicates on the **trait head** (`Update`/`Tick`/`Setup`: `BeanInfo` + `Injects: ArgsView`). `Update` only for `Built`. | Same bounds re-copied on every `fn`; stub `Update for Init`; dropping `injects` from `update` because the body ignores them. |
@@ -76,7 +76,7 @@ cargo test -p ph_beans
 | **R15** one phantom per struct | **Done** | `Ctx` / `MapList` / `SetFilter` use one `_markers` or tuple phantom |
 | **R16** no `unsafe` / no `Box<dyn>` | **Done** | Rule fixed; `&dyn` views documented under Provide / inject `&dyn` |
 | Inject `&dyn` (`as Trait`; claim `Bean::T`; only ArgsView is `&dyn`) | **Open** | No `as_dyn` on Get/Mut; marker-only `DynView`; `ph_test_asm` |
-| **Proxy** (`type = proxy`, wrap on target inject) | **Open** | Design under Modules → Proxy; `ProxyInfo` meta TBD; no code yet |
+| **Proxy** (`type = proxy`, wrap on target inject) | **Open** | Manual prototype in `ph_beans`. `Link` and `Chain` on `BeanInfo`. Claims use `Surface` (proxy list, module list) and forward to an inner `At`. Derive still needs owner OK |
 | **R19** no silent structure changes | **Done** | Rule fixed; `Get`/`Mut`/`Marker` called out under Accessors |
 | Map cap 16 | **Done** | `MAX_MAP_SYSTEMS`; push refuses 17th |
 | No macros in crate src | **Done** | No `macro_rules!` under `ph_beans/src` |
@@ -113,7 +113,7 @@ Do in this order. Each item is a small PR on `ph_beans` only.
 
 ## Out of this track
 
-- Proc-macro derive: **only** `BeanInfo` + `At` / `EventInfo` / `ProxyInfo` (+ dyn/`proxy` links) — see design Derive + Proxy (**owner OK required** — R6). Not `Query` / `Setup` / `Module` / …
+- Proc-macro derive: **only** `BeanInfo` + `At` / `EventInfo` (+ dyn/`proxy` links on that `BeanInfo`) — see design Derive + Proxy (**owner OK required** — R6). Not `Query` / `Setup` / `Module` / …
 - Root `physarum` package rewrite
 - Full production scheduler beyond emit-mask rules
 

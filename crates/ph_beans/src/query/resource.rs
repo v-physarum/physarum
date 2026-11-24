@@ -2,17 +2,18 @@
 
 use core::marker::PhantomData;
 
-use crate::bean::BeanInfo;
+use crate::bean::{ApplyProxy, BeanInfo};
 use crate::context::Context;
 use crate::context::ContextTick;
 use crate::context::Ctx;
 use crate::context::CtxConfig;
+use crate::descriptor::LevelDesc;
 use crate::descriptor::live::AccSet;
 use crate::descriptor::live::{Idle, Live};
 use crate::filter::shape::HasMut;
 use crate::filter::shape::No;
 use crate::query::apply::ApplyPatch;
-use crate::query::args::Claim;
+use crate::query::args::ClaimVia;
 use crate::query::init::Init;
 
 /// Replaces resource args on a concrete [`Ctx`] (hides `B`/`O`/`S`/`T` from [`CtxConfig`]).
@@ -68,24 +69,26 @@ impl<N, C> AllowInjectResources<N> for Idle<C> {}
 
 /// Next pipeline after `.inject_resources`.
 ///
-/// `Out` is the tip with the claim set replaced. The signature does not
-/// spell `Ctx` or `Pipe`.
-pub trait InjectResourcesStep<R> {
-    /// Pipeline whose resource args are `R`.
+/// `Out` is the tip with the claim set replaced by the proxy wrapper. The
+/// signature does not spell `Ctx` or `Pipe`. `K` is the [`Surface`](crate::Surface)
+/// of the proxy chain and the module list. Callers do not name it.
+pub trait InjectResourcesStep<R, K> {
+    /// Pipeline whose resource args are the wrapped claim.
     type Out;
     /// Replaces the claim set.
     fn inject_resources(self, resources: R) -> Self::Out;
 }
 
-impl<E, C, R> InjectResourcesStep<R> for Init<E, C>
+impl<E, C, R, K> InjectResourcesStep<R, K> for Init<E, C>
 where
-    Self: ApplyPatch<SetArgs<Live<R>>>,
+    R: ApplyProxy,
+    Self: ApplyPatch<SetArgs<Live<R::Wrapped>>>,
     C: Context,
     C::Bean: BeanInfo,
-    R: Claim<C::Bean>,
+    R: ClaimVia<C::Bean, K>,
     C::Args: AllowInjectResources<R>,
 {
-    type Out = <Self as ApplyPatch<SetArgs<Live<R>>>>::Out;
+    type Out = <Self as ApplyPatch<SetArgs<Live<R::Wrapped>>>>::Out;
 
     fn inject_resources(self, resources: R) -> Self::Out {
         let _ = resources;
@@ -96,54 +99,19 @@ where
 impl<E, C> Init<E, C> {
     /// Replaces the resource set. The argument is a marker.
     ///
-    /// A live `Mut` refuses this call until a wait filter clears it.
+    /// A live `Mut` refuses another inject until a wait clears it.
+    /// See `a_live_mut_blocks_the_next_inject`.
     ///
-    /// ```compile_fail
-    /// use ph_beans::{At, BeanInfo, EventInfo, Ix0, Marker, Query};
-    ///
-    /// struct Keys;
-    /// struct Main;
-    /// struct App;
-    ///
-    /// impl BeanInfo for Keys {
-    ///     type Provides = ();
-    ///     type Injects = ();
-    ///     type Beans = ();
-    ///     type State = ();
-    /// }
-    ///
-    /// impl BeanInfo for Main {
-    ///     type Provides = ();
-    ///     type Injects = ();
-    ///     type Beans = ();
-    ///     type State = ();
-    /// }
-    ///
-    /// impl EventInfo for Main {
-    ///     type Parents = ();
-    /// }
-    ///
-    /// impl BeanInfo for App {
-    ///     type Provides = ();
-    ///     type Injects = ();
-    ///     type Beans = ();
-    ///     type State = ();
-    /// }
-    ///
-    /// impl At<Keys> for App {
-    ///     type Ix = Ix0;
-    /// }
-    ///
-    /// let _blocked = App::query()
-    ///     .inject_resources(Keys::MUT)
-    ///     .filter(Main::ON[Keys::T])
-    ///     .inject_resources(Keys::T);
-    /// ```
+    /// A bean that is an item of the module's `Beans` and of a proxy's
+    /// `Provides` fails here: `bean is already on the proxy`.
+    /// The proxy levels are [`LevelDesc::Rows`](crate::LevelDesc::Rows).
     #[allow(clippy::needless_pass_by_value)]
-    pub fn inject_resources<R>(self, resources: R) -> <Self as InjectResourcesStep<R>>::Out
+    pub fn inject_resources<R, K>(self, resources: R) -> <Self as InjectResourcesStep<R, K>>::Out
     where
-        Self: InjectResourcesStep<R>,
+        C: Context<Bean: LevelDesc>,
+        Self: InjectResourcesStep<R, K>,
     {
+        let _ = <C::Bean as LevelDesc>::OK;
         InjectResourcesStep::inject_resources(self, resources)
     }
 }

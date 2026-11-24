@@ -5,7 +5,8 @@
 //! overlap (E0119) — not a Get×Mut matrix. Prefer collapsing further if a
 //! non-overlapping membership encoding appears; do not add Get/Mut arms.
 
-use crate::bean::BeanInfo;
+use crate::bean::proxy::FreeKey;
+use crate::bean::{BeanInfo, Proxied, Target};
 use crate::descriptor::{Get, Mut};
 
 /// The child is injecting the parent bean itself.
@@ -33,34 +34,8 @@ pub struct OfInject1;
 
 /// `Self` may be injected from `P` via `V`.
 ///
-/// ```compile_fail
-/// use ph_beans::{BeanInfo, FromParent, Get, Mut, OfProvide};
-///
-/// struct Logic;
-/// struct App;
-///
-/// impl BeanInfo for Logic {
-///     type Provides = ();
-///     type Injects = ();
-///     type Beans = ();
-///     type State = ();
-/// }
-///
-/// impl BeanInfo for App {
-///     type Provides = Get<Logic>;
-///     type Injects = ();
-///     type Beans = Get<Logic>;
-///     type State = ();
-/// }
-///
-/// fn mount<C>()
-/// where
-///     C: FromParent<App, OfProvide>,
-/// {
-/// }
-///
-/// mount::<Mut<Logic>>();
-/// ```
+/// `Mut` against an immutable provide fails.
+/// See `exclusive_against_a_shared_provide_is_rejected`.
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not on `{P}` via `{V}`",
     label = "fix Descriptor::Status",
@@ -78,9 +53,9 @@ impl<T> ClaimMark for Mut<T> {}
 /// The claim is the parent bean itself.
 trait IsParent<P> {}
 
-impl<P> IsParent<P> for Get<P> {}
+impl<P: Target + Proxied> IsParent<P> for Get<P> {}
 
-impl<P> IsParent<P> for Mut<P> {}
+impl<P: Target + Proxied> IsParent<P> for Mut<P> {}
 
 impl<P, C> FromParent<P, OfParent> for C where C: IsParent<P> {}
 
@@ -89,14 +64,14 @@ impl<P> FromParent<P, ()> for () {}
 impl<P, C> FromParent<P, OfProvide> for C
 where
     P: BeanInfo<Provides = C>,
-    C: ClaimMark,
+    C: ClaimMark + FreeKey,
 {
 }
 
 impl<P, C> FromParent<P, OfInject> for C
 where
     P: BeanInfo<Injects = C>,
-    C: ClaimMark,
+    C: ClaimMark + FreeKey,
 {
 }
 
@@ -104,28 +79,28 @@ where
 impl<P, C, R> FromParent<P, OfProvide0> for C
 where
     P: BeanInfo<Provides = (C, R)>,
-    C: ClaimMark,
+    C: ClaimMark + FreeKey,
 {
 }
 
 impl<P, C, L> FromParent<P, OfProvide1> for C
 where
     P: BeanInfo<Provides = (L, C)>,
-    C: ClaimMark,
+    C: ClaimMark + FreeKey,
 {
 }
 
 impl<P, C, R> FromParent<P, OfInject0> for C
 where
     P: BeanInfo<Injects = (C, R)>,
-    C: ClaimMark,
+    C: ClaimMark + FreeKey,
 {
 }
 
 impl<P, C, L> FromParent<P, OfInject1> for C
 where
     P: BeanInfo<Injects = (L, C)>,
-    C: ClaimMark,
+    C: ClaimMark + FreeKey,
 {
 }
 

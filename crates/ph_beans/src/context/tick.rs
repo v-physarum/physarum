@@ -25,11 +25,16 @@ pub struct WithDefault<S> {
 /// Systems live on the context, not on the operators.
 pub trait ContextTick {}
 
-/// The init slot is still [`NoSystems`].
-///
-/// A second `init_state` fails this bound. Stable Rust rejects two inherent
-/// `init_state` impls that differ only by a where-clause (`E0592`), so the
-/// status is named here instead of a second impl whose body is unreachable.
+/// Payload a [`FreshInit::Config`] stores in the init slot.
+#[doc(hidden)]
+pub trait Configuration {
+    /// Init slot stored on the pipe (`WithInit` or `WithDefault`).
+    type Out: ContextTick;
+    /// Builds that slot.
+    fn install(self) -> Self::Out;
+}
+
+/// Init slot is still `NoSystems`. A second `init_state` fails this bound.
 #[doc(hidden)]
 #[diagnostic::on_unimplemented(
     message = "pipeline not ready: Descriptor::Status = `ErrInitAlreadySet` (tip `{Self}`)",
@@ -37,29 +42,20 @@ pub trait ContextTick {}
     note = "init_state stores one system"
 )]
 pub trait FreshInit: ContextTick {
-    /// Tick after `init_state`.
-    type WithInit<H>: ContextTick;
-    /// Tick after `init_state_default`.
-    type WithDefault<S>: ContextTick;
-    /// Stores the init function item.
-    fn install_init<H>(self, handler: H) -> Self::WithInit<H>;
-    /// Stores default state.
-    fn install_default<S>(self, state: S) -> Self::WithDefault<S>;
+    /// Tick after configuration `C`.
+    type Config<C: Configuration>: ContextTick;
+    /// Stores the slot produced by `cfg`.
+    fn install_config<C: Configuration>(self, cfg: C) -> Self::Config<C>;
 }
 
 impl<L> FreshInit for Pipe<NoSystems, L>
 where
     L: ContextTick,
 {
-    type WithInit<H> = Pipe<WithInit<H>, L>;
-    type WithDefault<S> = Pipe<WithDefault<S>, L>;
+    type Config<C: Configuration> = Pipe<C::Out, L>;
 
-    fn install_init<H>(self, handler: H) -> Self::WithInit<H> {
-        Pipe::new(WithInit::new(handler), self.list)
-    }
-
-    fn install_default<S>(self, state: S) -> Self::WithDefault<S> {
-        Pipe::new(WithDefault { state }, self.list)
+    fn install_config<C: Configuration>(self, cfg: C) -> Self::Config<C> {
+        Pipe::new(cfg.install(), self.list)
     }
 }
 

@@ -5,11 +5,14 @@
 
 use core::marker::PhantomData;
 
-use crate::bean::BeanInfo;
+use crate::bean::{BeanInfo, DriveInit, ForwardInit, Marked, Parts, Proxied};
+use crate::context::Configuration;
 use crate::context::Context;
 use crate::context::Ctx;
 use crate::context::CtxConfig;
 use crate::context::FreshInit;
+use crate::context::WithDefault;
+use crate::context::WithInit;
 use crate::descriptor::Descriptor;
 use crate::descriptor::NeedBuild;
 use crate::descriptor::OpOk;
@@ -54,15 +57,50 @@ pub trait SealInit<H>: Sized {
     fn seal_init(self, handler: H) -> Self::Out;
 }
 
+/// Init handler after the proxy chain of `B`.
+#[doc(hidden)]
+pub struct ProxyInit<B, H> {
+    handler: H,
+    _bean: PhantomData<B>,
+}
+
+impl<B, H, P> Configuration for ProxyInit<B, H>
+where
+    B: Proxied<Link: Marked<Target = P>>,
+    P: Parts + ForwardInit<B, H, P::Chain>,
+{
+    type Out = WithInit<<P as ForwardInit<B, H, P::Chain>>::Out>;
+
+    fn install(self) -> Self::Out {
+        WithInit::new(<P as ForwardInit<B, H, P::Chain>>::forward(self.handler))
+    }
+}
+
+/// Default state placed in the init slot.
+#[doc(hidden)]
+pub struct DefaultInit<S> {
+    state: S,
+}
+
+impl<S> Configuration for DefaultInit<S> {
+    type Out = WithDefault<S>;
+
+    fn install(self) -> Self::Out {
+        WithDefault { state: self.state }
+    }
+}
+
 impl<B, A, S, T, H> SealInit<H> for Ctx<B, A, S, T>
 where
     A: AccSet,
     T: FreshInit,
+    ProxyInit<B, H>: Configuration,
 {
-    type Out = Ctx<B, A, NeedBuild, T::WithInit<H>>;
+    type Out = Ctx<B, A, NeedBuild, T::Config<ProxyInit<B, H>>>;
 
     fn seal_init(self, handler: H) -> Self::Out {
-        Ctx::new(FreshInit::install_init(self.tick, handler))
+        let cfg = ProxyInit { handler, _bean: PhantomData };
+        Ctx::new(self.tick.install_config(cfg))
     }
 }
 
@@ -94,17 +132,19 @@ pub trait SealDefault: Sized {
     fn seal_default(self) -> Self::Out;
 }
 
-impl<B, A, S, T> SealDefault for Ctx<B, A, S, T>
+impl<B, A, S, T, P> SealDefault for Ctx<B, A, S, T>
 where
     A: AccSet,
     T: FreshInit,
-    B: BeanInfo,
+    B: Proxied<Link: Marked<Target = P>>,
+    P: DriveInit<B>,
     B::State: Default,
 {
-    type Out = Ctx<B, A, NeedBuild, T::WithDefault<B::State>>;
+    type Out = Ctx<B, A, NeedBuild, T::Config<DefaultInit<B::State>>>;
 
     fn seal_default(self) -> Self::Out {
-        Ctx::new(FreshInit::install_default(self.tick, Default::default()))
+        let state = <P as DriveInit<B>>::drive();
+        Ctx::new(self.tick.install_config(DefaultInit { state }))
     }
 }
 
@@ -136,7 +176,8 @@ impl<E, C, H> InitStateStep<H> for Init<E, C>
 where
     Self: ApplyPatch<SetInit<H>>,
     C: Context,
-    C::Bean: BeanInfo,
+    C::Bean: Proxied,
+    ProxyInit<C::Bean, H>: Configuration,
     C::Tick: FreshInit,
     C::Args: Claim<C::Bean> + ArgsView + OpShape<Status: OpOk>,
     H: for<'a> Fn(<C::Args as ArgsView>::View<'a>) -> <C::Bean as BeanInfo>::State,
@@ -156,9 +197,11 @@ pub trait InitStateDefaultStep {
     fn init_state_default(self) -> Self::Out;
 }
 
-impl<E, C> InitStateDefaultStep for Init<E, C>
+impl<E, C, P> InitStateDefaultStep for Init<E, C>
 where
     C: Context,
+    C::Bean: Proxied<Link: Marked<Target = P>>,
+    P: DriveInit<C::Bean>,
     C::Args: OpShape<Status: OpOk>,
     Self: ApplyPatch<SetDefault>,
 {
@@ -172,31 +215,8 @@ where
 impl<E, C> Init<E, C> {
     /// Stores the init system and moves status to [`NeedBuild`](crate::NeedBuild).
     ///
-    /// Pass a **function item**. The system must not capture or mutate outer
-    /// state — only resource args and the returned [`BeanInfo::State`]
-    /// (rule 18). Under the hood handlers stay pure `fn` (build speed and a
-    /// future SIMD store).
-    ///
-    /// A second call fails on this line with status [`ErrInitAlreadySet`](crate::ErrInitAlreadySet).
-    ///
-    /// ```compile_fail
-    /// use ph_beans::{BeanInfo, Query};
-    ///
-    /// struct App;
-    ///
-    /// impl BeanInfo for App {
-    ///     type Provides = ();
-    ///     type Injects = ();
-    ///     type Beans = ();
-    ///     type State = u8;
-    /// }
-    ///
-    /// fn boot(_: ()) -> u8 {
-    ///     1
-    /// }
-    ///
-    /// let _twice = App::query().init_state(boot).init_state(boot);
-    /// ```
+    /// Pass a function item. It must not capture outer state.
+    /// A second call fails. See `a_second_init_state_is_rejected`.
     pub fn init_state<H>(self, handler: H) -> <Self as InitStateStep<H>>::Out
     where
         Self: InitStateStep<H>,
@@ -206,23 +226,7 @@ impl<E, C> Init<E, C> {
 
     /// Stores [`Default`] state and moves status to [`NeedBuild`](crate::NeedBuild).
     ///
-    /// The state is created here, inside the builder, not by a later `init`.
-    /// A second init fails on that call with [`ErrInitAlreadySet`](crate::ErrInitAlreadySet).
-    ///
-    /// ```compile_fail
-    /// use ph_beans::{BeanInfo, Query};
-    ///
-    /// struct App;
-    ///
-    /// impl BeanInfo for App {
-    ///     type Provides = ();
-    ///     type Injects = ();
-    ///     type Beans = ();
-    ///     type State = u8;
-    /// }
-    ///
-    /// let _twice = App::query().init_state_default().init_state_default();
-    /// ```
+    /// A second call fails. See `a_second_default_init_is_rejected`.
     pub fn init_state_default(self) -> <Self as InitStateDefaultStep>::Out
     where
         Self: InitStateDefaultStep,

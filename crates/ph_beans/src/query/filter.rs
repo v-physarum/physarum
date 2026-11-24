@@ -9,6 +9,7 @@ use crate::context::CtxConfig;
 use crate::context::maps::Rescope;
 use crate::descriptor::live::AccSet;
 use crate::filter::ApplyFilter;
+use crate::filter::shape::ParentsOk;
 use crate::query::apply::ApplyPatch;
 use crate::query::init::Init;
 
@@ -54,16 +55,19 @@ where
 }
 
 /// Next pipeline after `.filter`.
-pub trait FilterStep<F> {
+///
+/// `K` is the inferred parent path. Call sites do not name it.
+pub trait FilterStep<F, K> {
     /// Pipeline with this filter applied.
     type Out;
     /// Installs the filter.
     fn filter(self, filter: F) -> Self::Out;
 }
 
-impl<E, C, F> FilterStep<F> for Init<E, C>
+impl<E, C, F, K> FilterStep<F, K> for Init<E, C>
 where
     Self: ApplyPatch<SetFilter<F, E>>,
+    F: ParentsOk<K>,
 {
     type Out = <Self as ApplyPatch<SetFilter<F, E>>>::Out;
 
@@ -78,9 +82,9 @@ impl<E, C> Init<E, C> {
     ///
     /// A `Mut` marker in the filter clears the live accessor set.
     #[allow(clippy::needless_pass_by_value)]
-    pub fn filter<F>(self, filter: F) -> <Self as FilterStep<F>>::Out
+    pub fn filter<F, K>(self, filter: F) -> <Self as FilterStep<F, K>>::Out
     where
-        Self: FilterStep<F>,
+        Self: FilterStep<F, K>,
     {
         FilterStep::filter(self, filter)
     }
