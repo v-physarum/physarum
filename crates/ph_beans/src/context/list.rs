@@ -4,10 +4,16 @@
 //! of those leaves. Push and the map walk both use this carrier.
 //!
 //! The trait and the carrier cannot both be named `List` (E0428). The carrier
-//! is [`List`]. Traversal is [`Walk`]. Append is [`PushShape`](super::push::PushShape).
+//! is [`List`]. [`Invoke`] is only the tuple list (`()` and lengths 1..=8).
+//! [`MapEntry`](crate::MapEntry), [`MapAt`](super::maps::MapAt), [`Gate`](crate::Gate), and the
+//! carriers hand the visitor through [`Hand`] and do not implement [`Invoke`].
+//! Append is [`PushShape`](super::push::PushShape).
 
+use crate::context::direct::{Direct, DirectFn, TipEvent};
+use crate::context::maps::{MapAt, MapEntry};
 use crate::context::scope::ScopeBufs;
-use crate::filter::eval::{Collect, ConstMatch, EmitMask};
+use crate::filter::eval::{Collect, ConstMatch, EmitMask, MatchEmit};
+use crate::filter::{Gate, PathStep, PathStrategy};
 
 /// Tuple of at most eight items, or a tuple of such groups.
 /// Generics: `I` inner payload.
@@ -40,8 +46,7 @@ pub struct Grow<I>(pub(crate) I);
 /// Newtype list carrier: payload is [`Inner`](CarrierDesc::Inner).
 ///
 /// [`List`] / [`Leaf`] / [`Grow`] set this once ([`ClaimDesc`](crate::ClaimDesc)
-/// style). [`Walk`] / path walk blanket on `T: CarrierDesc` — not one behavior
-/// impl per wrapper (rule 8).
+/// style). They do not implement [`Invoke`]. [`Hand`] forwards to [`Inner`](Self::Inner).
 #[doc(hidden)]
 pub trait CarrierDesc {
     /// Inner payload.
@@ -91,21 +96,22 @@ pub trait ExactDrive {
     fn drive_exact<P: Collect>(&self, scopes: &ScopeBufs);
 }
 
-// Generics: `I` inner payload ([`Walk`]).
+// Generics: `I` inner payload ([`Hand`]).
 impl<I> ExactDrive for List<I>
 where
-    I: Walk<List<I>>,
+    I: Hand,
 {
     fn drive_exact<P: Collect>(&self, scopes: &ScopeBufs) {
         let lane = Lane { root: self, scopes };
-        self.0.walk(Exact::<P>(core::marker::PhantomData), &lane);
+        self.0
+            .hand(WalkOp { strategy: Exact::<P>(core::marker::PhantomData), lane: &lane });
     }
 }
 
 /// How one walk decides which maps run.
 ///
 /// Const emit, the deferred mask, and the exact child path are structs here.
-/// Tuple fan-out is one [`Walk::walk`] (rule 8) — not a method per mode.
+/// Tuple fan-out is one [`Invoke::invoke`] (rule 8) — not a method per mode.
 pub(crate) trait WalkStrategy {
     /// Whether a plain map under filter `F` runs.
     fn keep<F: Kept>(&self) -> bool;
@@ -180,201 +186,335 @@ impl<P: Collect> WalkStrategy for Exact<P> {
     }
 }
 
-/// Walks a leaf, then each group, in order.
+/// The tuple list. `invoke` places `Op` (the behavior) on every child.
 ///
-/// One method for every mode ([`WalkStrategy`]). `L: ExactDrive` is a `where`
-/// on this method, so `List: ExactDrive` can require [`Walk`] and the
-/// `.map_at` leaf can still call [`ExactDrive`] while that impl is open.
+/// Only `()` and flat lengths 1..=8 implement this. One impl per length
+/// (rules 11–12): a single impl cannot name every arity. [`MapEntry`],
+/// [`MapAt`], [`Gate`](crate::Gate), and [`CarrierDesc`] types use [`Hand`]
+/// (and their own traits) instead.
+pub(crate) trait Invoke {
+    /// Runs `op` on this tuple.
+    fn invoke<Op>(&self, op: Op)
+    where
+        Op: Copy + Visit;
+}
+
+/// Presents a node that is not the tuple list to [`Visit`].
 ///
-/// Generics: `L` list ([`ExactDrive`]). `S` is the [`WalkStrategy`].
-#[doc(hidden)]
-pub(crate) trait Walk<L> {
-    /// Visits every child under `strategy`.
-    fn walk<S: WalkStrategy + Copy>(&self, strategy: S, lane: &Lane<L>)
+/// [`Invoke`] is not implemented for these types. A tuple calls [`hand`](Self::hand)
+/// on each child. Carriers forward to [`CarrierDesc::Inner`].
+pub(crate) trait Hand {
+    /// Presents this node to `op`.
+    fn hand<Op>(&self, op: Op)
     where
-        L: ExactDrive;
+        Op: Copy + Visit;
 }
 
-// Generics: `L` list.
-impl<L> Walk<L> for () {
-    fn walk<S: WalkStrategy + Copy>(&self, strategy: S, lane: &Lane<L>)
+/// Behavior a list visit places in [`Invoke`].
+pub(crate) trait Visit {
+    /// Plain `.map` leaf.
+    fn on_entry<F, H>(&self, entry: &MapEntry<F, H>)
     where
-        L: ExactDrive,
-    {
-        let _ = (self, strategy, lane);
+        F: MatchEmit + Collect,
+        H: Fn();
+
+    /// `.map_at` leaf. `L: ExactDrive` stays on the walk op, not here.
+    fn on_at<F, H>(&self, entry: &MapAt<F, H>)
+    where
+        F: MatchEmit + Collect + TipEvent,
+        H: DirectFn<F::Tip, F>;
+
+    /// Path gate. `M` is the op's emit const, not a parameter here.
+    fn on_gate<P, S, C>(&self, gate: &Gate<P, S, C>)
+    where
+        P: PathStep,
+        S: PathStrategy,
+        C: Hand;
+}
+
+/// Walk behavior: one [`WalkStrategy`] plus the shared lane.
+pub(crate) struct WalkOp<'a, L, S> {
+    pub(crate) strategy: S,
+    pub(crate) lane: &'a Lane<'a, L>,
+}
+
+impl<L, S: Copy> Copy for WalkOp<'_, L, S> {}
+
+impl<L, S: Copy> Clone for WalkOp<'_, L, S> {
+    fn clone(&self) -> Self {
+        *self
     }
 }
 
-// Generics: `L` list, `E0` child slot.
-impl<L, E0> Walk<L> for (E0,)
+// Generics: `L` list ([`ExactDrive`]), `S` walk strategy.
+impl<L, S> Visit for WalkOp<'_, L, S>
 where
-    E0: Walk<L>,
+    S: WalkStrategy + Copy,
+    L: ExactDrive,
 {
-    fn walk<S: WalkStrategy + Copy>(&self, strategy: S, lane: &Lane<L>)
+    fn on_entry<F, H>(&self, entry: &MapEntry<F, H>)
     where
-        L: ExactDrive,
+        F: MatchEmit + Collect,
+        H: Fn(),
     {
-        self.0.walk(strategy, lane);
+        let _ = self.lane;
+        if self.strategy.keep::<F>() {
+            (entry.handler)();
+        }
+    }
+
+    fn on_at<F, H>(&self, entry: &MapAt<F, H>)
+    where
+        F: MatchEmit + Collect + TipEvent,
+        H: DirectFn<F::Tip, F>,
+    {
+        if self.strategy.enter_at::<F>() {
+            entry.handler.run(&Direct::from_lane(self.lane));
+        }
+    }
+
+    fn on_gate<P, S2, C>(&self, gate: &Gate<P, S2, C>)
+    where
+        P: PathStep,
+        S2: PathStrategy,
+        C: Hand,
+    {
+        let _ = (self, gate);
     }
 }
 
-// Generics: `L` list, `E0`…`E1` child slots.
-impl<L, E0, E1> Walk<L> for (E0, E1)
+// Generics: `F` filter, `H` handler. Not [`Invoke`] — this leaf stays on [`Visit::on_entry`].
+impl<F, H> Hand for MapEntry<F, H>
 where
-    E0: Walk<L>,
-    E1: Walk<L>,
+    F: MatchEmit + Collect,
+    H: Fn(),
 {
-    fn walk<S: WalkStrategy + Copy>(&self, strategy: S, lane: &Lane<L>)
+    fn hand<Op>(&self, op: Op)
     where
-        L: ExactDrive,
+        Op: Copy + Visit,
     {
-        self.0.walk(strategy, lane);
-        self.1.walk(strategy, lane);
+        op.on_entry(self);
     }
 }
 
-// Generics: `L` list, `E0`…`E2` child slots.
-impl<L, E0, E1, E2> Walk<L> for (E0, E1, E2)
+// Generics: `F` filter, `H` handler ([`DirectFn`]). Not [`Invoke`].
+impl<F, H> Hand for MapAt<F, H>
 where
-    E0: Walk<L>,
-    E1: Walk<L>,
-    E2: Walk<L>,
+    F: MatchEmit + Collect + TipEvent,
+    H: DirectFn<F::Tip, F>,
 {
-    fn walk<S: WalkStrategy + Copy>(&self, strategy: S, lane: &Lane<L>)
+    fn hand<Op>(&self, op: Op)
     where
-        L: ExactDrive,
+        Op: Copy + Visit,
     {
-        self.0.walk(strategy, lane);
-        self.1.walk(strategy, lane);
-        self.2.walk(strategy, lane);
+        op.on_at(self);
     }
 }
 
-// Generics: `L` list, `E0`…`E3` child slots.
-impl<L, E0, E1, E2, E3> Walk<L> for (E0, E1, E2, E3)
-where
-    E0: Walk<L>,
-    E1: Walk<L>,
-    E2: Walk<L>,
-    E3: Walk<L>,
-{
-    fn walk<S: WalkStrategy + Copy>(&self, strategy: S, lane: &Lane<L>)
+// Carriers are not the tuple list. They open [`CarrierDesc::Inner`].
+impl<I: Hand> Hand for List<I> {
+    fn hand<Op>(&self, op: Op)
     where
-        L: ExactDrive,
+        Op: Copy + Visit,
     {
-        self.0.walk(strategy, lane);
-        self.1.walk(strategy, lane);
-        self.2.walk(strategy, lane);
-        self.3.walk(strategy, lane);
+        self.0.hand(op);
     }
 }
 
-// Generics: `L` list, `E0`…`E4` child slots.
-impl<L, E0, E1, E2, E3, E4> Walk<L> for (E0, E1, E2, E3, E4)
-where
-    E0: Walk<L>,
-    E1: Walk<L>,
-    E2: Walk<L>,
-    E3: Walk<L>,
-    E4: Walk<L>,
-{
-    fn walk<S: WalkStrategy + Copy>(&self, strategy: S, lane: &Lane<L>)
+impl<I: Hand> Hand for Leaf<I> {
+    fn hand<Op>(&self, op: Op)
     where
-        L: ExactDrive,
+        Op: Copy + Visit,
     {
-        self.0.walk(strategy, lane);
-        self.1.walk(strategy, lane);
-        self.2.walk(strategy, lane);
-        self.3.walk(strategy, lane);
-        self.4.walk(strategy, lane);
+        self.0.hand(op);
     }
 }
 
-// Generics: `L` list, `E0`…`E5` child slots.
-impl<L, E0, E1, E2, E3, E4, E5> Walk<L> for (E0, E1, E2, E3, E4, E5)
-where
-    E0: Walk<L>,
-    E1: Walk<L>,
-    E2: Walk<L>,
-    E3: Walk<L>,
-    E4: Walk<L>,
-    E5: Walk<L>,
-{
-    fn walk<S: WalkStrategy + Copy>(&self, strategy: S, lane: &Lane<L>)
+impl<I: Hand> Hand for Grow<I> {
+    fn hand<Op>(&self, op: Op)
     where
-        L: ExactDrive,
+        Op: Copy + Visit,
     {
-        self.0.walk(strategy, lane);
-        self.1.walk(strategy, lane);
-        self.2.walk(strategy, lane);
-        self.3.walk(strategy, lane);
-        self.4.walk(strategy, lane);
-        self.5.walk(strategy, lane);
+        self.0.hand(op);
     }
 }
 
-// Generics: `L` list, `E0`…`E6` child slots.
-impl<L, E0, E1, E2, E3, E4, E5, E6> Walk<L> for (E0, E1, E2, E3, E4, E5, E6)
-where
-    E0: Walk<L>,
-    E1: Walk<L>,
-    E2: Walk<L>,
-    E3: Walk<L>,
-    E4: Walk<L>,
-    E5: Walk<L>,
-    E6: Walk<L>,
-{
-    fn walk<S: WalkStrategy + Copy>(&self, strategy: S, lane: &Lane<L>)
+// Generics: `Op` behavior ([`Visit`]).
+impl Invoke for () {
+    fn invoke<Op>(&self, op: Op)
     where
-        L: ExactDrive,
+        Op: Copy + Visit,
     {
-        self.0.walk(strategy, lane);
-        self.1.walk(strategy, lane);
-        self.2.walk(strategy, lane);
-        self.3.walk(strategy, lane);
-        self.4.walk(strategy, lane);
-        self.5.walk(strategy, lane);
-        self.6.walk(strategy, lane);
+        let _ = (self, op);
     }
 }
 
-// Generics: `L` list, `E0`…`E7` child slots. One impl per length (rules 11–12).
-impl<L, E0, E1, E2, E3, E4, E5, E6, E7> Walk<L> for (E0, E1, E2, E3, E4, E5, E6, E7)
+// Generics: `Op` behavior, `E0` child slot.
+impl<E0> Invoke for (E0,)
 where
-    E0: Walk<L>,
-    E1: Walk<L>,
-    E2: Walk<L>,
-    E3: Walk<L>,
-    E4: Walk<L>,
-    E5: Walk<L>,
-    E6: Walk<L>,
-    E7: Walk<L>,
+    E0: Hand,
 {
-    fn walk<S: WalkStrategy + Copy>(&self, strategy: S, lane: &Lane<L>)
+    fn invoke<Op>(&self, op: Op)
     where
-        L: ExactDrive,
+        Op: Copy + Visit,
     {
-        self.0.walk(strategy, lane);
-        self.1.walk(strategy, lane);
-        self.2.walk(strategy, lane);
-        self.3.walk(strategy, lane);
-        self.4.walk(strategy, lane);
-        self.5.walk(strategy, lane);
-        self.6.walk(strategy, lane);
-        self.7.walk(strategy, lane);
+        self.0.hand(op);
     }
 }
 
-// Generics: `T` carrier ([`CarrierDesc`]), `L` list.
-impl<L, T> Walk<L> for T
+// Generics: `Op` behavior, `E0`…`E1` child slots.
+impl<E0, E1> Invoke for (E0, E1)
 where
-    T: CarrierDesc,
-    T::Inner: Walk<L>,
+    E0: Hand,
+    E1: Hand,
 {
-    fn walk<S: WalkStrategy + Copy>(&self, strategy: S, lane: &Lane<L>)
+    fn invoke<Op>(&self, op: Op)
     where
-        L: ExactDrive,
+        Op: Copy + Visit,
     {
-        self.carrier_inner().walk(strategy, lane);
+        self.0.hand(op);
+        self.1.hand(op);
+    }
+}
+
+// Generics: `Op` behavior, `E0`…`E2` child slots.
+impl<E0, E1, E2> Invoke for (E0, E1, E2)
+where
+    E0: Hand,
+    E1: Hand,
+    E2: Hand,
+{
+    fn invoke<Op>(&self, op: Op)
+    where
+        Op: Copy + Visit,
+    {
+        self.0.hand(op);
+        self.1.hand(op);
+        self.2.hand(op);
+    }
+}
+
+// Generics: `Op` behavior, `E0`…`E3` child slots.
+impl<E0, E1, E2, E3> Invoke for (E0, E1, E2, E3)
+where
+    E0: Hand,
+    E1: Hand,
+    E2: Hand,
+    E3: Hand,
+{
+    fn invoke<Op>(&self, op: Op)
+    where
+        Op: Copy + Visit,
+    {
+        self.0.hand(op);
+        self.1.hand(op);
+        self.2.hand(op);
+        self.3.hand(op);
+    }
+}
+
+// Generics: `Op` behavior, `E0`…`E4` child slots.
+impl<E0, E1, E2, E3, E4> Invoke for (E0, E1, E2, E3, E4)
+where
+    E0: Hand,
+    E1: Hand,
+    E2: Hand,
+    E3: Hand,
+    E4: Hand,
+{
+    fn invoke<Op>(&self, op: Op)
+    where
+        Op: Copy + Visit,
+    {
+        self.0.hand(op);
+        self.1.hand(op);
+        self.2.hand(op);
+        self.3.hand(op);
+        self.4.hand(op);
+    }
+}
+
+// Generics: `Op` behavior, `E0`…`E5` child slots.
+impl<E0, E1, E2, E3, E4, E5> Invoke for (E0, E1, E2, E3, E4, E5)
+where
+    E0: Hand,
+    E1: Hand,
+    E2: Hand,
+    E3: Hand,
+    E4: Hand,
+    E5: Hand,
+{
+    fn invoke<Op>(&self, op: Op)
+    where
+        Op: Copy + Visit,
+    {
+        self.0.hand(op);
+        self.1.hand(op);
+        self.2.hand(op);
+        self.3.hand(op);
+        self.4.hand(op);
+        self.5.hand(op);
+    }
+}
+
+// Generics: `Op` behavior, `E0`…`E6` child slots.
+impl<E0, E1, E2, E3, E4, E5, E6> Invoke for (E0, E1, E2, E3, E4, E5, E6)
+where
+    E0: Hand,
+    E1: Hand,
+    E2: Hand,
+    E3: Hand,
+    E4: Hand,
+    E5: Hand,
+    E6: Hand,
+{
+    fn invoke<Op>(&self, op: Op)
+    where
+        Op: Copy + Visit,
+    {
+        self.0.hand(op);
+        self.1.hand(op);
+        self.2.hand(op);
+        self.3.hand(op);
+        self.4.hand(op);
+        self.5.hand(op);
+        self.6.hand(op);
+    }
+}
+
+// Generics: `Op` behavior, `E0`…`E7` child slots. One impl per length (rules 11–12).
+impl<E0, E1, E2, E3, E4, E5, E6, E7> Invoke for (E0, E1, E2, E3, E4, E5, E6, E7)
+where
+    E0: Hand,
+    E1: Hand,
+    E2: Hand,
+    E3: Hand,
+    E4: Hand,
+    E5: Hand,
+    E6: Hand,
+    E7: Hand,
+{
+    fn invoke<Op>(&self, op: Op)
+    where
+        Op: Copy + Visit,
+    {
+        self.0.hand(op);
+        self.1.hand(op);
+        self.2.hand(op);
+        self.3.hand(op);
+        self.4.hand(op);
+        self.5.hand(op);
+        self.6.hand(op);
+        self.7.hand(op);
+    }
+}
+
+// A tuple list is handed on by running [`Invoke`]. Not implemented for carriers.
+impl<T: Invoke> Hand for T {
+    fn hand<Op>(&self, op: Op)
+    where
+        Op: Copy + Visit,
+    {
+        self.invoke(op);
     }
 }

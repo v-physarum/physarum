@@ -7,52 +7,18 @@
 //! Path gates use the same const ([`crate::Gate::path_plan`]).
 
 use crate::context::Pipe;
-use crate::context::direct::{Direct, DirectFn, TipEvent};
-use crate::context::list::{ExactDrive, Lane, Walk, WalkStrategy};
-use crate::context::maps::{MapAt, MapEntry, MapList};
-use crate::filter::eval::{Collect, EmitMask, MatchEmit};
-
-// Generics: `L` list, `F` filter path, `H` handler.
-impl<L, F, H> Walk<L> for MapEntry<F, H>
-where
-    F: MatchEmit + Collect,
-    H: Fn(),
-{
-    fn walk<S: WalkStrategy + Copy>(&self, strategy: S, lane: &Lane<L>)
-    where
-        L: ExactDrive,
-    {
-        let _ = lane;
-        if strategy.keep::<F>() {
-            (self.handler)();
-        }
-    }
-}
-
-// Generics: `L` list, `F` filter path, `H` handler ([`DirectFn`]).
-impl<L, F, H> Walk<L> for MapAt<F, H>
-where
-    F: MatchEmit + Collect + TipEvent,
-    H: DirectFn<F::Tip, F>,
-{
-    fn walk<S: WalkStrategy + Copy>(&self, strategy: S, lane: &Lane<L>)
-    where
-        L: ExactDrive,
-    {
-        if strategy.enter_at::<F>() {
-            self.handler.run(&Direct::from_lane(lane));
-        }
-    }
-}
+use crate::context::list::{ExactDrive, Hand, Lane, WalkOp, WalkStrategy};
+use crate::context::maps::MapList;
+use crate::filter::eval::EmitMask;
 
 // Generics: `N` entries, `E` emit tree, `S` filter scope; `G` walk strategy.
 impl<N, E, S> MapList<N, E, S> {
     pub(crate) fn drive<G: WalkStrategy + Copy>(&self, strategy: G)
     where
-        N: Walk<N> + ExactDrive,
+        N: Hand + ExactDrive,
     {
         let lane = Lane { root: &self.entries, scopes: &self.scopes };
-        self.entries.walk(strategy, &lane);
+        self.entries.hand(WalkOp { strategy, lane: &lane });
     }
 
     pub(crate) fn defer_into(&self, bit: u32, mask: EmitMask) {
@@ -78,7 +44,7 @@ pub(crate) trait Drive {
 
 impl<I, N, E, S> Drive for Pipe<I, MapList<N, E, S>>
 where
-    N: Walk<N> + ExactDrive,
+    N: Hand + ExactDrive,
 {
     fn drive<G: WalkStrategy + Copy>(&self, strategy: G) {
         self.list.drive(strategy);
