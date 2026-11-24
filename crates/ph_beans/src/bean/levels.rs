@@ -1,4 +1,4 @@
-//! Outer proxies as one tuple on [`BeanInfo::Chain`](crate::BeanInfo::Chain).
+//! Outer proxies as the third element of [`BeanInfo::Gate`](crate::BeanInfo::Gate).
 //!
 //! `Stop` is no further proxy. `(Mid, Outer)` is the tail, nearest first.
 //! The stored claim is one leaf: `List<Leaf<(Inner, Mid, Outer, Get<Core>)>>`.

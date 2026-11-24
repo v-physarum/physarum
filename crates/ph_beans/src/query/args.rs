@@ -2,7 +2,7 @@
 
 use core::marker::PhantomData;
 
-use crate::bean::{ApplyProxy, BeanInfo, Marked, Proxied, Stop, Target};
+use crate::bean::{ApplyProxy, BeanInfo, Marked, Parts, Proxied, Stop, Target};
 use crate::borrow::{At, Ix0, Ix1, Ix2, Ix3};
 use crate::context::{Leaf, List};
 use crate::descriptor::LevelDesc;
@@ -49,7 +49,7 @@ impl<B, S, L, A, C> Listed<S, (Ix3, L, A, C)> for B where B: BeanInfo<Provides =
 /// `W` is that inner's path. Callers do not name it.
 pub struct Surface<P, M, W>(PhantomData<(P, M, W)>);
 
-/// This proxy plus the outer tuple on [`Chain`](crate::BeanInfo::Chain), as one leaf.
+/// This proxy plus the outer tuple from [`BeanInfo::Gate`](crate::BeanInfo::Gate), as one leaf.
 trait ProxyRows<L> {
     /// Direct proxy first, then each outer.
     type Rows;
@@ -73,7 +73,7 @@ impl<P, O0, O1, O2> ProxyRows<(O0, O1, O2)> for P {
 
 /// Pipeline bean: its proxy chain and itself as the module list.
 pub(crate) trait Host: BeanInfo {
-    /// Proxies from the direct one out to the end of [`Chain`](crate::BeanInfo::Chain).
+    /// Proxies from the direct one out through the chain in [`BeanInfo::Gate`](crate::BeanInfo::Gate).
     type Proxies;
     /// The pipeline bean. A longer module list uses the same [`List`] shape.
     type Modules;
@@ -82,7 +82,7 @@ pub(crate) trait Host: BeanInfo {
 impl<B, P, U> Host for B
 where
     B: Proxied<Link: Marked<Target = P>>,
-    P: BeanInfo + ProxyRows<P::Chain, Rows = U>,
+    P: Parts + ProxyRows<P::Chain, Rows = U>,
 {
     type Proxies = U;
     type Modules = List<Leaf<(B,)>>;

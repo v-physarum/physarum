@@ -2,7 +2,7 @@
 
 use core::any::TypeId;
 
-use crate::bean::{BeanInfo, Marked, ParentList, Proxied, Stop};
+use crate::bean::{Marked, ParentList, Parts, Proxied, Stop};
 use crate::descriptor::{Get, Mut};
 use crate::filter::{And, Not, On, Or};
 
@@ -249,7 +249,7 @@ where
 impl<E, I, P> MatchEmit for On<E, I>
 where
     E: 'static + Proxied<Link: Marked<Target = P>>,
-    P: BeanInfo + ChainEmit<P::Chain>,
+    P: Parts + ChainEmit<P::Chain>,
     I: MatchEmit,
 {
     #[inline]

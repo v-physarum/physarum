@@ -14,9 +14,7 @@ impl BeanInfo for Id {
     type Injects = ();
     type Beans = ();
     type State = u8;
-    type Proxy = Proxy<Id>;
-    type Link = Get<Id>;
-    type Chain = Stop;
+    type Gate = (Proxy<Id>, Get<Id>, Stop);
 }
 
 impl BeanInfo for Keys {
@@ -24,9 +22,7 @@ impl BeanInfo for Keys {
     type Injects = ();
     type Beans = ();
     type State = u8;
-    type Proxy = Proxy<Keys>;
-    type Link = Get<Keys>;
-    type Chain = Stop;
+    type Gate = (Proxy<Keys>, Get<Keys>, Stop);
 }
 
 impl BeanInfo for App {
@@ -34,9 +30,7 @@ impl BeanInfo for App {
     type Injects = ();
     type Beans = (Id, Keys);
     type State = u8;
-    type Proxy = Proxy<App>;
-    type Link = Get<App>;
-    type Chain = Stop;
+    type Gate = (Proxy<App>, Get<App>, Stop);
 }
 
 impl At<Id> for App {

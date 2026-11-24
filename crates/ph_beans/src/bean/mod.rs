@@ -38,12 +38,53 @@ pub trait BeanInfo: Sized {
     type Beans;
     /// Owned state of this bean only.
     type State;
-    /// Wrapping proxy. [`Proxy<Self>`](crate::Proxy) when none is named.
+    /// `(proxy, link, chain)`.
+    ///
+    /// `proxy` is [`Proxy<Self>`](crate::Proxy) or a named proxy. `link` is
+    /// `Get<Self>` or `Mut<Self>`. `chain` is [`Stop`](crate::Stop), or the
+    /// outer proxies, nearest first. [`Parts`] reads the three back out.
+    type Gate: Open<Self>;
+}
+
+/// Splits a [`BeanInfo::Gate`] tuple into proxy, link, and chain.
+#[doc(hidden)]
+pub trait Open<B> {
+    /// Wrapping proxy.
     type Proxy: BeanInfo;
-    /// `Get<Self>` or `Mut<Self>` when `Self` wraps another bean.
-    type Link: Marked<Target = Self>;
-    /// [`Stop`](crate::Stop) when nothing wraps `Self`. A tuple of outer proxies, nearest first, otherwise.
+    /// `Get<B>` or `Mut<B>`.
+    type Link: Marked<Target = B>;
+    /// [`Stop`](crate::Stop), or the outer proxies, nearest first.
     type Chain;
+}
+
+impl<B, P, L, C> Open<B> for (P, L, C)
+where
+    P: BeanInfo,
+    L: Marked<Target = B>,
+{
+    type Proxy = P;
+    type Link = L;
+    type Chain = C;
+}
+
+/// [`BeanInfo::Proxy`](Parts::Proxy), [`Link`](Parts::Link), and [`Chain`](Parts::Chain) read off [`BeanInfo::Gate`].
+#[doc(hidden)]
+pub trait Parts: BeanInfo {
+    /// First element of [`Gate`](BeanInfo::Gate).
+    type Proxy: BeanInfo;
+    /// Second element of [`Gate`](BeanInfo::Gate).
+    type Link: Marked<Target = Self>;
+    /// Third element of [`Gate`](BeanInfo::Gate).
+    type Chain;
+}
+
+impl<B> Parts for B
+where
+    B: BeanInfo,
+{
+    type Proxy = <B::Gate as Open<B>>::Proxy;
+    type Link = <B::Gate as Open<B>>::Link;
+    type Chain = <B::Gate as Open<B>>::Chain;
 }
 
 /// Extra descriptor for an event, beside [`BeanInfo`].

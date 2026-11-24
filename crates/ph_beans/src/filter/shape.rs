@@ -1,6 +1,6 @@
 //! Spine, wait, and parent checks over the filter AST.
 
-use crate::bean::{BeanInfo, EventInfo, Marked, Proxied};
+use crate::bean::{BeanInfo, EventInfo, Marked, Parts, Proxied};
 use crate::context::{Leaf, List};
 use crate::descriptor::{Get, Mut};
 use crate::filter::{And, Not, On, Or};
@@ -316,7 +316,7 @@ impl<L, A, B, P> HasParent<P, crate::Ix3> for (L, A, B, P) {}
 
 impl<X, L, P, K> ChainParents<P, K> for X
 where
-    X: BeanInfo<Chain = L>,
+    X: Parts<Chain = L>,
     L: TailParents<P, K>,
 {
 }

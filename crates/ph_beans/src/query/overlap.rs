@@ -9,7 +9,7 @@
 //! the proxy still resolves. Two [`At`](crate::At) impls with no repeated list
 //! entry stay ambiguous; this gate is the repeated entry.
 
-use crate::bean::{BeanInfo, Stop};
+use crate::bean::{BeanInfo, Parts, Stop};
 use crate::descriptor::{LevelDesc, Valid};
 use crate::query::args::Host;
 
@@ -181,17 +181,17 @@ where
 
 impl<B, U> LevelDesc for B
 where
-    B: BeanInfo + Host<Proxies = U>,
-    B::Proxy: BeanInfo,
+    B: Parts + Host<Proxies = U>,
+    B::Proxy: Parts,
     B::Beans: Cross<<B::Proxy as BeanInfo>::Provides>,
-    <B::Proxy as BeanInfo>::Chain: ChainClear<B::Beans>,
+    <B::Proxy as Parts>::Chain: ChainClear<B::Beans>,
 {
     type Rows = U;
     type Status = Valid;
 
     const OK: u8 = {
         let _ = <B::Beans as Cross<<B::Proxy as BeanInfo>::Provides>>::OK;
-        let _ = <<B::Proxy as BeanInfo>::Chain as ChainClear<B::Beans>>::OK;
+        let _ = <<B::Proxy as Parts>::Chain as ChainClear<B::Beans>>::OK;
         CLEAR
     };
 }

@@ -6,7 +6,7 @@
 //! `a_chain_nests_wrappers_outer_around_inner`.
 //! Chain emits are `emitting_chain_level_*`, expanded with `impl_foreach`.
 //! A component injects a proxy object only when that proxy lists it in `Provides`.
-//! `BeanInfo::Proxy` is that proxy. Its `Link` is `Get<Self>` or `Mut<Self>`.
+//! The first element of `BeanInfo::Gate` is that proxy. The second is `Get<Self>` or `Mut<Self>`.
 
 use core::any::TypeId;
 use core::marker::PhantomData;
@@ -45,23 +45,27 @@ impl<S> Marked for Mut<S> {
 /// A longer chain is a tuple of the outer proxies, nearest first: `(Mid, Outer)`.
 pub struct Stop;
 
-/// Bean wrapped by [`BeanInfo::Proxy`](crate::BeanInfo::Proxy).
+/// Bean wrapped by the proxy in its [`BeanInfo::Gate`](crate::BeanInfo::Gate).
 ///
 /// Blanket for every [`BeanInfo`](crate::BeanInfo).
-/// [`Link`](Proxied::Link) is that proxy's [`BeanInfo::Link`](crate::BeanInfo::Link).
+/// [`Link`](Proxied::Link) is that proxy's link: the second element of the proxy's gate.
 /// No named proxy: `Proxy<Self>`, so the link is `Get<Proxy<Self>>`.
-/// A named proxy is `BeanInfo::Proxy` (`Get<Update>` or `Mut<Gate>`).
+/// A named proxy is the first element of the gate (`Get<Update>` or `Mut<Gate>`).
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not a proxied target",
     note = "inject the target bean; a proxy is not a free-standing key. `Link` is that proxy's `Get<Self>` or `Mut<Self>`"
 )]
-pub trait Proxied: crate::BeanInfo {
+pub trait Proxied: crate::BeanInfo + super::Parts {
     /// `Get<P>` or `Mut<P>` of the wrapping proxy.
     type Link: Marked<Target = Self::Proxy>;
 }
 
-impl<T: crate::BeanInfo> Proxied for T {
-    type Link = <T::Proxy as crate::BeanInfo>::Link;
+impl<T> Proxied for T
+where
+    T: super::Parts,
+    T::Proxy: super::Parts,
+{
+    type Link = <T::Proxy as super::Parts>::Link;
 }
 
 /// Proxy used when a bean names none. `Link = Get<Self>`, `Chain = Stop`.
@@ -76,12 +80,8 @@ impl<B: crate::BeanInfo> crate::BeanInfo for Proxy<B> {
     type Beans = ();
     /// The target keeps its own state.
     type State = ();
-    /// The wrapper's own default proxy.
-    type Proxy = Proxy<Proxy<B>>;
-    /// Shared claim of this wrapper.
-    type Link = Get<Proxy<B>>;
-    /// Nothing wraps the default proxy.
-    type Chain = Stop;
+    /// `(Proxy<Proxy<B>>, Get<Proxy<B>>, Stop)`.
+    type Gate = (Proxy<Proxy<B>>, Get<Proxy<B>>, Stop);
 }
 
 impl<B: crate::BeanInfo> crate::EventInfo for Proxy<B> {
@@ -156,7 +156,7 @@ impl<C, P> ApplyProxy for C
 where
     C: Marked,
     C::Target: Proxied<Link: Marked<Target = P>>,
-    P: crate::BeanInfo + Enfold<C, P::Chain>,
+    P: super::Parts + Enfold<C, P::Chain>,
 {
     type Wrapped = <P as Enfold<C, P::Chain>>::Wrapped;
 }
@@ -228,7 +228,7 @@ pub trait DriveInit<B: crate::BeanInfo> {
 impl<B, P> DriveInit<B> for P
 where
     B: crate::BeanInfo,
-    P: InitPath<B> + EnterAll<B, P::Chain>,
+    P: InitPath<B> + super::Parts + EnterAll<B, P::Chain>,
 {
     fn drive() -> B::State
     where

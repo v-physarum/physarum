@@ -18,7 +18,7 @@ pub mod query;
 pub use bean::{
     ApplyProxy, BeanInfo, Corresponds, EventInfo, FreeKey, FromParent, Fwd, InitPath, Marked,
     Module, OfInject, OfInject0, OfInject1, OfParent, OfProvide, OfProvide0, OfProvide1,
-    ParentList, Proxied, Proxy, Stop, Target,
+    ParentList, Parts, Proxied, Proxy, Stop, Target,
 };
 pub use borrow::{At, Ix0, Ix1, Ix2, Ix3, Off, Take, TakeMany};
 pub use context::{
@@ -43,7 +43,7 @@ mod tests {
         //! `emitting_the_proxy_runs_the_target` is the manual emit.
         //! `emitting_chain_level_*` repeats it for the chain.
         //! `the_target_sees_the_proxy_provides` injects `Score` from `Update`'s `Provides`.
-        //! `GameTick`: `Proxy = Update`, so `Link = Get<Update>`.
+        //! `GameTick`: gate `(Update, Get<GameTick>, Stop)`, so the proxy link is `Get<Update>`.
 
         use std::fs;
         use std::path::PathBuf;
@@ -56,8 +56,8 @@ mod tests {
 
         use ph_beans::{
             At, BeanInfo, Corresponds, Ctx, EventInfo, Fwd, Get, Init, InitPath, Ix0, Ix1, Leaf,
-            LevelDesc, List, Live, Marker, Mut, Pipe, Proxied, Proxy, Query, Stop, Target, Tick,
-            WithInit,
+            LevelDesc, List, Live, Marker, Mut, Parts, Pipe, Proxied, Proxy, Query, Stop, Target,
+            Tick, WithInit,
         };
         use ph_util_foreach::impl_foreach;
 
@@ -96,10 +96,7 @@ mod tests {
             type Beans = ();
             type State = ();
 
-            type Proxy = Proxy<Id>;
-
-            type Link = ph_beans::Get<Id>;
-            type Chain = ph_beans::Stop;
+            type Gate = (Proxy<Id>, ph_beans::Get<Id>, ph_beans::Stop);
         }
         impl Target for Id {}
 
@@ -111,9 +108,7 @@ mod tests {
                 type Beans = ();
                 type State = ();
 
-                type Proxy = Proxy<paste(Row, n)>;
-                type Link = Get<paste(Row, n)>;
-                type Chain = Stop;
+                type Gate = (Proxy<paste(Row, n)>, Get<paste(Row, n)>, Stop);
             }
             impl Target for paste(Row, n) {}
         });
@@ -147,10 +142,7 @@ mod tests {
             type Beans = (Id, GameTick);
             type State = ();
 
-            type Proxy = Proxy<Shell>;
-
-            type Link = ph_beans::Get<Shell>;
-            type Chain = ph_beans::Stop;
+            type Gate = (Proxy<Shell>, ph_beans::Get<Shell>, ph_beans::Stop);
         }
         impl Target for Shell {}
         impl At<Id> for Shell {
@@ -166,10 +158,7 @@ mod tests {
             type Beans = (Score,);
             type State = ();
 
-            type Proxy = Proxy<Update>;
-
-            type Link = Get<Update>;
-            type Chain = Stop;
+            type Gate = (Proxy<Update>, Get<Update>, Stop);
         }
         impl At<Score> for Update {
             type Ix = Ix0;
@@ -189,10 +178,7 @@ mod tests {
             type Beans = ();
             type State = u8;
 
-            type Proxy = Update;
-
-            type Link = ph_beans::Get<GameTick>;
-            type Chain = ph_beans::Stop;
+            type Gate = (Update, ph_beans::Get<GameTick>, ph_beans::Stop);
         }
         impl Target for GameTick {}
         impl EventInfo for GameTick {
@@ -205,10 +191,7 @@ mod tests {
             type Beans = ();
             type State = ();
 
-            type Proxy = Proxy<Gate>;
-
-            type Link = Mut<Gate>;
-            type Chain = Stop;
+            type Gate = (Proxy<Gate>, Mut<Gate>, Stop);
         }
 
         impl BeanInfo for Loud {
@@ -217,10 +200,7 @@ mod tests {
             type Beans = ();
             type State = ();
 
-            type Proxy = Gate;
-
-            type Link = ph_beans::Get<Loud>;
-            type Chain = ph_beans::Stop;
+            type Gate = (Gate, ph_beans::Get<Loud>, ph_beans::Stop);
         }
         impl Target for Loud {}
 
@@ -236,10 +216,7 @@ mod tests {
             type Beans = ();
             type State = u8;
 
-            type Proxy = Inner;
-
-            type Link = ph_beans::Get<Core>;
-            type Chain = ph_beans::Stop;
+            type Gate = (Inner, ph_beans::Get<Core>, ph_beans::Stop);
         }
         impl Target for Core {}
         impl EventInfo for Core {
@@ -252,10 +229,7 @@ mod tests {
             type Beans = ();
             type State = ();
 
-            type Proxy = Proxy<Inner>;
-
-            type Link = Get<Inner>;
-            type Chain = (Mid, Outer);
+            type Gate = (Proxy<Inner>, Get<Inner>, (Mid, Outer));
         }
         impl EventInfo for Inner {
             type Parents = ();
@@ -276,10 +250,7 @@ mod tests {
             type Beans = (Prize,);
             type State = ();
 
-            type Proxy = Proxy<Mid>;
-
-            type Link = Get<Mid>;
-            type Chain = (Outer,);
+            type Gate = (Proxy<Mid>, Get<Mid>, (Outer,));
         }
         impl EventInfo for Mid {
             type Parents = ();
@@ -299,10 +270,7 @@ mod tests {
             type Beans = (Bonus,);
             type State = ();
 
-            type Proxy = Proxy<Outer>;
-
-            type Link = Get<Outer>;
-            type Chain = Stop;
+            type Gate = (Proxy<Outer>, Get<Outer>, Stop);
         }
         impl EventInfo for Outer {
             type Parents = Alarm;
@@ -322,10 +290,7 @@ mod tests {
             type Beans = (Core,);
             type State = ();
 
-            type Proxy = Proxy<Room>;
-
-            type Link = ph_beans::Get<Room>;
-            type Chain = ph_beans::Stop;
+            type Gate = (Proxy<Room>, ph_beans::Get<Room>, ph_beans::Stop);
         }
         impl Target for Room {}
         impl At<Core> for Room {
@@ -385,7 +350,7 @@ mod tests {
             fn exclusive<T: Same<Mut<Gate>>>() {}
             fn default_link<B>()
             where
-                B: BeanInfo<Proxy = Proxy<B>> + Proxied<Link = Get<Proxy<B>>>,
+                B: Parts<Proxy = Proxy<B>> + Proxied<Link = Get<Proxy<B>>>,
             {
             }
             fn named<P: Same<Update>>() {}
@@ -394,11 +359,11 @@ mod tests {
             default_link::<Id>();
             shared::<<GameTick as Proxied>::Link>();
             exclusive::<<Loud as Proxied>::Link>();
-            named::<<GameTick as BeanInfo>::Proxy>();
-            gate::<<Loud as BeanInfo>::Proxy>();
-            inner::<<Core as BeanInfo>::Proxy>();
-            shared::<<Update as BeanInfo>::Link>();
-            exclusive::<<Gate as BeanInfo>::Link>();
+            named::<<GameTick as Parts>::Proxy>();
+            gate::<<Loud as Parts>::Proxy>();
+            inner::<<Core as Parts>::Proxy>();
+            shared::<<Update as Parts>::Link>();
+            exclusive::<<Gate as Parts>::Link>();
         }
 
         #[test]
@@ -429,21 +394,15 @@ mod tests {
                 struct GameTick;
                 impl BeanInfo for Score {
                     type Provides = (); type Injects = (); type Beans = (); type State = ();
-                    type Proxy = Proxy<Score>;
-                    type Link = Get<Score>;
-                    type Chain = Stop;
+                    type Gate = (Proxy<Score>, Get<Score>, Stop);
                 }
                 impl BeanInfo for Update {
                     type Provides = (); type Injects = (); type Beans = (); type State = ();
-                    type Proxy = Proxy<Update>;
-                    type Link = Get<Update>;
-                    type Chain = Stop;
+                    type Gate = (Proxy<Update>, Get<Update>, Stop);
                 }
                 impl BeanInfo for GameTick {
                     type Provides = (); type Injects = (); type Beans = (); type State = ();
-                    type Proxy = Update;
-                    type Link = Get<GameTick>;
-                    type Chain = Stop;
+                    type Gate = (Update, Get<GameTick>, Stop);
                 }
                 fn check<B: Corresponds<R>, R>(_: R) {}
                 fn call() { check::<GameTick, _>(Score::T << Update::T); }
@@ -465,23 +424,17 @@ mod tests {
                 struct GameTick;
                 impl BeanInfo for Score {
                     type Provides = (); type Injects = (); type Beans = (); type State = ();
-                    type Proxy = Proxy<Score>;
-                    type Link = ph_beans::Get<Score>;
-                    type Chain = Stop;
+                    type Gate = (Proxy<Score>, ph_beans::Get<Score>, Stop);
                 }
                 impl Target for Score {}
                 impl BeanInfo for Update {
                     type Provides = (Score,); type Injects = (); type Beans = (Score,); type State = ();
-                    type Proxy = Proxy<Update>;
-                    type Link = Get<Update>;
-                    type Chain = Stop;
+                    type Gate = (Proxy<Update>, Get<Update>, Stop);
                 }
                 impl At<Score> for Update { type Ix = Ix0; }
                 impl BeanInfo for GameTick {
                     type Provides = (); type Injects = (); type Beans = (Score,); type State = ();
-                    type Proxy = Update;
-                    type Link = ph_beans::Get<GameTick>;
-                    type Chain = Stop;
+                    type Gate = (Update, ph_beans::Get<GameTick>, Stop);
                 }
                 impl Target for GameTick {}
                 pub fn probe() { let _claim = GameTick::query().inject_resources(Score::T); }
@@ -500,25 +453,19 @@ mod tests {
                 impl BeanInfo for Score {
                     type Provides = (); type Injects = (); type Beans = (); type State = ();
                 
-                type Proxy = Proxy<Score>;
-                type Link = ph_beans::Get<Score>;
-                type Chain = ph_beans::Stop;
+                type Gate = (Proxy<Score>, ph_beans::Get<Score>, ph_beans::Stop);
 }
                 impl Target for Score {}
                 impl BeanInfo for Update {
                     type Provides = (); type Injects = (); type Beans = (); type State = ();
                 
-                type Proxy = Proxy<Update>;
-                type Link = Get<Update>;
-                type Chain = Stop;
+                type Gate = (Proxy<Update>, Get<Update>, Stop);
 }
                 impl At<Score> for Update { type Ix = Ix0; }
                 impl BeanInfo for GameTick {
                     type Provides = (); type Injects = (); type Beans = (); type State = ();
                 
-                type Proxy = Update;
-                type Link = ph_beans::Get<GameTick>;
-                type Chain = ph_beans::Stop;
+                type Gate = (Update, ph_beans::Get<GameTick>, ph_beans::Stop);
 }
                 impl Target for GameTick {}
                 fn probe() { let _claim = GameTick::query().inject_resources(Score::T); }
@@ -637,9 +584,7 @@ mod tests {
             type Injects = ();
             type Beans = ();
             type State = ();
-            type Proxy = DeepNear;
-            type Link = Get<DeepBean>;
-            type Chain = Stop;
+            type Gate = (DeepNear, Get<DeepBean>, Stop);
         }
         impl EventInfo for DeepBean {
             type Parents = ();
@@ -650,9 +595,7 @@ mod tests {
             type Injects = ();
             type Beans = ();
             type State = ();
-            type Proxy = Proxy<DeepNear>;
-            type Link = Get<DeepNear>;
-            type Chain = (DeepMid, DeepFar, DeepEdge);
+            type Gate = (Proxy<DeepNear>, Get<DeepNear>, (DeepMid, DeepFar, DeepEdge));
         }
         impl EventInfo for DeepNear {
             type Parents = ();
@@ -663,9 +606,7 @@ mod tests {
             type Injects = ();
             type Beans = ();
             type State = ();
-            type Proxy = Proxy<DeepMid>;
-            type Link = Get<DeepMid>;
-            type Chain = (DeepFar, DeepEdge);
+            type Gate = (Proxy<DeepMid>, Get<DeepMid>, (DeepFar, DeepEdge));
         }
         impl EventInfo for DeepMid {
             type Parents = ();
@@ -676,9 +617,7 @@ mod tests {
             type Injects = ();
             type Beans = ();
             type State = ();
-            type Proxy = Proxy<DeepFar>;
-            type Link = Get<DeepFar>;
-            type Chain = (DeepEdge,);
+            type Gate = (Proxy<DeepFar>, Get<DeepFar>, (DeepEdge,));
         }
         impl EventInfo for DeepFar {
             type Parents = ();
@@ -689,9 +628,7 @@ mod tests {
             type Injects = ();
             type Beans = ();
             type State = ();
-            type Proxy = Proxy<DeepEdge>;
-            type Link = Get<DeepEdge>;
-            type Chain = Stop;
+            type Gate = (Proxy<DeepEdge>, Get<DeepEdge>, Stop);
         }
         impl EventInfo for DeepEdge {
             type Parents = (Alarm, Main);
@@ -702,9 +639,7 @@ mod tests {
             type Injects = ();
             type Beans = ();
             type State = ();
-            type Proxy = Proxy<DeepRoom>;
-            type Link = Get<DeepRoom>;
-            type Chain = Stop;
+            type Gate = (Proxy<DeepRoom>, Get<DeepRoom>, Stop);
         }
 
         #[test]
@@ -789,24 +724,18 @@ mod tests {
             impl BeanInfo for Tick {
                 type Provides = (); type Injects = (); type Beans = (); type State = ();
             
-            type Proxy = Proxy<Tick>;
-            type Link = ph_beans::Get<Tick>;
-            type Chain = ph_beans::Stop;
+            type Gate = (Proxy<Tick>, ph_beans::Get<Tick>, ph_beans::Stop);
 }
             impl Target for Tick {}
             impl BeanInfo for Update {
                 type Provides = (); type Injects = (); type Beans = (); type State = ();
             
-            type Proxy = Proxy<Update>;
-            type Link = ph_beans::Get<Update>;
-            type Chain = Stop;
+            type Gate = (Proxy<Update>, ph_beans::Get<Update>, Stop);
 }
             impl BeanInfo for App {
                 type Provides = (); type Injects = (); type Beans = (); type State = ();
             
-            type Proxy = Proxy<App>;
-            type Link = ph_beans::Get<App>;
-            type Chain = ph_beans::Stop;
+            type Gate = (Proxy<App>, ph_beans::Get<App>, ph_beans::Stop);
 }
             impl At<Update> for App { type Ix = Ix0; }
             fn probe() { let _claim = App::query().inject_resources(Update::MUT); }
@@ -826,24 +755,18 @@ mod tests {
             impl BeanInfo for Tick {
                 type Provides = (); type Injects = (); type Beans = (); type State = ();
             
-            type Proxy = Proxy<Tick>;
-            type Link = ph_beans::Get<Tick>;
-            type Chain = ph_beans::Stop;
+            type Gate = (Proxy<Tick>, ph_beans::Get<Tick>, ph_beans::Stop);
 }
             impl Target for Tick {}
             impl BeanInfo for Update {
                 type Provides = (); type Injects = (); type Beans = (); type State = ();
             
-            type Proxy = Proxy<Update>;
-            type Link = Get<Update>;
-            type Chain = Stop;
+            type Gate = (Proxy<Update>, Get<Update>, Stop);
 }
             impl BeanInfo for App {
                 type Provides = Get<Update>; type Injects = (); type Beans = Get<Update>; type State = ();
             
-            type Proxy = Proxy<App>;
-            type Link = ph_beans::Get<App>;
-            type Chain = ph_beans::Stop;
+            type Gate = (Proxy<App>, ph_beans::Get<App>, ph_beans::Stop);
 }
             fn probe() { fn inject<C: FromParent<App, OfProvide>>() {} inject::<Get<Update>>(); }
             ",
@@ -863,24 +786,18 @@ mod tests {
             impl BeanInfo for Tick {
                 type Provides = (); type Injects = (); type Beans = (); type State = ();
             
-            type Proxy = Proxy<Tick>;
-            type Link = ph_beans::Get<Tick>;
-            type Chain = ph_beans::Stop;
+            type Gate = (Proxy<Tick>, ph_beans::Get<Tick>, ph_beans::Stop);
 }
             impl Target for Tick {}
             impl BeanInfo for Update {
                 type Provides = (); type Injects = (); type Beans = (); type State = ();
             
-            type Proxy = Proxy<Update>;
-            type Link = ph_beans::Get<Update>;
-            type Chain = Stop;
+            type Gate = (Proxy<Update>, ph_beans::Get<Update>, Stop);
 }
             impl BeanInfo for App {
                 type Provides = (); type Injects = (); type Beans = (); type State = ();
             
-            type Proxy = Proxy<App>;
-            type Link = ph_beans::Get<App>;
-            type Chain = ph_beans::Stop;
+            type Gate = (Proxy<App>, ph_beans::Get<App>, ph_beans::Stop);
 }
             impl At<Update> for App { type Ix = Ix0; }
             fn probe<C: Claim<App>>() {}
@@ -902,31 +819,23 @@ mod tests {
             impl BeanInfo for Tick {
                 type Provides = (); type Injects = (); type Beans = (); type State = ();
             
-            type Proxy = Inner;
-            type Link = ph_beans::Get<Tick>;
-            type Chain = ph_beans::Stop;
+            type Gate = (Inner, ph_beans::Get<Tick>, ph_beans::Stop);
 }
             impl ph_beans::Target for Tick {}
             impl BeanInfo for Inner {
                 type Provides = (); type Injects = (); type Beans = (); type State = ();
             
-            type Proxy = Proxy<Inner>;
-            type Link = Get<Inner>;
-            type Chain = (Outer,);
+            type Gate = (Proxy<Inner>, Get<Inner>, (Outer,));
 }
             impl BeanInfo for Outer {
                 type Provides = (); type Injects = (); type Beans = (); type State = ();
             
-            type Proxy = Proxy<Outer>;
-            type Link = Get<Outer>;
-            type Chain = Stop;
+            type Gate = (Proxy<Outer>, Get<Outer>, Stop);
 }
             impl BeanInfo for App {
                 type Provides = (); type Injects = (); type Beans = (); type State = ();
             
-            type Proxy = Proxy<App>;
-            type Link = ph_beans::Get<App>;
-            type Chain = ph_beans::Stop;
+            type Gate = (Proxy<App>, ph_beans::Get<App>, ph_beans::Stop);
 }
             impl At<Inner> for App { type Ix = Ix0; }
             fn probe() { let _claim = App::query().inject_resources(Inner::T); }
@@ -1046,10 +955,7 @@ mod tests {
             type Beans = ();
             type State = u8;
 
-            type Proxy = Proxy<Id>;
-
-            type Link = ph_beans::Get<Id>;
-            type Chain = ph_beans::Stop;
+            type Gate = (Proxy<Id>, ph_beans::Get<Id>, ph_beans::Stop);
         }
 
         impl BeanInfo for Keys {
@@ -1058,10 +964,7 @@ mod tests {
             type Beans = ();
             type State = u8;
 
-            type Proxy = Proxy<Keys>;
-
-            type Link = ph_beans::Get<Keys>;
-            type Chain = ph_beans::Stop;
+            type Gate = (Proxy<Keys>, ph_beans::Get<Keys>, ph_beans::Stop);
         }
 
         impl BeanInfo for App {
@@ -1070,10 +973,7 @@ mod tests {
             type Beans = (Id, Keys);
             type State = u8;
 
-            type Proxy = Proxy<App>;
-
-            type Link = ph_beans::Get<App>;
-            type Chain = ph_beans::Stop;
+            type Gate = (Proxy<App>, ph_beans::Get<App>, ph_beans::Stop);
         }
 
         impl BeanInfo for Update {
@@ -1082,10 +982,7 @@ mod tests {
             type Beans = ();
             type State = ();
 
-            type Proxy = Proxy<Update>;
-
-            type Link = ph_beans::Get<Update>;
-            type Chain = ph_beans::Stop;
+            type Gate = (Proxy<Update>, ph_beans::Get<Update>, ph_beans::Stop);
         }
 
         impl EventInfo for Update {
@@ -1138,10 +1035,7 @@ mod tests {
             type Beans = (Get<App>, Get<Render>);
             type State = u8;
 
-            type Proxy = Proxy<Logic>;
-
-            type Link = ph_beans::Get<Logic>;
-            type Chain = ph_beans::Stop;
+            type Gate = (Proxy<Logic>, ph_beans::Get<Logic>, ph_beans::Stop);
         }
 
         impl BeanInfo for Render {
@@ -1150,10 +1044,7 @@ mod tests {
             type Beans = Mut<Logic>;
             type State = u8;
 
-            type Proxy = Proxy<Render>;
-
-            type Link = ph_beans::Get<Render>;
-            type Chain = ph_beans::Stop;
+            type Gate = (Proxy<Render>, ph_beans::Get<Render>, ph_beans::Stop);
         }
 
         impl BeanInfo for UsesApp {
@@ -1162,10 +1053,7 @@ mod tests {
             type Beans = Get<App>;
             type State = ();
 
-            type Proxy = Proxy<UsesApp>;
-
-            type Link = ph_beans::Get<UsesApp>;
-            type Chain = ph_beans::Stop;
+            type Gate = (Proxy<UsesApp>, ph_beans::Get<UsesApp>, ph_beans::Stop);
         }
 
         impl BeanInfo for UsesRender {
@@ -1174,10 +1062,7 @@ mod tests {
             type Beans = Get<Render>;
             type State = ();
 
-            type Proxy = Proxy<UsesRender>;
-
-            type Link = ph_beans::Get<UsesRender>;
-            type Chain = ph_beans::Stop;
+            type Gate = (Proxy<UsesRender>, ph_beans::Get<UsesRender>, ph_beans::Stop);
         }
 
         impl BeanInfo for PairHost {
@@ -1186,10 +1071,7 @@ mod tests {
             type Beans = (Get<Id>, Mut<Keys>);
             type State = ();
 
-            type Proxy = Proxy<PairHost>;
-
-            type Link = ph_beans::Get<PairHost>;
-            type Chain = ph_beans::Stop;
+            type Gate = (Proxy<PairHost>, ph_beans::Get<PairHost>, ph_beans::Stop);
         }
 
         impl BeanInfo for TakesKeys {
@@ -1198,10 +1080,7 @@ mod tests {
             type Beans = Mut<Keys>;
             type State = ();
 
-            type Proxy = Proxy<TakesKeys>;
-
-            type Link = ph_beans::Get<TakesKeys>;
-            type Chain = ph_beans::Stop;
+            type Gate = (Proxy<TakesKeys>, ph_beans::Get<TakesKeys>, ph_beans::Stop);
         }
 
         impl Setup for Render {
@@ -1274,10 +1153,7 @@ mod tests {
             type Beans = Update;
             type State = ();
 
-            type Proxy = Proxy<Sched>;
-
-            type Link = ph_beans::Get<Sched>;
-            type Chain = ph_beans::Stop;
+            type Gate = (Proxy<Sched>, ph_beans::Get<Sched>, ph_beans::Stop);
         }
 
         impl BeanInfo for Update {
@@ -1286,10 +1162,7 @@ mod tests {
             type Beans = ();
             type State = ();
 
-            type Proxy = Proxy<Update>;
-
-            type Link = ph_beans::Get<Update>;
-            type Chain = ph_beans::Stop;
+            type Gate = (Proxy<Update>, ph_beans::Get<Update>, ph_beans::Stop);
         }
 
         impl EventInfo for Update {
@@ -1302,10 +1175,7 @@ mod tests {
             type Beans = ();
             type State = ();
 
-            type Proxy = Proxy<Graphics>;
-
-            type Link = ph_beans::Get<Graphics>;
-            type Chain = ph_beans::Stop;
+            type Gate = (Proxy<Graphics>, ph_beans::Get<Graphics>, ph_beans::Stop);
         }
 
         impl EventInfo for Graphics {
@@ -1318,10 +1188,7 @@ mod tests {
             type Beans = ();
             type State = ();
 
-            type Proxy = Proxy<Main>;
-
-            type Link = ph_beans::Get<Main>;
-            type Chain = ph_beans::Stop;
+            type Gate = (Proxy<Main>, ph_beans::Get<Main>, ph_beans::Stop);
         }
 
         impl EventInfo for Main {
@@ -1334,10 +1201,7 @@ mod tests {
             type Beans = ();
             type State = ();
 
-            type Proxy = Proxy<Keys>;
-
-            type Link = ph_beans::Get<Keys>;
-            type Chain = ph_beans::Stop;
+            type Gate = (Proxy<Keys>, ph_beans::Get<Keys>, ph_beans::Stop);
         }
 
         impl At<Keys> for Sched {
@@ -1358,9 +1222,7 @@ mod tests {
             type Injects = ();
             type Beans = ();
             type State = ();
-            type Proxy = Proxy<Side>;
-            type Link = ph_beans::Get<Side>;
-            type Chain = ph_beans::Stop;
+            type Gate = (Proxy<Side>, ph_beans::Get<Side>, ph_beans::Stop);
         }
         impl EventInfo for Side {
             type Parents = ();
@@ -1371,9 +1233,7 @@ mod tests {
             type Injects = ();
             type Beans = ();
             type State = ();
-            type Proxy = Proxy<Joint>;
-            type Link = ph_beans::Get<Joint>;
-            type Chain = ph_beans::Stop;
+            type Gate = (Proxy<Joint>, ph_beans::Get<Joint>, ph_beans::Stop);
         }
         impl EventInfo for Joint {
             type Parents = (Update, Side);
@@ -1539,10 +1399,7 @@ mod tests {
             type Beans = ();
             type State = ();
 
-            type Proxy = Proxy<Draw>;
-
-            type Link = ph_beans::Get<Draw>;
-            type Chain = ph_beans::Stop;
+            type Gate = (Proxy<Draw>, ph_beans::Get<Draw>, ph_beans::Stop);
         }
 
         impl BeanInfo for App {
@@ -1551,10 +1408,7 @@ mod tests {
             type Beans = (Draw,);
             type State = u8;
 
-            type Proxy = Proxy<App>;
-
-            type Link = ph_beans::Get<App>;
-            type Chain = ph_beans::Stop;
+            type Gate = (Proxy<App>, ph_beans::Get<App>, ph_beans::Stop);
         }
 
         impl At<Draw> for App {
@@ -1751,17 +1605,13 @@ mod tests {
             impl BeanInfo for Logic {
                 type Provides = (); type Injects = (); type Beans = (); type State = ();
             
-            type Proxy = Proxy<Logic>;
-            type Link = ph_beans::Get<Logic>;
-            type Chain = ph_beans::Stop;
+            type Gate = (Proxy<Logic>, ph_beans::Get<Logic>, ph_beans::Stop);
 }
             impl Target for Logic {}
             impl BeanInfo for App {
                 type Provides = Get<Logic>; type Injects = (); type Beans = Get<Logic>; type State = ();
             
-            type Proxy = Proxy<App>;
-            type Link = ph_beans::Get<App>;
-            type Chain = ph_beans::Stop;
+            type Gate = (Proxy<App>, ph_beans::Get<App>, ph_beans::Stop);
 }
             fn probe() { fn mount<C: FromParent<App, OfProvide>>() {} mount::<Mut<Logic>>(); }
             ",
@@ -1778,18 +1628,14 @@ mod tests {
             impl BeanInfo for Id {
                 type Provides = (); type Injects = (); type Beans = (); type State = ();
             
-            type Proxy = Proxy<Id>;
-            type Link = ph_beans::Get<Id>;
-            type Chain = ph_beans::Stop;
+            type Gate = (Proxy<Id>, ph_beans::Get<Id>, ph_beans::Stop);
 }
             impl Target for Id {}
             struct App;
             impl BeanInfo for App {
                 type Provides = (Id,); type Injects = (); type Beans = (Id,); type State = ();
             
-            type Proxy = Proxy<App>;
-            type Link = ph_beans::Get<App>;
-            type Chain = ph_beans::Stop;
+            type Gate = (Proxy<App>, ph_beans::Get<App>, ph_beans::Stop);
 }
             fn probe() { let _claim = App::query().inject_resources(Id::T); }
             ",
@@ -1806,9 +1652,7 @@ mod tests {
             impl BeanInfo for App {
                 type Provides = (); type Injects = (); type Beans = (); type State = u8;
             
-            type Proxy = Proxy<App>;
-            type Link = ph_beans::Get<App>;
-            type Chain = ph_beans::Stop;
+            type Gate = (Proxy<App>, ph_beans::Get<App>, ph_beans::Stop);
 }
             impl Target for App {}
             fn boot(_: ()) -> u8 { 1 }
@@ -1827,9 +1671,7 @@ mod tests {
             impl BeanInfo for App {
                 type Provides = (); type Injects = (); type Beans = (); type State = u8;
             
-            type Proxy = Proxy<App>;
-            type Link = ph_beans::Get<App>;
-            type Chain = ph_beans::Stop;
+            type Gate = (Proxy<App>, ph_beans::Get<App>, ph_beans::Stop);
 }
             impl Target for App {}
             fn probe() { let _twice = App::query().init_state_default().init_state_default(); }
@@ -1849,25 +1691,19 @@ mod tests {
             impl BeanInfo for Keys {
                 type Provides = (); type Injects = (); type Beans = (); type State = ();
             
-            type Proxy = Proxy<Keys>;
-            type Link = ph_beans::Get<Keys>;
-            type Chain = ph_beans::Stop;
+            type Gate = (Proxy<Keys>, ph_beans::Get<Keys>, ph_beans::Stop);
 }
             impl Target for Keys {}
             impl BeanInfo for Main {
                 type Provides = (); type Injects = (); type Beans = (); type State = ();
             
-            type Proxy = Proxy<Main>;
-            type Link = ph_beans::Get<Main>;
-            type Chain = ph_beans::Stop;
+            type Gate = (Proxy<Main>, ph_beans::Get<Main>, ph_beans::Stop);
 }
             impl EventInfo for Main { type Parents = (); }
             impl BeanInfo for App {
                 type Provides = (); type Injects = (); type Beans = (); type State = ();
             
-            type Proxy = Proxy<App>;
-            type Link = ph_beans::Get<App>;
-            type Chain = ph_beans::Stop;
+            type Gate = (Proxy<App>, ph_beans::Get<App>, ph_beans::Stop);
 }
             impl At<Keys> for App { type Ix = Ix0; }
             fn probe() {
@@ -1890,9 +1726,7 @@ mod tests {
             impl BeanInfo for App {
                 type Provides = (); type Injects = (); type Beans = (); type State = u8;
             
-            type Proxy = Proxy<App>;
-            type Link = ph_beans::Get<App>;
-            type Chain = ph_beans::Stop;
+            type Gate = (Proxy<App>, ph_beans::Get<App>, ph_beans::Stop);
 }
             impl Target for App {}
             fn boot(_: ()) -> u8 { 1 }
