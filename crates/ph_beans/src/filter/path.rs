@@ -2,8 +2,8 @@
 //!
 //! Design **rule 8**: [`PathStrategy`] is the trait; [`Sparse`] / [`Dense`] are
 //! the variants; siblings are a flat leaf ≤8 (often inside [`List`](crate::List));
-//! carriers use [`CarrierDesc`](crate::CarrierDesc) + one [`PathNode`] blanket.
-//! Beside flat [`Walk`](crate::context::list::Walk) /
+//! carriers share [`Invoke`](crate::context::list::Invoke); [`PathNode`] is one blanket.
+//! Beside flat [`Invoke`](crate::context::list::Invoke) /
 //! [`Drive`](crate::query::schedule::Drive).
 //!
 //! Each gate intersects [`PathStep::DELTA`] with the emit const `M::MASK`.
@@ -12,7 +12,7 @@
 
 use core::marker::PhantomData;
 
-use crate::context::list::CarrierDesc;
+use crate::context::list::{Invoke, Visit};
 use crate::context::maps::MapEntry;
 use crate::filter::EmitMask;
 use crate::filter::eval::{Collect, ConstMatch, EmitBit, MatchEmit};
@@ -42,6 +42,15 @@ pub trait PathStrategy {
     {
         children.visit();
     }
+
+    /// Runs one map leaf after this strategy's gate policy.
+    ///
+    /// Generics: `M` emit tree, `F` filter, `H` handler.
+    fn run_map<M, F, H>(handler: &H)
+    where
+        M: Collect,
+        F: MatchEmit,
+        H: Fn();
 }
 
 /// Node visitable under a path strategy for one emit const.
@@ -60,9 +69,75 @@ pub struct Sparse;
 /// After the gate matches, run every child with no further emit tests.
 pub struct Dense;
 
-impl PathStrategy for Sparse {}
+impl PathStrategy for Sparse {
+    fn run_map<M, F, H>(handler: &H)
+    where
+        M: Collect,
+        F: MatchEmit,
+        H: Fn(),
+    {
+        if const { F::Against::<M>::MATCHES } {
+            handler();
+        }
+    }
+}
 
-impl PathStrategy for Dense {}
+impl PathStrategy for Dense {
+    fn run_map<M, F, H>(handler: &H)
+    where
+        M: Collect,
+        F: MatchEmit,
+        H: Fn(),
+    {
+        let _ = PhantomData::<(M, F)>;
+        handler();
+    }
+}
+
+/// Path behavior placed in [`Invoke`]. `S` is the strategy, `M` the emit const.
+struct PathTag<S, M>(PhantomData<(S, M)>);
+
+impl<S, M> Copy for PathTag<S, M> {}
+
+impl<S, M> Clone for PathTag<S, M> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+// Generics: `S` strategy, `M` emit tree.
+impl<S, M> Visit for PathTag<S, M>
+where
+    S: PathStrategy,
+    M: Collect,
+{
+    fn on_entry<F, H>(&self, entry: &MapEntry<F, H>)
+    where
+        F: MatchEmit + Collect,
+        H: Fn(),
+    {
+        let _ = self;
+        S::run_map::<M, F, H>(&entry.handler);
+    }
+
+    fn on_at<F, H>(&self, entry: &crate::context::maps::MapAt<F, H>)
+    where
+        F: MatchEmit + Collect + crate::context::direct::TipEvent,
+        H: crate::context::direct::DirectFn<F::Tip, F>,
+    {
+        let _ = (self, entry);
+    }
+
+    fn on_gate<P, St, C>(&self, gate: &Gate<P, St, C>)
+    where
+        P: PathStep,
+        St: PathStrategy,
+        C: Invoke,
+    {
+        let _ = self;
+        gate.path_plan::<M>();
+    }
+}
 
 /// One path step: check [`PathStep::DELTA`], then apply strategy `S`.
 ///
@@ -99,213 +174,30 @@ where
     }
 }
 
-// Generics: `P` path step, `S` strategy, `C` children, `M` emit tree.
-impl<P, S, C, M> PathNode<Sparse, M> for Gate<P, S, C>
+// Generics: `P` path step, `S` strategy, `C` children.
+impl<P, S, C> Invoke for Gate<P, S, C>
 where
     P: PathStep,
     S: PathStrategy,
-    M: Collect,
-    C: PathNode<S, M>,
+    C: Invoke,
 {
-    fn visit(&self) {
-        self.path_plan::<M>();
+    fn invoke<Op>(&self, op: Op)
+    where
+        Op: Copy + Visit,
+    {
+        op.on_gate(self);
     }
 }
 
-// Generics: `M` emit tree, `F` filter ([`MatchEmit`]).
-impl<M, F> PathNode<Sparse, M> for MapEntry<F, fn()>
-where
-    M: Collect,
-    F: MatchEmit,
-{
-    fn visit(&self) {
-        // Gate bits already passed as a const. This leaf uses the same emit const.
-        if const { F::Against::<M>::MATCHES } {
-            (self.handler)();
-        }
-    }
-}
-
-// Generics: `M` emit tree (unused: the gate already opened), `F` filter.
-impl<M, F> PathNode<Dense, M> for MapEntry<F, fn()>
-where
-    M: Collect,
-{
-    fn visit(&self) {
-        (self.handler)();
-    }
-}
-
-// Generics: `S` strategy, `M` emit tree. Empty leaf.
-impl<S, M> PathNode<S, M> for ()
-where
-    S: PathStrategy + ?Sized,
-    M: Collect,
-{
-    fn visit(&self) {}
-}
-
-// Generics: `S` strategy, `M` emit tree; `E0`…`E7` child slots.
-
-impl<S, M, E0> PathNode<S, M> for (E0,)
-where
-    S: PathStrategy + ?Sized,
-    M: Collect,
-    E0: PathNode<S, M>,
-{
-    fn visit(&self) {
-        self.0.visit();
-    }
-}
-
-impl<S, M, E0, E1> PathNode<S, M> for (E0, E1)
-where
-    S: PathStrategy + ?Sized,
-    M: Collect,
-    E0: PathNode<S, M>,
-    E1: PathNode<S, M>,
-{
-    fn visit(&self) {
-        self.0.visit();
-        self.1.visit();
-    }
-}
-
-// Generics: `S` strategy, `M` emit const, `E0` event 0, `E1` event 1, `E2` event 2.
-impl<S, M, E0, E1, E2> PathNode<S, M> for (E0, E1, E2)
-where
-    S: PathStrategy + ?Sized,
-    M: Collect,
-    E0: PathNode<S, M>,
-    E1: PathNode<S, M>,
-    E2: PathNode<S, M>,
-{
-    fn visit(&self) {
-        self.0.visit();
-        self.1.visit();
-        self.2.visit();
-    }
-}
-
-// Generics: `S` strategy, `M` emit const, `E0` event 0, `E1` event 1, `E2` event 2, `E3` event 3.
-impl<S, M, E0, E1, E2, E3> PathNode<S, M> for (E0, E1, E2, E3)
-where
-    S: PathStrategy + ?Sized,
-    M: Collect,
-    E0: PathNode<S, M>,
-    E1: PathNode<S, M>,
-    E2: PathNode<S, M>,
-    E3: PathNode<S, M>,
-{
-    fn visit(&self) {
-        self.0.visit();
-        self.1.visit();
-        self.2.visit();
-        self.3.visit();
-    }
-}
-
-// Generics: `S` strategy, `M` emit const, `E0` event 0, `E1` event 1, `E2` event 2, `E3` event 3, `E4` event 4.
-impl<S, M, E0, E1, E2, E3, E4> PathNode<S, M> for (E0, E1, E2, E3, E4)
-where
-    S: PathStrategy + ?Sized,
-    M: Collect,
-    E0: PathNode<S, M>,
-    E1: PathNode<S, M>,
-    E2: PathNode<S, M>,
-    E3: PathNode<S, M>,
-    E4: PathNode<S, M>,
-{
-    fn visit(&self) {
-        self.0.visit();
-        self.1.visit();
-        self.2.visit();
-        self.3.visit();
-        self.4.visit();
-    }
-}
-
-// Generics: `S` strategy, `M` emit const, `E0` event 0, `E1` event 1, `E2` event 2, `E3` event 3, `E4` event 4, `E5` event 5.
-impl<S, M, E0, E1, E2, E3, E4, E5> PathNode<S, M> for (E0, E1, E2, E3, E4, E5)
-where
-    S: PathStrategy + ?Sized,
-    M: Collect,
-    E0: PathNode<S, M>,
-    E1: PathNode<S, M>,
-    E2: PathNode<S, M>,
-    E3: PathNode<S, M>,
-    E4: PathNode<S, M>,
-    E5: PathNode<S, M>,
-{
-    fn visit(&self) {
-        self.0.visit();
-        self.1.visit();
-        self.2.visit();
-        self.3.visit();
-        self.4.visit();
-        self.5.visit();
-    }
-}
-
-// Generics: `S` strategy, `M` emit const, `E0` event 0, `E1` event 1, `E2` event 2, `E3` event 3, `E4` event 4, `E5` event 5, `E6` event 6.
-impl<S, M, E0, E1, E2, E3, E4, E5, E6> PathNode<S, M> for (E0, E1, E2, E3, E4, E5, E6)
-where
-    S: PathStrategy + ?Sized,
-    M: Collect,
-    E0: PathNode<S, M>,
-    E1: PathNode<S, M>,
-    E2: PathNode<S, M>,
-    E3: PathNode<S, M>,
-    E4: PathNode<S, M>,
-    E5: PathNode<S, M>,
-    E6: PathNode<S, M>,
-{
-    fn visit(&self) {
-        self.0.visit();
-        self.1.visit();
-        self.2.visit();
-        self.3.viДавай дальше,sit();
-        self.4.visit();
-        self.5.visit();
-        self.6.visit();
-    }
-}
-
-// Generics: `S` strategy, `M` emit const, `E0` event 0, `E1` event 1, `E2` event 2, `E3` event 3, `E4` event 4, `E5` event 5, `E6` event 6, `E7` event 7.
-impl<S, M, E0, E1, E2, E3, E4, E5, E6, E7> PathNode<S, M> for (E0, E1, E2, E3, E4, E5, E6, E7)
-where
-    S: PathStrategy + ?Sized,
-    M: Collect,
-    E0: PathNode<S, M>,
-    E1: PathNode<S, M>,
-    E2: PathNode<S, M>,
-    E3: PathNode<S, M>,
-    E4: PathNode<S, M>,
-    E5: PathNode<S, M>,
-    E6: PathNode<S, M>,
-    E7: PathNode<S, M>,
-{
-    fn visit(&self) {
-        self.0.visit();
-        self.1.visit();
-        self.2.visit();
-        self.3.visit();
-        self.4.visit();
-        self.5.visit();
-        self.6.visit();
-        self.7.visit();
-    }
-}
-
-// Generics: `S` strategy, `M` emit tree; `T` carrier ([`CarrierDesc`]).
+// One blanket: every [`Invoke`] node is a path node. The op is [`PathTag`].
+// Generics: `S` strategy, `M` emit tree, `T` node ([`Invoke`]).
 impl<S, M, T> PathNode<S, M> for T
 where
-    S: PathStrategy + ?Sized,
+    S: PathStrategy,
     M: Collect,
-    T: CarrierDesc,
-    T::Inner: PathNode<S, M>,
+    T: Invoke,
 {
     fn visit(&self) {
-        self.carrier_inner().visit();
+        self.invoke(PathTag::<S, M>(PhantomData));
     }
 }
