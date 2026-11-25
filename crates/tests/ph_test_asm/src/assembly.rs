@@ -3,28 +3,40 @@
 use crate::error::{ErrorKind, Result};
 use crate::scan;
 use crate::span::ByteSpan;
+use crate::target::{MACH_O_SYMBOL_PREFIX, ObjectFormat, Target};
 
 /// Assembly of one release probe.
 #[derive(Debug)]
 pub(crate) struct Assembly {
     functions: Vec<Function>,
+    target: Target,
 }
 
 impl Assembly {
-    pub(crate) fn parse(ir: &str, asm: &str) -> Self {
+    pub(crate) fn parse(ir: &str, asm: &str, target: Target) -> Self {
         let signatures = signatures(ir);
-        let functions = asm_functions(asm)
+        let raw = match target.format {
+            ObjectFormat::Elf => elf_functions(asm),
+            ObjectFormat::MachO => mach_o_functions(asm),
+        };
+        let functions = raw
             .into_iter()
             .map(|(name, body)| {
                 let signature = signatures
                     .iter()
                     .find(|(symbol, _)| *symbol == name)
                     .map_or_default(|(_, text)| (*text).to_owned());
-                let hot = scan::hot_span(&body);
+                let hot = scan::hot_span(&body, target.isa);
                 Function { hot, name, asm: body, signature }
             })
             .collect();
-        Self { functions }
+        Self { functions, target }
+    }
+
+    /// Target the probe was compiled for.
+    #[must_use]
+    pub(crate) fn target(&self) -> Target {
+        self.target
     }
 
     /// Removes the symbol named `name` and returns it.
@@ -106,10 +118,16 @@ impl Function {
 }
 
 const SHORTEST_TYPE_DIRECTIVE: &str = ".type a,@function";
+const SHORTEST_MACH_O_LABEL: &str = "_a:";
 const SHORTEST_DEFINE: &str = "define void @a(){";
 const LABEL_COLON_LEN: usize = 1;
+/// Prefixes of assembler-local labels on Mach-O (`Ltmp0`, `LBB0_1`, `lCPI0_0`).
+const MACH_O_LOCAL_PREFIXES: [char; 2] = ['L', 'l'];
+const SECTION_DIRECTIVE: &str = ".section";
+const TEXT_DIRECTIVE: &str = ".text";
+const MACH_O_TEXT_SECTION: &str = "__TEXT,__text";
 
-fn asm_functions(asm: &str) -> Vec<(String, String)> {
+fn elf_functions(asm: &str) -> Vec<(String, String)> {
     let mut symbols = Vec::with_capacity(asm.len() / SHORTEST_TYPE_DIRECTIVE.len());
     for (start, line) in scan::LineIter::new(asm) {
         if let Some(name) = function_type_symbol(line) {
@@ -129,6 +147,55 @@ fn asm_functions(asm: &str) -> Vec<(String, String)> {
         functions.push(((*name).to_owned(), body));
     }
     functions
+}
+
+fn mach_o_functions(asm: &str) -> Vec<(String, String)> {
+    let mut starts = Vec::with_capacity(asm.len() / SHORTEST_MACH_O_LABEL.len());
+    let mut in_text = false;
+    for (start, line) in scan::LineIter::new(asm) {
+        if let Some(text) = section_is_text(line) {
+            in_text = text;
+            starts.push((None, start));
+            continue;
+        }
+        if in_text && let Some(name) = mach_o_symbol_label(line) {
+            starts.push((Some(name), start));
+        }
+    }
+    let mut functions = Vec::with_capacity(starts.len());
+    for (ordinal, (name, label_at)) in starts.iter().enumerate() {
+        let Some(name) = name else {
+            continue;
+        };
+        let end = starts.get(ordinal + 1).map_or(asm.len(), |(_, next)| *next);
+        let body = asm[*label_at..end]
+            .trim_end_matches(['\n', '\r'])
+            .to_owned();
+        functions.push(((*name).to_owned(), body));
+    }
+    functions
+}
+
+/// `Some(true)` when `line` switches to the code section, `Some(false)` for
+/// another section, `None` when it is not a section directive.
+fn section_is_text(line: &str) -> Option<bool> {
+    let trimmed = line.trim();
+    if let Some(rest) = trimmed.strip_prefix(SECTION_DIRECTIVE) {
+        return Some(rest.trim_start().starts_with(MACH_O_TEXT_SECTION));
+    }
+    (trimmed == TEXT_DIRECTIVE).then_some(true)
+}
+
+/// Rust name of the symbol `line` defines, without the Mach-O prefix.
+fn mach_o_symbol_label(line: &str) -> Option<&str> {
+    if line.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let label = line.trim_end().strip_suffix(':')?;
+    if label.starts_with(MACH_O_LOCAL_PREFIXES) || !label.chars().all(is_name_char) {
+        return None;
+    }
+    label.strip_prefix(MACH_O_SYMBOL_PREFIX)
 }
 
 fn next_line_at(text: &str, line_start: usize) -> usize {

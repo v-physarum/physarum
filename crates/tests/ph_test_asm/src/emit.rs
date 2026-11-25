@@ -6,6 +6,7 @@
 //! These asserts compile the probe in this crate.
 
 use std::env;
+use std::ffi::OsString;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -14,6 +15,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::assembly::Assembly;
 use crate::error::{ErrorKind, Result};
+use crate::target::Target;
 
 const EDITION: &str = "2024";
 const CRATE_NAME: &str = "probe";
@@ -26,8 +28,87 @@ const DEBUG_ASSERTIONS: &str = "debug-assertions=off";
 const OVERFLOW_CHECKS: &str = "overflow-checks=off";
 const CODEGEN_UNITS: &str = "codegen-units=1";
 const EMIT_SEPARATOR_LEN: usize = 1;
+const EXTERN_FLAG: &str = "--extern";
+const EXTERN_SEPARATOR: &str = "=";
+const SEARCH_FLAG: &str = "-L";
+/// `-L` kind that only resolves crates other crates depend on.
+const DEPENDENCY_SEARCH_PREFIX: &str = "dependency=";
+const CURRENT_DIR: &str = ".";
 
-pub(crate) fn compile(source: &Path, target: Option<&str>) -> Result<Assembly> {
+/// One release probe: a Rust source file and the crates it links.
+#[derive(Debug, Clone)]
+pub(crate) struct Probe {
+    source: PathBuf,
+    externs: Vec<Extern>,
+}
+
+impl Probe {
+    /// A probe read from `source` with no extern crate.
+    pub(crate) fn new(source: PathBuf) -> Self {
+        Self { source, externs: Vec::new() }
+    }
+
+    /// Adds `--extern name=path` and `-L dependency=<dir of path>`.
+    pub(crate) fn push_extern(&mut self, item: Extern) {
+        self.externs.push(item);
+    }
+
+    /// The probe file.
+    #[must_use]
+    pub(crate) fn source(&self) -> &Path {
+        &self.source
+    }
+
+    /// Compiles the probe as release for `target`. `None` is the host.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `rustc` cannot start, fails, or writes no output.
+    pub(crate) fn compile(&self, target: Option<&str>) -> Result<Assembly> {
+        compile(&self.source, &self.externs, target)
+    }
+}
+
+/// One extern crate passed to `rustc` as `--extern name=path`.
+///
+/// The directory of `path` is also passed as `-L dependency=dir`, so the
+/// crates that library depends on resolve from the same directory.
+#[derive(Debug, Clone)]
+pub(crate) struct Extern {
+    name: String,
+    path: PathBuf,
+}
+
+impl Extern {
+    /// An extern crate named `name` whose library file is `path`.
+    pub(crate) fn new(name: String, path: PathBuf) -> Self {
+        Self { name, path }
+    }
+
+    fn extern_arg(&self) -> OsString {
+        let mut arg = OsString::with_capacity(
+            self.name.len() + EXTERN_SEPARATOR.len() + self.path.as_os_str().len(),
+        );
+        arg.push(&self.name);
+        arg.push(EXTERN_SEPARATOR);
+        arg.push(&self.path);
+        arg
+    }
+
+    fn search_arg(&self) -> OsString {
+        let dir = match self.path.parent() {
+            Some(dir) if !dir.as_os_str().is_empty() => dir,
+            _ => Path::new(CURRENT_DIR),
+        };
+        let mut arg =
+            OsString::with_capacity(DEPENDENCY_SEARCH_PREFIX.len() + dir.as_os_str().len());
+        arg.push(DEPENDENCY_SEARCH_PREFIX);
+        arg.push(dir);
+        arg
+    }
+}
+
+fn compile(source: &Path, externs: &[Extern], target: Option<&str>) -> Result<Assembly> {
     let dir = scratch_dir()?;
     let _guard = TempDir(dir.clone());
     let mut command = Command::new(rustc_program());
@@ -44,6 +125,10 @@ pub(crate) fn compile(source: &Path, target: Option<&str>) -> Result<Assembly> {
     if let Some(triple) = target {
         command.arg("--target").arg(triple);
     }
+    for item in externs {
+        command.arg(EXTERN_FLAG).arg(item.extern_arg());
+        command.arg(SEARCH_FLAG).arg(item.search_arg());
+    }
     command.arg(source);
     let output = command
         .output()
@@ -55,7 +140,7 @@ pub(crate) fn compile(source: &Path, target: Option<&str>) -> Result<Assembly> {
     }
     let ir = read_emit(&dir, "ll", "LLVM IR")?;
     let asm = read_emit(&dir, "s", "assembly")?;
-    Ok(Assembly::parse(&ir, &asm))
+    Ok(Assembly::parse(&ir, &asm, Target::for_triple(target)))
 }
 
 fn rustc_program() -> String {

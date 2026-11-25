@@ -1,11 +1,12 @@
 //! [`AsmTester`] checks one release probe.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::bound::{Count, Limit};
-use crate::emit;
+use crate::emit::{Extern, Probe};
 use crate::scan;
 use crate::span::ByteSpan;
+use crate::target::Target;
 
 /// Release assembly checks for one probe file.
 ///
@@ -19,22 +20,41 @@ use crate::span::ByteSpan;
 ///     hot.assert_no_virtual_calls();
 ///     hot.on_target("x86_64-unknown-linux-gnu").assert_max_instructions(64);
 /// });
+///
+/// AsmTester::new("probe.rs")
+///     .extern_crate("demo", "target/release/libdemo.rlib")
+///     .function("on_tick")
+///     .on_function(|body| body.assert_no_virtual_calls());
 /// ```
+///
+/// `name` is the Rust symbol, such as a `#[unsafe(no_mangle)]` function.
+/// The Mach-O `_` prefix is not part of it.
 #[must_use]
 #[derive(Debug)]
 pub struct AsmTester {
-    source: PathBuf,
+    probe: Probe,
 }
 
 impl AsmTester {
     /// `source` is a Rust probe. It is compiled as release on the first assert.
     pub fn new(source: impl Into<PathBuf>) -> Self {
-        Self { source: source.into() }
+        Self { probe: Probe::new(source.into()) }
+    }
+
+    /// Passes `--extern name=path` to `rustc` for this probe.
+    ///
+    /// The directory of `path` is passed as `-L dependency=dir`, so the
+    /// crates that library depends on must sit next to it. Call again for
+    /// another crate.
+    pub fn extern_crate(mut self, name: impl Into<String>, path: impl Into<PathBuf>) -> Self {
+        self.probe
+            .push_extern(Extern::new(name.into(), path.into()));
+        self
     }
 
     /// Selects the symbol named `name`.
     pub fn function(self, name: impl Into<String>) -> FunctionScope {
-        FunctionScope { source: self.source, name: name.into() }
+        FunctionScope { probe: self.probe, name: name.into() }
     }
 }
 
@@ -42,7 +62,7 @@ impl AsmTester {
 #[must_use]
 #[derive(Debug)]
 pub struct FunctionScope {
-    source: PathBuf,
+    probe: Probe,
     name: String,
 }
 
@@ -56,7 +76,7 @@ impl FunctionScope {
     ///
     /// Panics when the probe fails to compile, the function is missing, or there is no loop.
     pub fn hot_loop(self, check: impl FnOnce(&Asserts)) {
-        check(&load(&self.source, &self.name, ScopeKind::HotLoop, None));
+        check(&load(self.probe, &self.name, ScopeKind::HotLoop, None));
     }
 
     /// Runs `check` on the whole function. The function may contain no conditional branch.
@@ -65,7 +85,7 @@ impl FunctionScope {
     ///
     /// Panics when the probe fails to compile or the function is missing.
     pub fn on_function(self, check: impl FnOnce(&Asserts)) {
-        check(&load(&self.source, &self.name, ScopeKind::Function, None));
+        check(&load(self.probe, &self.name, ScopeKind::Function, None));
     }
 }
 
@@ -77,7 +97,8 @@ pub struct Asserts {
     scope: ByteSpan,
     signature: String,
     branch_allowance: Limit,
-    source: PathBuf,
+    probe: Probe,
+    target: Target,
     function: String,
     kind: ScopeKind,
 }
@@ -275,8 +296,9 @@ impl Asserts {
 
     fn enforce(&self, rule: Rule) {
         let asm = self.scope_text();
+        let isa = self.target.isa;
         match rule {
-            Rule::Simd => self.require(scan::has_simd(asm), "simd", "no vector register"),
+            Rule::Simd => self.require(scan::has_simd(asm, isa), "simd", "no vector register"),
             Rule::NoBounds => {
                 self.forbid(
                     scan::has_bounds(asm),
@@ -285,7 +307,7 @@ impl Asserts {
                 );
             }
             Rule::NoBranch => {
-                let count = scan::conditional_branches(asm);
+                let count = scan::conditional_branches(asm, isa);
                 if !self.branch_allowance.allows(count) {
                     self.fail(
                         "conditional branch",
@@ -299,39 +321,39 @@ impl Asserts {
             }
             Rule::NoVirtualCalls => {
                 self.forbid(
-                    scan::has_indirect_call(asm),
+                    scan::has_indirect_call(asm, isa),
                     "virtual call",
                     "indirect call",
                 );
             }
             Rule::NoSelect => {
                 self.forbid(
-                    scan::has_conditional_move(asm),
+                    scan::has_conditional_move(asm, isa),
                     "select",
                     "conditional move",
                 );
             }
-            Rule::NoDiv => self.forbid(scan::has_div(asm), "division", "division"),
+            Rule::NoDiv => self.forbid(scan::has_div(asm, isa), "division", "division"),
             Rule::NoInvoke => self.forbid(scan::has_unwind(asm), "invoke", "unwind resume"),
             Rule::NoAlloc => self.forbid(scan::has_alloc(asm), "allocation", "allocator call"),
-            Rule::NoAtomic => self.forbid(scan::has_atomic(asm), "atomic", "atomic operation"),
+            Rule::NoAtomic => self.forbid(scan::has_atomic(asm, isa), "atomic", "atomic operation"),
             Rule::NoMemcpy => self.forbid(
-                scan::has_memcpy(asm),
+                scan::has_memcpy(asm, isa),
                 "memcpy",
                 "memcpy, memmove, or memset",
             ),
             Rule::NoChecks => self.forbid(scan::has_panic(asm), "panic check", "panic or assert"),
-            Rule::MaxLoads(max) => self.at_most(scan::count_loads(asm), max, "loads"),
-            Rule::MaxStores(max) => self.at_most(scan::count_stores(asm), max, "stores"),
+            Rule::MaxLoads(max) => self.at_most(scan::count_loads(asm, isa), max, "loads"),
+            Rule::MaxStores(max) => self.at_most(scan::count_stores(asm, isa), max, "stores"),
             Rule::CountedLoop => {
                 self.require(
-                    scan::is_counted_loop(asm),
+                    scan::is_counted_loop(asm, isa),
                     "counted loop",
                     "no counted backedge",
                 );
             }
             Rule::NoAllocaInLoop => self.forbid(
-                scan::has_stack_address(asm),
+                scan::has_stack_address(asm, isa),
                 "alloca in loop",
                 "stack pointer inside the scope",
             ),
@@ -340,9 +362,11 @@ impl Asserts {
                 "noalias",
                 "pointer parameter is not noalias",
             ),
-            Rule::NoGather => self.forbid(scan::has_gather(asm), "gather", "gather callee"),
-            Rule::NoLibm => self.forbid(scan::has_libm(asm), "libm", "math call"),
-            Rule::NoFma => self.forbid(scan::has_fma(asm), "fma", "fused multiply-add"),
+            Rule::NoGather => self.forbid(scan::has_gather(asm, isa), "gather", "gather callee"),
+            Rule::NoLibm => self.forbid(scan::has_libm(asm, self.target), "libm", "math call"),
+            Rule::NoFma => {
+                self.forbid(scan::has_fma(asm, self.target), "fma", "fused multiply-add");
+            }
         }
     }
 
@@ -421,12 +445,12 @@ impl TargetAssert<'_> {
     /// Panics when the target probe has more instructions, or when `rustc` fails.
     pub fn assert_max_instructions(&self, max: u32) {
         let reloaded = load(
-            &self.asserts.source,
+            self.asserts.probe.clone(),
             &self.asserts.function,
             self.asserts.kind,
             Some(self.triple),
         );
-        let count = scan::asm_instructions(reloaded.scope_text());
+        let count = scan::asm_instructions(reloaded.scope_text(), reloaded.target.isa);
         let max = Limit::new(max);
         if !max.allows(count) {
             reloaded.fail(
@@ -597,8 +621,11 @@ enum ScopeKind {
     HotLoop,
 }
 
-fn load(source: &Path, name: &str, kind: ScopeKind, target: Option<&str>) -> Asserts {
-    let assembly = emit::compile(source, target).unwrap_or_else(|error| panic!("{error}"));
+fn load(probe: Probe, name: &str, kind: ScopeKind, target: Option<&str>) -> Asserts {
+    let assembly = probe
+        .compile(target)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let target = assembly.target();
     let function = assembly
         .into_function(name)
         .unwrap_or_else(|error| panic!("{error}"));
@@ -620,7 +647,8 @@ fn load(source: &Path, name: &str, kind: ScopeKind, target: Option<&str>) -> Ass
         scope,
         signature,
         branch_allowance,
-        source: source.to_owned(),
+        probe,
+        target,
         function: function_name,
         kind,
     }

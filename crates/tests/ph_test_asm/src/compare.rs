@@ -4,21 +4,32 @@ use std::path::{Path, PathBuf};
 
 use crate::assembly::{Assembly, Function};
 use crate::diff::unified;
-use crate::emit;
+use crate::emit::{Extern, Probe};
 use crate::normalize::{function_text, loop_text, module_text};
 
 /// Compares two probe files compiled as release.
 #[must_use]
 #[derive(Debug)]
 pub struct AsmCompare {
-    left: PathBuf,
-    right: PathBuf,
+    left: Probe,
+    right: Probe,
 }
 
 impl AsmCompare {
     /// Both paths are Rust probes.
     pub fn files(left: impl Into<PathBuf>, right: impl Into<PathBuf>) -> Self {
-        Self { left: left.into(), right: right.into() }
+        Self { left: Probe::new(left.into()), right: Probe::new(right.into()) }
+    }
+
+    /// Passes `--extern name=path` to `rustc` for both probes.
+    ///
+    /// The directory of `path` is passed as `-L dependency=dir`. Call again
+    /// for another crate.
+    pub fn extern_crate(mut self, name: impl Into<String>, path: impl Into<PathBuf>) -> Self {
+        let item = Extern::new(name.into(), path.into());
+        self.left.push_extern(item.clone());
+        self.right.push_extern(item);
+        self
     }
 
     /// The normalized modules are the same.
@@ -30,8 +41,8 @@ impl AsmCompare {
         let left = emit(&self.left);
         let right = emit(&self.right);
         require_same(
-            &self.left,
-            &self.right,
+            self.left.source(),
+            self.right.source(),
             &module_text(&left),
             &module_text(&right),
         );
@@ -47,8 +58,8 @@ impl AsmCompare {
 #[must_use]
 #[derive(Debug)]
 pub struct FunctionCompare {
-    left: PathBuf,
-    right: PathBuf,
+    left: Probe,
+    right: Probe,
     name: String,
 }
 
@@ -64,10 +75,10 @@ impl FunctionCompare {
         let left_fn = function_or_panic(&left, &self.name);
         let right_fn = function_or_panic(&right, &self.name);
         require_same(
-            &self.left,
-            &self.right,
-            &function_text(left_fn),
-            &function_text(right_fn),
+            self.left.source(),
+            self.right.source(),
+            &function_text(left_fn, left.target()),
+            &function_text(right_fn, right.target()),
         );
     }
 
@@ -81,8 +92,8 @@ impl FunctionCompare {
 #[must_use]
 #[derive(Debug)]
 pub struct LoopCompare {
-    left: PathBuf,
-    right: PathBuf,
+    left: Probe,
+    right: Probe,
     name: String,
 }
 
@@ -102,16 +113,18 @@ impl LoopCompare {
             .hot_loop()
             .unwrap_or_else(|error| panic!("{error}"));
         require_same(
-            &self.left,
-            &self.right,
-            &loop_text(left_loop),
-            &loop_text(right_loop),
+            self.left.source(),
+            self.right.source(),
+            &loop_text(left_loop, left.target()),
+            &loop_text(right_loop, right.target()),
         );
     }
 }
 
-fn emit(path: &Path) -> Assembly {
-    emit::compile(path, None).unwrap_or_else(|error| panic!("{error}"))
+fn emit(probe: &Probe) -> Assembly {
+    probe
+        .compile(None)
+        .unwrap_or_else(|error| panic!("{error}"))
 }
 
 fn function_or_panic<'a>(assembly: &'a Assembly, name: &str) -> &'a Function {
