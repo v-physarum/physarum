@@ -58,6 +58,11 @@ name = "ph_util_foreach_measure"
 harness = false
 path = "benches/crates/ph_util_foreach/measure.rs"
 
+[[bench]]
+name = "ph_util_foreach_series"
+harness = false
+path = "benches/crates/ph_util_foreach/series.rs"
+
 [workspace]
 resolver = "3"
 members = [

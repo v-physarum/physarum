@@ -23,6 +23,12 @@ const LOGS_DIR: &str = "logs";
 const SRC_DIR: &str = "src";
 const CARGO_TOML: &str = "Cargo.toml";
 const LIB_RS: &str = "lib.rs";
+const BASE_RS: &str = "base.rs";
+const NEXT_RS: &str = "next.rs";
+const STEP_SH: &str = "step.sh";
+const RESTORE_EDIT: &str = "sh step.sh base.rs";
+const APPLY_EDIT: &str = "sh step.sh next.rs";
+const STEP_SCRIPT: &str = "#!/bin/sh\ncp \"$1\" src/lib.rs\nexec cargo build --offline\n";
 const REPORT_JSON: &str = "report.json";
 const RUNTIME_TARGET_DIR: &str = "runtime-target";
 const RUNTIME_BUILD_LOG: &str = "runtime_build.log";
@@ -164,6 +170,7 @@ pub(crate) struct SeriesBuild<'a> {
     pub(crate) group: Group,
     pub(crate) scales: &'a [crate::Scale],
     pub(crate) sources: &'a [String],
+    pub(crate) edits: &'a [String],
     pub(crate) home: &'a SeriesHome,
 }
 
@@ -198,13 +205,15 @@ pub(crate) fn measure_series(build: &SeriesBuild<'_>) -> Result<Vec<f64>> {
     fs::write(&lib, warmup_source)?;
     warmup_build(build.group, &user, &target, &logs)?;
     let mut seconds = Vec::with_capacity(build.sources.len());
-    for (scale, source) in build.scales.iter().zip(build.sources) {
+    for (index, (scale, source)) in build.scales.iter().zip(build.sources).enumerate() {
         fs::write(&lib, source)?;
         let label = format!("{}_{}", build.name, scale.count());
+        let edited = build.edits.get(index).map(String::as_str);
         let timing = time_scale(
             build.group,
             &label,
             &build.home.package,
+            edited,
             &MeasureDirs { user: &user, logs: &logs, target: &target, repeats: DEFAULT_REPEATS },
         )?;
         println!(
@@ -228,12 +237,21 @@ fn warmup_build(group: Group, user: &Path, target: &Path, logs: &Path) -> Result
     command.run_combined(&log, "series warmup")
 }
 
-fn time_scale(group: Group, label: &str, package: &str, dirs: &MeasureDirs<'_>) -> Result<Timing> {
+fn time_scale(
+    group: Group,
+    label: &str,
+    package: &str,
+    edited: Option<&str>,
+    dirs: &MeasureDirs<'_>,
+) -> Result<Timing> {
     let clean_debug = format!("cargo clean -p {package}");
     let clean_release = format!("cargo clean -p {package} --release");
     let (prepare, command, incremental) = match group {
         Group::Debug => (Some(clean_debug.as_str()), "cargo build --offline", false),
-        Group::Incremental => (None, "cargo build --offline", true),
+        Group::Incremental => {
+            write_edit_pair(dirs.user, edited)?;
+            (Some(RESTORE_EDIT), APPLY_EDIT, true)
+        }
         Group::Release => (
             Some(clean_release.as_str()),
             "cargo build --release --offline",
@@ -241,6 +259,21 @@ fn time_scale(group: Group, label: &str, package: &str, dirs: &MeasureDirs<'_>) 
         ),
     };
     TimedCargo::new(label, prepare, command, incremental).time(dirs)
+}
+
+/// Writes the warm source and the edited source beside the user crate.
+///
+/// `src/lib.rs` is already the rendered source. Hyperfine restores it, rebuilds,
+/// then times the rebuild of `next.rs`.
+fn write_edit_pair(user: &Path, edited: Option<&str>) -> Result<()> {
+    let Some(edited) = edited else {
+        return Err(ErrorKind::SeriesEdit { series: "incremental".to_owned() }.into());
+    };
+    let lib = user.join(SRC_DIR).join(LIB_RS);
+    fs::copy(&lib, user.join(BASE_RS))?;
+    fs::write(user.join(NEXT_RS), edited)?;
+    fs::write(user.join(STEP_SH), STEP_SCRIPT)?;
+    Ok(())
 }
 
 const NIGHTLY_TOOLCHAIN: &str = "nightly";
@@ -251,6 +284,7 @@ pub(crate) struct PassBuild<'a> {
     pub(crate) group: Group,
     pub(crate) scales: &'a [crate::Scale],
     pub(crate) sources: &'a [String],
+    pub(crate) edits: &'a [String],
     pub(crate) home: &'a SeriesHome,
     pub(crate) pass: &'a str,
     pub(crate) rustc_args: &'a [&'static str],
@@ -289,9 +323,16 @@ pub(crate) fn measure_passes(build: &PassBuild<'_>) -> Result<Vec<f64>> {
     fs::write(&lib, warmup_source)?;
     nightly_warmup(build.group, &user, &target, &logs)?;
     let mut seconds = Vec::with_capacity(build.sources.len());
-    for (scale, source) in build.scales.iter().zip(build.sources) {
+    for (index, (scale, source)) in build.scales.iter().zip(build.sources).enumerate() {
         fs::write(&lib, source)?;
         let label = format!("{}_{}", build.name, scale.count());
+        if build.group == Group::Incremental {
+            let Some(edited) = build.edits.get(index) else {
+                return Err(ErrorKind::SeriesEdit { series: build.name.to_owned() }.into());
+            };
+            nightly_rebuild(&label, &user, &target, &logs)?;
+            fs::write(&lib, edited)?;
+        }
         let timing = time_pass(
             &label,
             &PassDirs {
@@ -340,6 +381,13 @@ fn nightly_cargo(cwd: &Path, target_dir: &Path, incremental: bool) -> Command {
     command.apply_measure_env(target_dir, incremental);
     command.env("RUSTUP_TOOLCHAIN", NIGHTLY_TOOLCHAIN);
     command
+}
+
+fn nightly_rebuild(label: &str, user: &Path, target: &Path, logs: &Path) -> Result<()> {
+    let mut command = nightly_cargo(user, target, true);
+    command.args(["build", "--offline"]);
+    let log = logs.join(format!("{label}.base{LOG_EXT}"));
+    command.run_combined(&log, label)
 }
 
 fn nightly_warmup(group: Group, user: &Path, target: &Path, logs: &Path) -> Result<()> {

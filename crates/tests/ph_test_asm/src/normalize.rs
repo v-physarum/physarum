@@ -2,14 +2,19 @@
 
 use crate::assembly::{Assembly, Function};
 use crate::span::ByteSpan;
+use crate::target::{ObjectFormat, Target};
 
 const NEWLINE_LEN: usize = 1;
-const LOCAL_PREFIX: &str = ".L";
+/// ELF assembler-local label prefix (`.LBB0_1`).
+const ELF_LOCAL_PREFIXES: &[&str] = &[".L"];
+/// Mach-O assembler-local label prefixes (`LBB0_1`, `l_anon.1`).
+const MACH_O_LOCAL_PREFIXES: &[&str] = &["L", "l_"];
 const LOCAL_LABEL_MIN_BYTES: usize = 3;
 const DECIMAL_DIGITS: usize = 20;
 
 /// Whole module, functions sorted by symbol.
 pub(crate) fn module_text(assembly: &Assembly) -> String {
+    let target = assembly.target();
     let mut functions: Vec<&Function> = assembly.functions().iter().collect();
     functions.sort_by(|left, right| left.name().cmp(right.name()));
     let mut cap = 0usize;
@@ -24,25 +29,32 @@ pub(crate) fn module_text(assembly: &Assembly) -> String {
         if index > 0 {
             out.push('\n');
         }
-        append_normalized(function.asm(), &mut labels, &mut out);
+        append_normalized(function.asm(), target, &mut labels, &mut out);
     }
     out
 }
 
 /// One function, local labels canonicalized.
-pub(crate) fn function_text(function: &Function) -> String {
+pub(crate) fn function_text(function: &Function, target: Target) -> String {
     let mut out = String::with_capacity(function.asm().len());
     let mut labels = LabelTable::new();
-    append_normalized(function.asm(), &mut labels, &mut out);
+    append_normalized(function.asm(), target, &mut labels, &mut out);
     out
 }
 
 /// Hot loop text for one function.
-pub(crate) fn loop_text(hot: &str) -> String {
+pub(crate) fn loop_text(hot: &str, target: Target) -> String {
     let mut out = String::with_capacity(hot.len());
     let mut labels = LabelTable::new();
-    append_normalized(hot, &mut labels, &mut out);
+    append_normalized(hot, target, &mut labels, &mut out);
     out
+}
+
+fn local_prefixes(format: ObjectFormat) -> &'static [&'static str] {
+    match format {
+        ObjectFormat::Elf => ELF_LOCAL_PREFIXES,
+        ObjectFormat::MachO => MACH_O_LOCAL_PREFIXES,
+    }
 }
 
 struct LabelTable {
@@ -54,13 +66,13 @@ impl LabelTable {
         Self { spans: Vec::new() }
     }
 
-    fn fill(&mut self, asm: &str) {
+    fn fill(&mut self, asm: &str, target: Target) {
         self.spans.clear();
         let bound = asm.len() / LOCAL_LABEL_MIN_BYTES;
         let extra = bound.saturating_sub(self.spans.capacity());
         self.spans.reserve(extra);
-        for line in kept_lines(asm) {
-            discover_line(asm, line, &mut self.spans);
+        for line in kept_lines(asm, target) {
+            discover_line(asm, line, target.format, &mut self.spans);
         }
     }
 
@@ -72,21 +84,21 @@ impl LabelTable {
     }
 }
 
-fn append_normalized(asm: &str, labels: &mut LabelTable, out: &mut String) {
-    labels.fill(asm);
+fn append_normalized(asm: &str, target: Target, labels: &mut LabelTable, out: &mut String) {
+    labels.fill(asm, target);
     let mut first = true;
-    for line in kept_lines(asm) {
+    for line in kept_lines(asm, target) {
         if !first {
             out.push('\n');
         }
         first = false;
-        write_canonical(asm, line, labels, out);
+        write_canonical(asm, line, target.format, labels, out);
     }
 }
 
-fn kept_lines(asm: &str) -> impl Iterator<Item = &str> {
-    asm.lines().filter_map(|line| {
-        let trimmed = line.split('#').next().unwrap_or(line).trim();
+fn kept_lines(asm: &str, target: Target) -> impl Iterator<Item = &str> {
+    asm.lines().filter_map(move |line| {
+        let trimmed = target.isa.strip_comment(line).trim();
         if trimmed.is_empty() || trimmed.starts_with('.') || trimmed.starts_with('#') {
             None
         } else {
@@ -95,18 +107,18 @@ fn kept_lines(asm: &str) -> impl Iterator<Item = &str> {
     })
 }
 
-fn discover_line(asm: &str, line: &str, spans: &mut Vec<ByteSpan>) {
+fn discover_line(asm: &str, line: &str, format: ObjectFormat, spans: &mut Vec<ByteSpan>) {
     let bytes = line.as_bytes();
     let mut index = 0;
     while index < bytes.len() {
-        if is_local_label_at(bytes, index) {
+        if let Some(prefix_len) = local_label_at(bytes, index, format) {
             let start = index;
-            index += LOCAL_PREFIX.len();
+            index += prefix_len;
             while index < bytes.len() && is_name_byte(bytes[index]) {
                 index += 1;
             }
             let name = &line[start..index];
-            if name.len() > LOCAL_PREFIX.len() {
+            if name.len() > prefix_len {
                 if spans.iter().all(|span| span.slice(asm) != name) {
                     spans.push(ByteSpan::covering(asm, name));
                 }
@@ -119,18 +131,24 @@ fn discover_line(asm: &str, line: &str, spans: &mut Vec<ByteSpan>) {
     }
 }
 
-fn write_canonical(asm: &str, line: &str, labels: &LabelTable, out: &mut String) {
+fn write_canonical(
+    asm: &str,
+    line: &str,
+    format: ObjectFormat,
+    labels: &LabelTable,
+    out: &mut String,
+) {
     let bytes = line.as_bytes();
     let mut index = 0;
     while index < bytes.len() {
-        if is_local_label_at(bytes, index) {
+        if let Some(prefix_len) = local_label_at(bytes, index, format) {
             let start = index;
-            index += LOCAL_PREFIX.len();
+            index += prefix_len;
             while index < bytes.len() && is_name_byte(bytes[index]) {
                 index += 1;
             }
             let name = &line[start..index];
-            if name.len() > LOCAL_PREFIX.len() {
+            if name.len() > prefix_len {
                 out.push('L');
                 push_usize(out, labels.ordinal(asm, name));
                 continue;
@@ -143,11 +161,16 @@ fn write_canonical(asm: &str, line: &str, labels: &LabelTable, out: &mut String)
     }
 }
 
-fn is_local_label_at(bytes: &[u8], index: usize) -> bool {
-    let prefix = LOCAL_PREFIX.as_bytes();
-    index + prefix.len() <= bytes.len()
-        && bytes[index..].starts_with(prefix)
-        && (index == 0 || !is_name_byte(bytes[index - 1]))
+/// Length of the local-label prefix that starts at `index`, if one does.
+fn local_label_at(bytes: &[u8], index: usize, format: ObjectFormat) -> Option<usize> {
+    if index > 0 && is_name_byte(bytes[index - 1]) {
+        return None;
+    }
+    local_prefixes(format)
+        .iter()
+        .map(|prefix| prefix.as_bytes())
+        .find(|prefix| bytes[index..].starts_with(prefix))
+        .map(<[u8]>::len)
 }
 
 fn push_usize(out: &mut String, value: usize) {

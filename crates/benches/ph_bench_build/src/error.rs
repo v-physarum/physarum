@@ -116,6 +116,15 @@ pub(crate) enum ErrorKind {
     /// [`crate::Series::render`] was not called, or the scales changed after it.
     #[error("series {series} has no rendered sources")]
     SeriesSources { series: String },
+    /// An incremental series has no [`crate::Series::edit`].
+    #[error("series {series} incremental build has no edit")]
+    SeriesEdit { series: String },
+    /// [`crate::Series::edit`] returned an empty source.
+    #[error("series {series} scale {scale} edit is empty")]
+    SeriesEditEmpty { series: String, scale: u32 },
+    /// [`crate::Series::edit`] returned the rendered source unchanged.
+    #[error("series {series} scale {scale} edit does not change the source")]
+    SeriesEditSame { series: String, scale: u32 },
     /// The time slice length does not match the scales.
     #[error("{series} has {scales} scales but {times} times")]
     SeriesTimeCount {

@@ -17,6 +17,7 @@ mod error;
 mod normalize;
 mod scan;
 mod span;
+mod target;
 mod tester;
 
 pub use compare::{AsmCompare, FunctionCompare, LoopCompare};
