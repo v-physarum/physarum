@@ -1,27 +1,32 @@
-//! Systems stored on [`Ctx`](super::Ctx).
+//! Systems stored on [`Ctx`](super::Ctx), and the instance `init` makes.
 
 /// No init system has been stored.
 pub struct NoSystems;
 
-/// The init function item `H`.
-/// Generics: `H` init handler.
-pub struct WithInit<H> {
-    handler: H,
-}
-
-impl<H> WithInit<H> {
-    pub(crate) fn new(handler: H) -> Self {
-        let stored = Self { handler };
-        // The function item stays installed until a later slice runs it.
-        let _ = &stored.handler;
-        stored
-    }
-}
-
-/// State built by [`init_state_default`](crate::Init::init_state_default).
-/// Generics: `S` default state.
-pub struct WithDefault<S> {
+/// One instance of a module: its state and the states of its provided beans.
+///
+/// Deferred events wait in the state of their scope event
+/// ([`EventBuf`](crate::EventBuf)), which is one of those provided states.
+///
+/// The pipeline holds only systems. [`Tick::init`](crate::Tick::init) makes
+/// this value, and every [`Tick::emit`](crate::Tick::emit) takes it.
+/// Generics: `S` module state, `P` provided states.
+pub struct Owned<S, P> {
     pub(crate) state: S,
+    pub(crate) provides: P,
+}
+
+// Generics: `S` module state, `P` provided states.
+impl<S, P> Owned<S, P> {
+    pub(crate) const fn new(state: S, provides: P) -> Self {
+        Self { state, provides }
+    }
+
+    /// State made by [`init_state`](crate::Init::init_state).
+    #[must_use]
+    pub const fn state(&self) -> &S {
+        &self.state
+    }
 }
 
 /// Systems live on the context, not on the operators.
@@ -36,17 +41,14 @@ pub trait ContextTick {}
 #[diagnostic::on_unimplemented(
     message = "pipeline not ready: Descriptor::Status = `PipelineError<1>` (tip `{Self}`)",
     label = "fix Descriptor::Status",
-    note = "init_state stores one system (PipelineError<1>)"
+    note = "init_state runs once (PipelineError<1>)"
 )]
 pub trait FreshInit: ContextTick {
-    /// Tick after `init_state`.
-    type WithInit<H>: ContextTick;
-    /// Tick after `init_state_default`.
-    type WithDefault<S>: ContextTick;
-    /// Stores the init function item.
-    fn install_init<H>(self, handler: H) -> Self::WithInit<H>;
-    /// Stores default state.
-    fn install_default<S>(self, state: S) -> Self::WithDefault<S>;
+    /// Tick after the init step. Generics: `I` init system.
+    type Ready<I: ContextTick>: ContextTick;
+
+    /// Stores the init system.
+    fn install<I: ContextTick>(self, init: I) -> Self::Ready<I>;
 }
 
 // Generics: `L` list.
@@ -54,41 +56,14 @@ impl<L> FreshInit for Pipe<NoSystems, L>
 where
     L: ContextTick,
 {
-    type WithInit<H> = Pipe<WithInit<H>, L>;
-    type WithDefault<S> = Pipe<WithDefault<S>, L>;
+    type Ready<I: ContextTick> = Pipe<I, L>;
 
-    fn install_init<H>(self, handler: H) -> Self::WithInit<H> {
-        Pipe::new(WithInit::new(handler), self.list)
-    }
-
-    fn install_default<S>(self, state: S) -> Self::WithDefault<S> {
-        Pipe::new(WithDefault { state }, self.list)
-    }
-}
-
-/// Reads state stored by `init_state_default`.
-#[doc(hidden)]
-pub trait DefaultState {
-    /// Stored state.
-    type State;
-    /// Borrows that state.
-    fn state(&self) -> &Self::State;
-}
-
-// Generics: `L` list, `S` state.
-impl<L, S> DefaultState for Pipe<WithDefault<S>, L> {
-    type State = S;
-
-    fn state(&self) -> &Self::State {
-        &self.init.state
+    fn install<I: ContextTick>(self, init: I) -> Self::Ready<I> {
+        Pipe::new(init, self.list)
     }
 }
 
 impl ContextTick for NoSystems {}
-
-impl<H> ContextTick for WithInit<H> {}
-
-impl<S> ContextTick for WithDefault<S> {}
 
 impl ContextTick for () {}
 
@@ -99,12 +74,14 @@ pub struct Pipe<I, L> {
     pub(crate) list: L,
 }
 
+// Generics: `I` init system, `L` list.
 impl<I, L> Pipe<I, L> {
     pub(crate) fn new(init: I, list: L) -> Self {
         Self { init, list }
     }
 }
 
+// Generics: `I` init system, `L` list.
 impl<I, L> ContextTick for Pipe<I, L>
 where
     I: ContextTick,

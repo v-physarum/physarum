@@ -4,116 +4,16 @@
 //! [`Collect::MASK`]. Const leaves use [`MatchEmit::Against`]`<M>::MATCHES`.
 //! Runtime [`MatchEmit::matches`] still takes a live [`EmitMask`].
 //!
-//! **Bit registry:** each event implements [`EmitBit`] with a unique `BIT` in
-//! `0..EmitMask::BITS`. Manual today; derive may emit it later (not on
-//! [`EventInfo`](crate::EventInfo) — rule 14).
+//! **Bit registry:** each event implements [`EmitBit`] with one
+//! [`Bit`](crate::Bit) slot of a registry. The compiler rejects a slot with
+//! two owners. Not on [`EventInfo`](crate::EventInfo) — rule 14.
 
 use core::marker::PhantomData;
 
-use crate::filter::ops::FilterOperand;
+use crate::filter::On;
+pub use crate::filter::mask::{AsMask, Collect, EmitMask, UnionEmit};
 use crate::filter::shape::{Here, IdleEmit, JoinBoth, JoinEither, NodeForm, PairBody, Skip};
-use crate::filter::{And, On};
-
-/// Tick emit set: one bit per [`EmitBit`] event.
-///
-/// Not a raw `u128` and not a type alias (rules 21–22). Bits stay inside the
-/// newtype; callers use [`Self::from_bit`], [`Self::or`], [`Self::contains`].
-#[must_use]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct EmitMask(u128);
-
-impl EmitMask {
-    /// Bits available in this mask.
-    pub const BITS: u32 = 128;
-
-    /// No events set.
-    pub const EMPTY: Self = Self(0);
-
-    /// Single-bit mask for `bit` (`0..BITS`).
-    ///
-    /// # Panics
-    ///
-    /// Const-eval panics when `bit >= BITS`.
-    pub const fn from_bit(bit: u32) -> Self {
-        assert!(bit < Self::BITS, "EmitBit::BIT must be < EmitMask::BITS");
-        Self(1u128 << bit)
-    }
-
-    /// Bits set in `self` or `other`.
-    pub const fn or(self, other: Self) -> Self {
-        Self(self.0 | other.0)
-    }
-
-    /// Whether `self` and `other` are the same bit set.
-    #[must_use]
-    pub const fn same(self, other: Self) -> bool {
-        self.0 == other.0
-    }
-
-    /// Whether every bit of `need` is set in `self`.
-    #[must_use]
-    pub const fn contains(self, need: Self) -> bool {
-        self.0 & need.0 == need.0
-    }
-}
-
-/// Event bit for the emit mask. Separate from [`EventInfo`](crate::EventInfo).
-///
-/// Assign unique `BIT` values across the app (registry by convention).
-pub trait EmitBit {
-    /// Bit index in [`EmitMask`] (`0..EmitMask::BITS`).
-    const BIT: u32;
-}
-
-/// Folds an emit AST to a mask (build-time const).
-#[doc(hidden)]
-pub trait Collect {
-    /// Bits set by this emit tree.
-    const MASK: EmitMask;
-}
-
-/// [`Collect::MASK`] of a [`NodeForm::Body`](crate::filter::shape::NodeForm::Body).
-#[doc(hidden)]
-pub trait AsMask {
-    /// Bits this body contributes.
-    const MASK: EmitMask;
-}
-
-// Generics: `T` tick / type / tip.
-impl<T: IdleEmit> AsMask for T {
-    const MASK: EmitMask = EmitMask::EMPTY;
-}
-
-// Generics: `A` left child, `B` right child, `K` join kind — one MASK fold for And / Or.
-impl<A, B, K> AsMask for PairBody<A, B, K>
-where
-    A: Collect,
-    B: Collect,
-{
-    const MASK: EmitMask = A::MASK.or(B::MASK);
-}
-
-impl<A> AsMask for Skip<A> {
-    const MASK: EmitMask = EmitMask::EMPTY;
-}
-
-// Generics: `E` event, `I` inner path.
-impl<E, I> AsMask for Here<E, I>
-where
-    E: EmitBit,
-    I: Collect,
-{
-    const MASK: EmitMask = EmitMask::from_bit(E::BIT).or(I::MASK);
-}
-
-// Generics: `T` operator ([`NodeForm`]).
-impl<T> Collect for T
-where
-    T: NodeForm,
-    T::Body: AsMask,
-{
-    const MASK: EmitMask = <T::Body as AsMask>::MASK;
-}
+use crate::filter::slot::{EmitBit, EmitIx};
 
 /// Const bool for [`MatchEmit::Against`].
 #[doc(hidden)]
@@ -133,8 +33,11 @@ impl ConstMatch for AlwaysMatch {
 /// Const match of `On<E, I>` against emit tree `M`.
 /// Generics: `E` event, `I` inner, `M` emit mask const.
 #[doc(hidden)]
-pub struct OnMatch<E, I, M>(PhantomData<(E, I, M)>);
+pub struct OnMatch<E, I, M> {
+    _markers: PhantomData<(E, I, M)>,
+}
 
+// Generics: `E` event, `I` inner, `M` emit mask const.
 impl<E, I, M> ConstMatch for OnMatch<E, I, M>
 where
     E: EmitBit,
@@ -148,8 +51,11 @@ where
 /// Const match of `And<A, B>` against emit tree `M`.
 /// Generics: `A` left, `B` right, `M` emit mask const.
 #[doc(hidden)]
-pub struct AndMatch<A, B, M>(PhantomData<(A, B, M)>);
+pub struct AndMatch<A, B, M> {
+    _markers: PhantomData<(A, B, M)>,
+}
 
+// Generics: `A` left, `B` right, `M` emit mask const.
 impl<A, B, M> ConstMatch for AndMatch<A, B, M>
 where
     A: MatchEmit,
@@ -162,8 +68,11 @@ where
 /// Const match of `Or<A, B>` against emit tree `M`.
 /// Generics: `A` left, `B` right, `M` emit mask const.
 #[doc(hidden)]
-pub struct OrMatch<A, B, M>(PhantomData<(A, B, M)>);
+pub struct OrMatch<A, B, M> {
+    _markers: PhantomData<(A, B, M)>,
+}
 
+// Generics: `A` left, `B` right, `M` emit mask const.
 impl<A, B, M> ConstMatch for OrMatch<A, B, M>
 where
     A: MatchEmit,
@@ -176,8 +85,11 @@ where
 /// Const match of `Not<A>` against emit tree `M`.
 /// Generics: `A` left, `M` emit mask const.
 #[doc(hidden)]
-pub struct NotMatch<A, M>(PhantomData<(A, M)>);
+pub struct NotMatch<A, M> {
+    _markers: PhantomData<(A, M)>,
+}
 
+// Generics: `A` left, `M` emit mask const.
 impl<A, M> ConstMatch for NotMatch<A, M>
 where
     A: MatchEmit,
@@ -266,7 +178,7 @@ where
     E: EmitBit,
     I: MatchEmit,
 {
-    const NEED: EmitMask = EmitMask::from_bit(E::BIT).or(I::NEED);
+    const NEED: EmitMask = EmitMask::from_bit(<E as EmitIx>::BIT).or(I::NEED);
     type Against<M: Collect> = OnMatch<E, I, M>;
 
     fn matches(mask: EmitMask) -> bool {
@@ -286,27 +198,4 @@ where
     fn matches(mask: EmitMask) -> bool {
         <T::Body as AsEmit>::matches(mask)
     }
-}
-
-/// Joins a second `.emit` onto the set already stored.
-///
-/// Empty `()` becomes `N`. An existing [`FilterOperand`] tree becomes `And<Self, N>`.
-/// Generics: `N` next emit.
-#[doc(hidden)]
-pub trait UnionEmit<N> {
-    /// Combined emit tree.
-    type Out;
-}
-
-// Generics: `N` new emit tree. Empty slot is replaced, not wrapped.
-impl<N> UnionEmit<N> for () {
-    type Out = N;
-}
-
-// Generics: `T` stored tree ([`FilterOperand`]), `N` new emit tree.
-impl<T, N> UnionEmit<N> for T
-where
-    T: FilterOperand,
-{
-    type Out = And<Self, N>;
 }

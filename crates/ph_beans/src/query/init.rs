@@ -10,12 +10,13 @@ use crate::context::Context;
 use crate::context::Ctx;
 use crate::context::CtxConfig;
 use crate::context::FreshInit;
+use crate::context::Sys;
 use crate::descriptor::Descriptor;
 use crate::descriptor::NeedBuild;
-use crate::descriptor::OpOk;
 use crate::descriptor::live::AccSet;
 use crate::query::apply::ApplyPatch;
-use crate::query::args::{Claim, ClaimShape};
+use crate::query::boot::InitSys;
+use crate::query::claim::Claim;
 
 /// Pipeline before `.build()`.
 ///
@@ -27,6 +28,7 @@ pub struct Init<E, C> {
     _markers: PhantomData<E>,
 }
 
+// Generics: `E` event, `C` context.
 impl<E, C> Init<E, C> {
     pub(crate) fn new(context: C) -> Self {
         Self { context, _markers: PhantomData }
@@ -52,19 +54,22 @@ where
 pub trait SealInit<H>: Sized {
     /// Context after the seal.
     type Out: Context;
-    /// Installs `handler` and moves status to [`NeedBuild`].
+    /// Stores `handler` with the live claim and moves status to [`NeedBuild`].
     fn seal_init(self, handler: H) -> Self::Out;
 }
 
+// Generics: `B` bean, `A` args, `S` status, `T` tick, `H` init handler.
 impl<B, A, S, T, H> SealInit<H> for Ctx<B, A, S, T>
 where
     A: AccSet,
     T: FreshInit,
+    B: BeanInfo,
+    H: InitSys<B, A>,
 {
-    type Out = Ctx<B, A, NeedBuild, T::WithInit<H>>;
+    type Out = Ctx<B, A, NeedBuild, T::Ready<Sys<B, A, H>>>;
 
     fn seal_init(self, handler: H) -> Self::Out {
-        Ctx::new(FreshInit::install_init(self.tick, handler))
+        Ctx::new(self.tick.install(Sys::new(handler)))
     }
 }
 
@@ -73,6 +78,7 @@ where
 #[doc(hidden)]
 pub struct SetInit<H>(pub(crate) H);
 
+// Generics: `C` context, `H` init handler.
 impl<C, H> CtxConfig<C> for SetInit<H>
 where
     C: Context + SealInit<H>,
@@ -85,50 +91,6 @@ where
     }
 }
 
-/// Stores [`Default`] bean state on a concrete [`Ctx`].
-///
-/// `D` is [`BeanInfo::State`] of the context bean — not a type param on the
-/// config (unlike [`SetInit`], which carries a real handler value).
-#[doc(hidden)]
-pub trait SealDefault: Sized {
-    /// Context after the seal.
-    type Out: Context;
-    /// Installs [`Default::default`] for the bean state and moves status to [`NeedBuild`].
-    fn seal_default(self) -> Self::Out;
-}
-
-// Generics: `B` bean, `A` args, `S` status, `T` tick.
-impl<B, A, S, T> SealDefault for Ctx<B, A, S, T>
-where
-    A: AccSet,
-    T: FreshInit,
-    B: BeanInfo,
-    B::State: Default,
-{
-    type Out = Ctx<B, A, NeedBuild, T::WithDefault<B::State>>;
-
-    fn seal_default(self) -> Self::Out {
-        Ctx::new(FreshInit::install_default(self.tick, Default::default()))
-    }
-}
-
-/// Config: store [`Default`] state of the context bean and move status to [`NeedBuild`].
-#[doc(hidden)]
-pub struct SetDefault;
-
-// Generics: `C` context.
-impl<C> CtxConfig<C> for SetDefault
-where
-    C: Context + SealDefault,
-{
-    type Out = C::Out;
-    type ScopeOf<E> = E;
-
-    fn apply(self, ctx: C) -> Self::Out {
-        ctx.seal_default()
-    }
-}
-
 /// Next pipeline after `.init_state`.
 /// Generics: `H` init handler.
 pub trait InitStateStep<H> {
@@ -138,14 +100,15 @@ pub trait InitStateStep<H> {
     fn init_state(self, handler: H) -> Self::Out;
 }
 
+// Generics: `E` event, `C` context, `H` init handler.
 impl<E, C, H> InitStateStep<H> for Init<E, C>
 where
     Self: ApplyPatch<SetInit<H>>,
     C: Context,
     C::Bean: BeanInfo,
     C::Tick: FreshInit,
-    C::Args: Claim<C::Bean, Status: OpOk>,
-    H: for<'a> Fn(<C::Args as ClaimShape>::View<'a>) -> <C::Bean as BeanInfo>::State,
+    C::Args: Claim<C::Bean>,
+    H: for<'a> Fn(<C::Args as Claim<C::Bean>>::Arg<'a>) -> <C::Bean as BeanInfo>::State,
 {
     type Out = <Self as ApplyPatch<SetInit<H>>>::Out;
 
@@ -154,30 +117,13 @@ where
     }
 }
 
-/// Next pipeline after `.init_state_default`.
-pub trait InitStateDefaultStep {
-    /// Pipeline with `Default` state stored.
-    type Out;
-    /// Stores that state.
-    fn init_state_default(self) -> Self::Out;
-}
-
 // Generics: `E` event, `C` context.
-impl<E, C> InitStateDefaultStep for Init<E, C>
-where
-    C: Context,
-    C::Args: ClaimShape<Status: OpOk>,
-    Self: ApplyPatch<SetDefault>,
-{
-    type Out = <Self as ApplyPatch<SetDefault>>::Out;
-
-    fn init_state_default(self) -> Self::Out {
-        self.apply_patch(SetDefault)
-    }
-}
-
 impl<E, C> Init<E, C> {
-    /// Stores a pure init `fn` (rule 18). Status → [`NeedBuild`](crate::NeedBuild).
+    /// Stores a pure init function (rule 18) with the live claim. Status → [`NeedBuild`](crate::NeedBuild).
+    ///
+    /// The function runs once per instance, in [`Tick::init`](crate::Tick::init):
+    /// it sees the provided states and the injects passed there.
+    /// A default state is `.init_state(|_| Default::default())`.
     /// A second call is [`PipelineError`](crate::PipelineError)`<1>` (see `docs/errors.md`).
     /// ```compile_fail
     /// use ph_beans::{BeanInfo, Query};
@@ -190,18 +136,5 @@ impl<E, C> Init<E, C> {
         Self: InitStateStep<H>,
     {
         InitStateStep::init_state(self, handler)
-    }
-
-    /// Stores [`Default`] state. Status → [`NeedBuild`](crate::NeedBuild).
-    /// ```compile_fail
-    /// use ph_beans::{BeanInfo, Query};
-    /// struct App; impl BeanInfo for App { type Provides=(); type Injects=(); type Beans=(); type State=u8; }
-    /// let _ = App::query().init_state_default().init_state_default();
-    /// ```
-    pub fn init_state_default(self) -> <Self as InitStateDefaultStep>::Out
-    where
-        Self: InitStateDefaultStep,
-    {
-        InitStateDefaultStep::init_state_default(self)
     }
 }

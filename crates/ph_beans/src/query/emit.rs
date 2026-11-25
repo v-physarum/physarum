@@ -2,8 +2,6 @@
 
 use core::marker::PhantomData;
 
-use crate::bean::BeanInfo;
-use crate::bean::EventInfo;
 use crate::context::Context;
 use crate::context::ContextTick;
 use crate::context::Ctx;
@@ -11,8 +9,8 @@ use crate::context::CtxConfig;
 use crate::context::Pipe;
 use crate::context::maps::MapList;
 use crate::descriptor::live::AccSet;
+use crate::filter::HostedBy;
 use crate::filter::NestOk;
-use crate::filter::On;
 use crate::filter::eval::UnionEmit;
 use crate::query::apply::ApplyPatch;
 use crate::query::init::Init;
@@ -26,6 +24,7 @@ pub trait EmitUnion<T>: Sized {
     fn union_emit(self) -> Self::Out;
 }
 
+// Generics: `T` emit tree, `I` inner path, `N` new entry, `E` event tip, `S` strategy.
 impl<T, I, N, E, S> EmitUnion<T> for Pipe<I, MapList<N, E, S>>
 where
     I: ContextTick,
@@ -38,22 +37,6 @@ where
     }
 }
 
-/// The `On` node for this bean's provider event.
-#[doc(hidden)]
-pub trait ProviderEvent {
-    /// `On<Provides, ()>`.
-    type Tree: NestOk;
-}
-
-// Generics: `B` bean.
-impl<B> ProviderEvent for B
-where
-    B: BeanInfo<Provides: EventInfo>,
-    On<B::Provides, ()>: NestOk,
-{
-    type Tree = On<B::Provides, ()>;
-}
-
 /// Unions an emit tree on a concrete [`Ctx`] (hides `B`/`A`/`S`/`T` from [`CtxConfig`]).
 /// Generics: `E` event tip.
 #[doc(hidden)]
@@ -64,6 +47,7 @@ pub trait SealEmit<E>: Sized {
     fn seal_emit(self) -> Self::Out;
 }
 
+// Generics: `B` module, `A` left child, `S` strategy, `T` emit tree, `E` event tip.
 impl<B, A, S, T, E> SealEmit<E> for Ctx<B, A, S, T>
 where
     A: AccSet,
@@ -79,8 +63,11 @@ where
 /// Config: union `E` into the emit tree.
 /// Generics: `E` event tip.
 #[doc(hidden)]
-pub struct SetEmit<E>(PhantomData<E>);
+pub struct SetEmit<E> {
+    _markers: PhantomData<E>,
+}
 
+// Generics: `C` context, `E` event tip.
 impl<C, E> CtxConfig<C> for SetEmit<E>
 where
     C: Context + SealEmit<E>,
@@ -94,46 +81,6 @@ where
     }
 }
 
-/// Emits the provider event on a concrete [`Ctx`] (hides `B`/`A`/`S`/`T` from [`CtxConfig`]).
-#[doc(hidden)]
-pub trait SealProviders: Sized {
-    /// Context after the seal.
-    type Out: Context;
-    /// Stores the module's provider event.
-    fn seal_providers(self) -> Self::Out;
-}
-
-// Generics: `B` bean, `A` args, `S` status, `T` emit tree.
-impl<B, A, S, T> SealProviders for Ctx<B, A, S, T>
-where
-    A: AccSet,
-    B: ProviderEvent,
-    T: ContextTick + EmitUnion<B::Tree>,
-{
-    type Out = Ctx<B, A, S, T::Out>;
-
-    fn seal_providers(self) -> Self::Out {
-        Ctx::new(EmitUnion::<B::Tree>::union_emit(self.tick))
-    }
-}
-
-/// Config: emit the module's provider event.
-#[doc(hidden)]
-pub struct SetProviders;
-
-// Generics: `C` context.
-impl<C> CtxConfig<C> for SetProviders
-where
-    C: Context + SealProviders,
-{
-    type Out = C::Out;
-    type ScopeOf<O> = O;
-
-    fn apply(self, ctx: C) -> Self::Out {
-        ctx.seal_providers()
-    }
-}
-
 /// Next pipeline after `.emit`.
 /// Generics: `T` emit tree.
 pub trait EmitStep<T> {
@@ -143,56 +90,31 @@ pub trait EmitStep<T> {
     fn emit(self, tree: T) -> Self::Out;
 }
 
+// Generics: `E` event tip, `C` context, `T` emit tree.
 impl<E, C, T> EmitStep<T> for Init<E, C>
 where
+    C: Context,
     Self: ApplyPatch<SetEmit<T>>,
-    T: NestOk,
+    T: NestOk + HostedBy<C::Bean>,
 {
     type Out = <Self as ApplyPatch<SetEmit<T>>>::Out;
 
     fn emit(self, tree: T) -> Self::Out {
         let _ = tree;
-        self.apply_patch(SetEmit(PhantomData))
+        self.apply_patch(SetEmit { _markers: PhantomData })
     }
 }
 
-/// Next pipeline after `.emit_providers`.
-pub trait EmitProvidersStep {
-    /// Pipeline that emits the module's provider event.
-    type Out;
-    /// Records that event.
-    fn emit_providers(self) -> Self::Out;
-}
-
-// Generics: `E` event, `C` context.
-impl<E, C> EmitProvidersStep for Init<E, C>
-where
-    Self: ApplyPatch<SetProviders>,
-{
-    type Out = <Self as ApplyPatch<SetProviders>>::Out;
-
-    fn emit_providers(self) -> Self::Out {
-        self.apply_patch(SetProviders)
-    }
-}
-
+// Generics: `E` event tip, `C` context.
 impl<E, C> Init<E, C> {
     /// Unions `tree` into the emit set.
     ///
-    /// A nested event must list its outer event in [`EventInfo::Parents`].
+    /// A nested event must list its outer event in [`EventInfo::Parents`](crate::EventInfo::Parents).
     #[allow(clippy::needless_pass_by_value)]
     pub fn emit<T>(self, tree: T) -> <Self as EmitStep<T>>::Out
     where
         Self: EmitStep<T>,
     {
         EmitStep::emit(self, tree)
-    }
-
-    /// Emits the module's provider event.
-    pub fn emit_providers(self) -> <Self as EmitProvidersStep>::Out
-    where
-        Self: EmitProvidersStep,
-    {
-        EmitProvidersStep::emit_providers(self)
     }
 }

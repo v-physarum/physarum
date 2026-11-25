@@ -20,6 +20,7 @@ pub struct Accessors;
 /// Generics: `T` claimed type.
 pub struct Get<T>(PhantomData<T>);
 
+// Generics: `T` claimed type.
 impl<T> Get<T> {
     /// Marker for `T`.
     #[must_use]
@@ -28,6 +29,7 @@ impl<T> Get<T> {
     }
 }
 
+// Generics: `T` claimed type.
 impl<T> Default for Get<T> {
     fn default() -> Self {
         Self::new()
@@ -40,6 +42,7 @@ impl<T> Default for Get<T> {
 /// Generics: `T` claimed type.
 pub struct Mut<T>(PhantomData<T>);
 
+// Generics: `T` claimed type.
 impl<T> Mut<T> {
     /// Marker for `T`.
     #[must_use]
@@ -48,6 +51,7 @@ impl<T> Mut<T> {
     }
 }
 
+// Generics: `T` claimed type.
 impl<T> Default for Mut<T> {
     fn default() -> Self {
         Self::new()
@@ -58,19 +62,25 @@ impl<T> Default for Mut<T> {
 ///
 /// Not an accessor. `*Ev::T` / `*Ev::MUT` are the existing [`Get`] / [`Mut`].
 /// Generics: `T` claimed type.
-pub struct State<T>(PhantomData<T>);
+pub struct State<T> {
+    _markers: PhantomData<T>,
+}
 
 // `*` yields a value. Only the state parameter is [`Copy`]; [`Get`] itself is not.
+// Generics: `T` claimed type.
 impl<T> Copy for Get<State<T>> {}
 
+// Generics: `T` claimed type.
 impl<T> Clone for Get<State<T>> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
+// Generics: `T` claimed type.
 impl<T> Copy for Mut<State<T>> {}
 
+// Generics: `T` claimed type.
 impl<T> Clone for Mut<State<T>> {
     fn clone(&self) -> Self {
         *self

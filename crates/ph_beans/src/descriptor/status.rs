@@ -25,6 +25,8 @@ pub struct WarnUnusedArgs;
 // Generics: `T` tip.
 pub trait PipelineOk<T> {}
 
+// Generics: `T` tip.
 impl<T> PipelineOk<T> for Valid {}
 
+// Generics: `T` tip.
 impl<T> PipelineOk<T> for WarnUnusedArgs {}

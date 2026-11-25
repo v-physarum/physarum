@@ -28,6 +28,7 @@ pub trait ScopeOf<E> {
     type NextE;
 }
 
+// Generics: `E` event.
 impl<E> ScopeOf<E> for Keep {
     type NextE = E;
 }
@@ -71,6 +72,7 @@ where
 {
 }
 
+// Generics: `F` operator.
 impl<F> FilterDesc for F
 where
     F: KeepsScope + HasMut,
@@ -88,6 +90,7 @@ where
     type Scope = Replace<<On<E, I> as Spine>::Path>;
 }
 
+// Generics: `E` event, `A` left child, `F` operator.
 impl<E, A, F> ApplyFilter<E, A> for F
 where
     F: FilterDesc,

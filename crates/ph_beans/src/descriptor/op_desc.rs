@@ -3,18 +3,20 @@
 use crate::descriptor::Valid;
 use crate::descriptor::error::ClaimError;
 
-/// Per-operator lens. Pipeline [`crate::Descriptor`] stays the tip status.
+/// Per-operator lens: the status of one claim list read under module `B`.
 ///
-/// Implemented for [`Claim`](crate::Claim) in `query/args.rs` (`Status` = claim status).
-pub trait OpDesc {
-    /// `Valid`, or a [`ClaimError`].
+/// Pipeline [`crate::Descriptor`] stays the tip status. The one impl is in
+/// `query/marks.rs`: the status is computed over `B`'s slots.
+/// Generics: `B` module.
+pub trait OpDesc<B> {
+    /// `Valid`, or the first clash as a [`ClaimError`].
     type Status;
 }
 
 /// `Status` may pass the next gated step (`.inject_resources`, init, build).
 #[diagnostic::on_unimplemented(
-    message = "operator invalid: Status=`{Self}`",
-    label = "fix OpDesc::Status",
+    message = "pipeline not ready: Descriptor::Status = `{Self}`",
+    label = "fix Descriptor::Status",
     note = "`ClaimError<T, 1>` — same bean claimed twice; \
             `ClaimError<T, 2>` — `T` and `Mut` on one bean; \
             codes: docs/errors.md"

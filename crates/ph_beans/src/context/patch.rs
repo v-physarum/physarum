@@ -22,7 +22,9 @@ pub trait CtxConfig<C: Context> {
 /// [`CtxConfig`] `G` applied to context `C`. The product is [`Config::Type`].
 ///
 /// Generics: `G` config, `C` context.
-pub struct ApplyCfg<G, C>(PhantomData<(G, C)>);
+pub struct ApplyCfg<G, C> {
+    _markers: PhantomData<(G, C)>,
+}
 
 // Generics: `G` config, `C` context.
 impl<G, C> Config for ApplyCfg<G, C>

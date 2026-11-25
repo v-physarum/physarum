@@ -19,17 +19,16 @@ pub mod query;
 pub use bean::{BeanInfo, EventInfo, FromParent, Module, OfInject, OfParent, OfProvide};
 pub use borrow::{At, Ix, Off, Take, TakeMany};
 pub use context::{
-    CarrierDesc, Context, ContextTick, Ctx, Direct, DirectFn, End, EventBuf, ExactDrive, Full,
-    Group, Head, List, MAX_MAP_SYSTEMS, MapEntry, MapList, NoSystems, Pipe, ScopeHost, StartDesc,
-    WithDefault, WithInit,
+    CarrierDesc, Context, ContextTick, Ctx, DeferState, End, EventBuf, Full, Group, Head, List,
+    MAX_MAP_SYSTEMS, MapEntry, MapList, NoSystems, Owned, Pipe, ScopeHost, StartDesc,
 };
 pub use descriptor::{
-    Accessors, ClaimDesc, ClaimError, Descriptor, Dyn, DynView, FilterError, Get, Idle, Live,
-    Marker, Mut, NeedBuild, NeedInit, OpDesc, OpOk, PipelineError, PipelineOk, State, Valid,
-    WarnUnusedArgs,
+    Accessors, ClaimDesc, ClaimError, Descriptor, Dyn, DynObject, FilterError, Get, Idle, Live,
+    Marker, ModuleDesc, Mut, NeedBuild, NeedInit, OpDesc, OpOk, PipelineError, PipelineOk, State,
+    Valid, WarnUnusedArgs,
 };
 pub use filter::{
-    And, ApplyFilter, Dense, EmitBit, EmitMask, Gate, NestOk, Not, On, Or, PathNode, PathStep,
-    PathStrategy, Sparse,
+    And, ApplyFilter, Bit, BitIx, Dense, EmitBit, EmitIx, EmitMask, EventReg, Gate, HostedBy,
+    InReg, NestOk, Not, On, Or, PathNode, PathStep, PathStrategy, SlotOf, Sparse,
 };
-pub use query::{Built, Claim, ClaimShape, Init, Query, Setup, Tick, Update};
+pub use query::{Built, Claim, ClaimShape, Init, Query, Setup, Slot, Tick, Update};

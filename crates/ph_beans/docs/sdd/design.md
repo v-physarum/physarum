@@ -91,7 +91,7 @@ Layout of `crates/ph_beans/src/`. Keep the surface readable: **small files**, **
    2. Runtime input differences go on a **GAT** (`type Args<'a>`, often `Copy`) on that strategy — not duplicated method shapes.
    3. Carriers that only **fan out** (tuples, `List` / `Leaf` / `Grow`) get **one** blanket over the strategy param (`PathNode<S>`, …). Do **not** copy the same body once per variant.
    4. Per-variant impls stay only where the **leaf policy** truly differs (`MapEntry` under `Sparse` vs `Dense`).
-   5. **Sibling methods on one fan-out are one strategy argument.** `walk` / `walk_mask` / `walk_exact` (or any set of methods that differ only by mode and are copied onto every tuple arity) collapse to `fn walk<S: Strategy + Copy>(&self, strategy: S, …)`. The strategy struct is the mode (const emit, runtime mask, exact child mask). Tuple / `List` / `Leaf` / `Grow` impls forward that single call. Do **not** stamp a second and third method beside it on each arity. Leaf policy (`MapEntry` vs `MapAt`) stays on the leaf, and may ask the strategy which mode it is in. A root capability such as `ExactDrive` sits on that method's `where`, not on the leaf `impl` header: a header bound makes `List: ExactDrive` require `Walk` require `ExactDrive`, and the solver overflows.
+   5. **Sibling methods on one fan-out are one strategy argument.** `walk` / `walk_mask` / `walk_exact` (or any set of methods that differ only by mode and are copied onto every tuple arity) collapse to `fn walk<S: Strategy + Copy>(&self, strategy: S, …)`. The strategy struct is the mode (const emit, runtime mask, exact child mask). Tuple / `List` / `Leaf` / `Grow` impls forward that single call. Do **not** stamp a second and third method beside it on each arity. Leaf policy stays on the leaf (`MapEntry`), and may ask the strategy which mode it is in. A root capability sits on that method's `where`, not on the leaf `impl` header: a header bound on the list makes the solver overflow.
 
    ```rust
    // Forbidden — one forwarding body copied per mode, per arity
@@ -499,7 +499,7 @@ Layout of `crates/ph_beans/src/`. Keep the surface readable: **small files**, **
 
 20. **Claim wrappers use [`ClaimDesc`] — one blanket, not per-carrier walks** — a type that only **forwards** claim shape / indexes to an inner node (`Live<C>`, `Idle<C>`, and later similar carriers) **must** implement [`ClaimDesc`] (`type Inner = …`) and rely on the **shared** blankets `ClaimShape for T where T: ClaimDesc` / `Claim<B> for T where T: ClaimDesc`. Do **not** add another `impl ClaimShape for Live<…>` / `Idle<…>` (or copy-paste the same forward for each new wrapper).
 
-   Leaves and real combinators stay direct: `()`, `Get`, `Mut`, `And`, pairs, and **`Dyn`** (View is `&V` / `&mut V`, not a pure forward) keep their own `ClaimShape` / `Claim` impls. An event-state claim is the same accessor on [`State`]: `Get<State<Ev>>` / `Mut<State<Ev>>`, forwarded by [`ClaimDesc`] to `Get`/`Mut` of `EventBuf` (rule 23).
+   Leaves and real combinators stay direct: `()`, `Get`, `Mut`, `And`, pairs, and **`Dyn`** (View is `&V` / `&mut V`, not a pure forward) keep their own `ClaimShape` / `Claim` impls. An event-state claim is the same accessor on [`State`]: `Get<State<Ev>>` / `Mut<State<Ev>>`, read through the same `ClaimLeaf` descriptor as the bean (`Part = StatePart`, rule 23).
 
    ```rust
    // Forbidden — per-wrapper ClaimShape / Claim forward
@@ -538,21 +538,20 @@ Layout of `crates/ph_beans/src/`. Keep the surface readable: **small files**, **
 
 23. **Never duplicate existing functionality** — this rule wins over every other rule here, including rule 19’s side-type escape. If a walk, an accessor, a view, or an operator list **already exists**, the next feature uses **that**. It does not copy the impls. It does not add a second accessor whose body only repeats `()` / [`Get`] / [`Mut`] / [`Dyn`] / [`And`].
 
-   The operators are named **once**, on a shared descriptor ([`ClaimForm`], [`ClaimDesc`], [`CarrierDesc`], [`FilterDesc`], …). The new trait is **one blanket** over that descriptor. A claim that is an existing accessor on another referent is that accessor (`Get<EventBuf<S>>`, `Mut<EventBuf<S>>`) through [`ClaimDesc`].
+   The operators are named **once**, on a shared descriptor ([`ClaimForm`], [`ClaimDesc`], [`CarrierDesc`], [`FilterDesc`], …). The new trait is **one blanket** over that descriptor. A claim that is an existing accessor on another referent is that accessor (`Get<State<P>>`, `Mut<State<P>>`) through one leaf descriptor.
 
    ```rust
    // Forbidden — operator list copied onto the next trait; a second accessor
    impl<E> StateGate<E> for () {}
    impl<E, T> StateGate<E> for Get<T> {}
    impl<E, T> StateGate<E> for Mut<T> {}
-   impl<P> ClaimShape for StateGet<P> { type View<'a> = &'a EventBuf<P::State>; }
+   impl<P> ClaimShape for StateGet<P> { type View<'a> = &'a P::State; }
 
    // Required — one descriptor, one blanket; the state claim is Get / Mut
    impl<T: LeafClaim> ClaimForm for T { type Body = (); }
    impl<E, T: ClaimForm> StateGate<E> for T where T::Body: GateParts<E> {}
-   impl<P: BeanInfo> ClaimDesc for Get<State<P>> {
-       type Inner = Get<EventBuf<P::State>>;
-   }
+   impl<P: BeanInfo> ClaimLeaf for State<P> { type Bean = P; type Part = StatePart; }
+   impl<P: ClaimLeaf> ClaimShape for Get<P> { type View<'a> = &'a <P::Part as Part>::Of<P::Bean>; }
    ```
 
 24. **A type in a signature fits on one line** — `type` aliases, associated types, and return types are a single line at `max_width` (100). If rustfmt would break the type, **do not wrap it**. Name the inner part on its owner (a descriptor associated type) until every signature type fits. A wrapped `Ctx<…>` / `Pipe<…>` / `MapList<…>` is a failed signature.
@@ -640,9 +639,9 @@ Manual impls in the prototype must match this surface so derive is a drop-in.
 ```rust
 // Module — derive emits only:
 impl BeanInfo for App {
-    type Provides = (Logic,);
+    type Provides = (Get<Logic>,); // #[provide(Logic::T)]
     type Injects = ();
-    type Beans = (Logic,); // Provides ++ Injects
+    type Beans = (Get<Logic>,); // Provides ++ Injects
     type State = …;
 }
 impl At<Logic> for App {
@@ -727,11 +726,11 @@ Tree: `App` → `Logic` → `Render`. `Render` injects `Logic::MUT`; `Logic` inj
 
 ### `FromParent` impl style
 
-Compile-time “child may take this claim from parent” is **`FromParent`** (and `Module`). Use **`ClaimMark`** + membership on `Provides` / `Injects` — **not** Get×Mut×slot. `OfProvide0` / `OfProvide1` (and inject twins) are **E0119 residuals** only (head vs tail Via); collapse further if a non-overlapping encoding appears (rule 8).
+Compile-time “child may take this claim from parent” is **`FromParent`** (and `Module`). Use **`Provided`** (bean and access of an entry; the one list of `Get` / `Mut`) + membership on `Provides` / `Injects` — **not** Get×Mut×slot. `OfProvide0` / `OfProvide1` (and inject twins) are **E0119 residuals** only (head vs tail Via); collapse further if a non-overlapping encoding appears (rule 8).
 
 ### `T` vs `MUT`
 
-Markers on provide/inject may be `T` (shared / immutable) or `MUT` (exclusive).
+Markers on provide/inject may be `T` (shared / immutable) or `MUT` (exclusive). `Provides` is always a list: one provide is `(Get<P>,)`, and the length-1 child check (`OfProvide`) reads that form. One inject stays the bare claim. A bean provided as `::T` is made by `init` and never changes: neither a child nor a system of the module takes it as `MUT`. A bean provided as `::MUT` can be taken as `T` or as `MUT`. Every provide carries a marker; there is no bare form. One descriptor names the entry (`Provided`: bean and access `Shared` / `Exclusive`), and `Allows` is the one rule: `Exclusive` hands out either access, `Shared` hands out `Shared`.
 
 - An immutable provide (`::T`) may be injected as an immutable bean.
 - Injecting `::MUT` against an immutable type / provide is a **compile error** (Descriptor / trait gate on that attribute use).
@@ -766,10 +765,10 @@ Mapped onto beans: `Draw` is `Unix`; `Painter` is `Platform`; the system / init 
 **Declare the view on inject; inject the bean normally:**
 
 ```rust
-#[config(type = dyn)]
+#[config(type = dynamic)]
 trait Painter { fn paint(&self); }
 
-impl<T: Painter> DynView<T> for dyn Painter {} // marker only (derive)
+impl<'a> DynObject<'a> for dyn Painter { type Obj = dyn Painter + 'a; /* … */ } // derive
 
 struct Draw;
 impl Painter for Draw { … }
@@ -789,13 +788,13 @@ fn boot(view: &dyn Painter) { view.paint(); } // like process(&dyn Platform)
 | Provide | `Draw::T` | Concrete only. **No** `as` / `dyn` in provides. |
 | Inject attr | `Draw::T as Painter` | Same bean key `Draw`; **only** `ArgsView` / system arg is `&dyn Painter` (`::MUT` → `&mut dyn Painter`). |
 | Claim / `.inject_resources` | `Draw::T` / `Draw::MUT` | **Ordinary** marker — same shape as `Keys::T`. **No** `.as_dyn(…)`. |
-| Trait | `#[config(type = dyn)]` → `DynView` | Allows `… as Painter`. |
+| Trait | `#[config(type = dynamic)]` → `DynObject` | Allows `… as Painter`. |
 
-**`DynView` — marker only:** no `Shared` / `Exclusive` GATs, no coerce helpers on the marker. Unannotated traits cannot appear after `as`.
+**`DynObject` — the one impl of a dynamic trait:** it marks the trait as injectable and names its object for a borrow (`type Obj = dyn Trait + 'a`, two one-word functions). No other helper sits on it. Unannotated traits cannot appear after `as`.
 
 **Type-level (derive / encoding):** `Injects` may record the cast (e.g. thin `Dyn<Get<Draw>, dyn Painter>` **inside** assoc types) so `ArgsView` resolves to `&V`. Users never construct that at the call site — they keep writing `Draw::T`. `At` / `FromParent` / `Beans` / live claim stay **`Draw`**. **Do not** add methods on [`Get`] / [`Mut`] / [`Marker`] for the cast (rule 19). **Do not** put `Dyn` on filter ops until a `.filter` cast is required.
 
-**Why `&dyn Trait` only on the arg:** under a cast inject, system / inject `ArgsView` is `(&dyn Painter, …)` — the “конечный аргумент”. Simple monomorphized paths **inline** — [`ph_test_asm`](../../../../crates/tests/ph_test_asm) `assert_no_virtual_calls()` on release probes. Not `Box<dyn>` (rule 16).
+**Why `&dyn Trait` only on the arg:** under a cast inject, system / inject `ArgsView` is `(&dyn Painter, …)` — the the final argument. Simple monomorphized paths **inline** — [`ph_test_asm`](../../../../crates/tests/ph_test_asm) `assert_no_virtual_calls()` on release probes. Not `Box<dyn>` (rule 16).
 
 ```rust
 AsmTester::new("dyn_inject_probe.rs")
@@ -820,11 +819,12 @@ AsmTester::new("dyn_inject_probe.rs")
 Draw::T.as_dyn::<dyn Painter>()     // not a claim API; dyn only on ArgsView
 impl Get<T> { fn as_dyn… }          // do not grow Get — rule 19
 struct Get<T, V>(…);                // reshape Get
-trait DynView<T> { type Shared<'a>; … }  // keep marker-only
 struct State { p: Box<dyn Painter> }     // rule 16
 ```
 
-Derive still emits only `BeanInfo` / `At` / `EventInfo` / `ProxyInfo` as listed, plus the **`DynView` marker impl** for `#[config(type = dyn)]` traits (and cast encoding in `Injects`).
+**Current slice.** `Injects = Dyn<Get<P>, V>` / `Dyn<Mut<P>, V>` is lent as `&V` / `&mut V` (`ClaimShape::Lent`): the caller passes its concrete value to `Tick::init` / `Tick::emit`, and that call coerces it, so any implementation of the trait can be lent. A claim is module-aware: `Claim<B>` reads the module's entry for the bean (`Holds<P>::Entry`: `B::Beans` at `At::Ix`). `Seen<'a>` is what the claim borrows from the call (a part of the slot, or the trait object); `Arg<'a>` is what the system takes. `.inject_resources` takes the ordinary claim and knows nothing about `dyn`; `P::T` and `*P::T` read a `Dyn` entry alike. A system is written `fn f(p: &mut dyn Trait)`, whose type is `&'a mut (dyn Trait + 'a)`. A generic `V` cannot name `dyn Trait + 'a` on stable, and nothing generic can shorten the object behind `&mut`, so the trait object states it once in **`DynObject<'a>`** (`type Obj = dyn Trait + 'a` and two one-word functions). The derive of a `dynamic` trait writes it; it is also the mark that the trait may be injected (the earlier `DynView` marker is removed). Tests: `tests/crates/ph_beans/dyn_view.rs`, probe `probes/dyn_inject.rs` (no virtual call).
+
+Derive still emits only `BeanInfo` / `At` / `EventInfo` / `ProxyInfo` as listed, plus the **`DynObject` impl** for `#[config(type = dynamic)]` traits (and cast encoding in `Injects`).
 
 ---
 
@@ -885,6 +885,8 @@ error[E0277]: operator invalid: Status=`ErrConflictAccess<PointX>`
   --> … .inject_resources(PointX::T & PointX::Mut)
    = note: cannot claim T and Mut for the same bean
 ```
+
+**How level 1 is computed (current slice):** bean equality is read from the module's slots. `Claim::Indexes` names a slot, an access (`Shared` / `Exclusive`) and a bean per leaf; `Marks` walks that tree over four slot marks (`Free` / `Taken<A>`), and `Meets` gives the status of a second claim on one slot: the same access is `ClaimError<T, 1>`, shared with exclusive is `ClaimError<T, 2>`. `.inject_resources` reads it through `OpDesc<B>::Status: OpOk`.
 
 **Level 2 — claim not in Provides/Injects** (`Claim<B>` / `At`):
 
@@ -1031,14 +1033,14 @@ Systems are stored **only** on `Context::Tick` (not on operators). Layout:
 
 | Slot | Role |
 | --- | --- |
-| **Init** | At most one: `NoSystems` → `WithInit<H>` or `WithDefault<S>` via `init_state` / `init_state_default`. Outside the map cap. |
+| **Init** | At most one: `NoSystems` → `Sys<B, A, H>` via `init_state`. Outside the map cap. |
 | **Maps** | `.map` entries live in the **shared** `List` / `Leaf` / `Grow` carriers (rules 11–13): leaf ≤ 8, groups past 8 (9 → 8+1, 16 → four groups). Push is one `context/push.rs` table; `Run` / schedule reuse that `List` — not a private flat 16-slot table. |
 
 ```text
 Ctx<Bean, Args, Status, Tick>
                          │
                          └─ Tick = (InitSlot, MapList)
-                              InitSlot: NoSystems | WithInit<H> | WithDefault<S>
+                              InitSlot: NoSystems | Sys<B, A, H>
                               MapList:  List<Leaf<…>> → (List, Grow) → four Lists
                                         // NOT cons spines; NOT MapNode; NOT MapEntry arity heads; NOT push/*.rs split
 ```
@@ -1065,24 +1067,24 @@ Init remains a separate single slot: a second `init_state` is still `ErrInitAlre
 
 ## Setup and per-module tick
 
-`setup` runs the builder (query → `.inject_resources(…)` / `init_state` or `init_state_default` → build). Object init runs **inside** that path — not as a public `tick.init()`.
+`setup` runs the builder (query → `.inject_resources(…)` / `init_state` → build). The built pipeline holds **only systems**. `tick.init(injects)` makes an **instance**: the module state and the provided states. Deferred events wait in the state of their scope event, which is one of those provided states. One pipeline can run several instances.
 
-Two behaviours for state init on the builder:
+State init on the builder is always `.init_state(…)`. A default state is `.init_state(|_| Default::default())` — there is no separate default step.
 
-1. **No `Default` on state** — tip requires `.init_state(…)`.
-2. **`Default` available** — may use `.init_state_default()` instead.
+**State and resources (current slice):** beans are zero-sized types. Each provided bean lives in a [`Slot`](crate::Slot)`<P> { bean, state }`. `Id::T` / `Id::MUT` lend `&Id` / `&mut Id` (the bean), `*Id::T` / `*Id::MUT` lend `&Id::State` / `&mut Id::State`. The part is chosen by the claim (`ClaimLeaf::Part`: `BeanPart` / `StatePart`, index node `Pick<Part, Ix<N>>`), not by the view type. An event is a bean like any other: `*Update::MUT` is the state in `Update`'s slot. An inject is the parent's slot: the caller lends `&Slot<P>` for `Get<P>` and `&mut Slot<P>` for `Mut<P>` (`ClaimShape::Lent`). `Provides` lists concrete beans, each under a marker (`Get<P>` / `Mut<P>`; `Provided` names the bean and the access). A bean with no marker is rejected (`PipelineError<5>`). A bean under `Get` is made by `init` and never changes: the module keeps its slot `Frozen` and lends it shared only, so `Mut` of it is `PipelineError<4>`. Every list goes through one shared walk, `core::each::Each<F>` (values) beside `core::shape::Shape<F>` (types): `StateOf` names the tuple of owned slots (`Stored::States`, bean and state created with `Default`), `Borrow` splits it into held borrows, `Reborrow` lends those borrows to one system. `.init_state` stores the init function with its live claim. `tick.init(injects)` creates the owned states, runs that function once over the owned borrows plus the inject view, and returns the instance. On `emit`, the inject view is appended after the owned borrows (`Join`, through `AddItem`), and each `.map` handler takes the view of the claim that was live at its `.map` call: `Claim::Indexes` walks that tuple with `TakeView` / `Take`. A handler with no claim takes `()`.
 
-`setup` returns a ready `Tick`. From **outside** a system the tick has both channels ([Dispatch](#dispatch-direct-and-deferred)): `Tick::emit(event, injects)` runs now, `Tick::defer(event)` stores the event for the next tick. `injects` are the inject refs (`Get` vs `Mut` as claimed) and are passed only to `emit` — a borrow is not stored in the buffer. There is **no** `boot` / `tick.init` — those were prototype names; init stays inside `setup`. From **inside** a system the same two channels exist, and direct is limited to children of the current event.
+`setup` returns a `Tick` that holds only systems. A module owns its state and the states of its providers; it never owns its injects. The caller lends the inject refs (`Get` vs `Mut` as claimed) to `Tick::init(injects)` and to every `Tick::emit(event, &mut instance, injects)` — a borrow is not stored in the instance.  A child's `emit` is called by its parent, which lends its own provides or injects; without a proxy an event reaches a child only through that call. From **outside** a system the tick has both channels ([Dispatch](#dispatch-direct-and-deferred)): `Tick::emit` runs now, `Tick::defer(event, &mut instance)` stores the event in the instance for the next emit. A system is a pure function over its claim and never emits.
 
 Bounds for that surface sit on the traits (rule 17): `Update<M: BeanInfo> where M::Injects: ArgsView`, `Tick<M: BeanInfo> where …`, `Setup: BeanInfo where Self::Injects: ArgsView`. `Ev: Collect` stays on `emit` (per call). `Update` is only for `Built` (not `Init`).
 
 ```rust
-let tick: impl Tick<Render> = Render::setup(); // builder finished; init already applied inside
-tick.emit(Update::ON[Main::ON], injects); // direct — this call
-tick.defer(Update::ON);                    // deferred — next tick's emit drains it
+let tick: impl Tick<Render> = Render.setup();        // systems only
+let mut instance = tick.init(injects);                // state, provides
+tick.emit(Update::ON[Main::ON], &mut instance, injects); // direct — this call
+tick.defer(Update::ON, &mut instance);                // deferred — next emit drains it
 ```
 
-Each module can be **tested alone** without the full app tree: pass that call's event and only that module’s injects into `tick.emit(…)`. The `injects` argument is required on `emit` even if a given tip still only drives maps and does not read the refs yet. `defer` takes the event only.
+Each module can be **tested alone** without the full app tree: make an instance with `tick.init(…)` and pass that call's event, the instance, and only that module’s injects into `tick.emit(…)`. The `injects` argument is required on `init` and `emit` even if a given tip does not read the refs. `defer` takes the event and the instance.
 
 ---
 
@@ -1097,7 +1099,6 @@ Each module can be **tested alone** without the full app tree: pass that call's 
 | No `.build()` (`NeedBuild`) | `setup` → `impl Tick` | Pipeline `Descriptor`. |
 | `MUT` inject of immutable provide | Attribute / inject site | DI / Descriptor. |
 | Bad / incomplete event / bad parent edge | `.filter` / `.emit` / `setup` | Pipeline `Descriptor` (`ErrBadEvent`). |
-| Direct emit is not a child of the current event (self, parent, sibling, unrelated) | That direct call | Pipeline `Descriptor` (`ErrNotChild`). |
 | Accessor conflict across filters | Offending `.inject_resources` / `.filter` | `Accessors` + Status. |
 | Warning status | User `.build()` | Pipeline `Descriptor`. |
 
@@ -1222,10 +1223,10 @@ Use a per-node (or per-leaf) descriptor + one blanket whenever the code today is
 | `filter/apply.rs` | `ApplyFilter` × every AST node (+ `keep_scope!`) | `FilterDesc` + `ScopeOf` + one blanket (above) |
 | `filter/ops.rs` | Get×Mut×node product | RHS `FilterOperand`; per-LHS ops only (orphan E0210); **no** `ops_node` |
 | `filter/flag.rs` | `(Yes\|No)×(Yes\|No)` `OrFlag` | **`OrWith` on the left flag** |
-| `bean/inject.rs` | Get×Mut×slot | `ClaimMark` + Via **only** for E0119 head/tail |
-| `query/args.rs` `ClaimShape` / `Claim` | leaves + combinators walk once; wrappers via **`ClaimDesc`** (rule 20). `Get<State<Ev>>` / `Mut<State<Ev>>` forward to `Get` / `Mut` of `EventBuf` | per-wrapper `ClaimShape for Live/Idle`; a second accessor beside `Get` / `Mut`; parallel `ArgsView`/`OpLeaf` tables |
+| `bean/inject.rs` | Get×Mut×slot | `Provided` (bean + access) and `Allows`; `OfProvide<N>` reads any slot through `Take`; Via only for the pair of injects |
+| `query/args.rs` `ClaimShape` / `Claim` | leaves + combinators walk once; wrappers via **`ClaimDesc`** (rule 20). `Get<P>` / `Mut<P>` read the bean, `Get<State<P>>` / `Mut<State<P>>` read its state — one `ClaimLeaf` descriptor (`Bean`, `Part`) | per-wrapper `ClaimShape for Live/Idle`; a second accessor beside `Get` / `Mut`; parallel `ArgsView`/`OpLeaf` tables |
 | `query/resource.rs` `StateGate` | **`ClaimForm`** once; one blanket (rule 23) | `()` / `Get` / `Mut` / `Dyn` / `And` each re-implemented on the trait |
-| `descriptor/op_desc.rs` | `OpDesc` blankets from `ClaimShape::Status` | a second `OpLeaf` walk of the same nodes |
+| `descriptor/op_desc.rs` | `OpDesc<B>`: one blanket in `query/marks.rs`, the status over the module's slots | a second status channel on `ClaimShape`; a second `OpLeaf` walk of the same nodes |
 | `descriptor/live.rs` `Rewait` | `Live`/`Idle` × `Yes`/`No` table | **`WaitFlag` on `Yes`/`No`** + one blanket for `Live`, one for `Idle` |
 | `filter/eval.rs` | `UnionEmit` per `On`/`And`/`Or`/`Not` | **one** blanket on [`FilterOperand`] (`And<Self, N>`); `()` stays `N` because that join differs |
 | `filter/shape.rs` `HasMut` / `SpineTail` / `Under` | recursive policy walks | **keep** — these *are* the descriptors’ inputs; do not replace them with another ApplyFilter-style matrix |
@@ -1303,7 +1304,7 @@ Parent check is **required** for nesting and emit (not optional). Multi-parent e
 
 Events form a **tree** (parents + nested `On`). Runtime does **not** enter an event scope unless that event was **emitted**.
 
-**Emit mask (build-time prep):** each event implements [`EmitBit`] (`const BIT` in `0..EmitMask::BITS`, **128** bits; separate from [`EventInfo`] — rule 14). [`EmitMask`] is a newtype (rule 21); `BITS` sits on that struct (rule 22). Apps assign unique bits (manual registry; derive later). `.emit` AST folds to a const [`EmitMask`] via `Collect::MASK` / `EmitMask::from_bit` + `or`. Each map filter folds to `MatchEmit::NEED`. Drive loads one mask; And-of-`On` paths match with **`mask.contains(NEED)`**. `Or` / `Not` compose in `matches` (a few bit-tests, not AST walks).
+**Emit mask (build-time prep):** each event implements [`EmitBit`] (`type Reg` + `type Slot = Bit<N>`, `N` in `0..EmitMask::BITS`, **128** bits; separate from [`EventInfo`] — rule 14). The app states `impl SlotOf<Reg> for Bit<N> { type Owner = Ev; }` once per slot: a second owner is `E0119`, a slot taken by another event is `E0271`. One path takes its bits from one registry ([`InReg`]). A module names its registry with `impl EventReg for Module { type Reg = …; }`, and every event of its pipeline is in that registry ([`HostedBy`]); a module with no events needs no impl. The index is read as `EmitIx::BIT`. [`EmitMask`] is a newtype (rule 21); `BITS` sits on that struct (rule 22). Apps assign unique bits (manual registry; derive later). `.emit` AST folds to a const [`EmitMask`] via `Collect::MASK` / `EmitMask::from_bit` + `or`. Each map filter folds to `MatchEmit::NEED`. Drive loads one mask; And-of-`On` paths match with **`mask.contains(NEED)`**. `Or` / `Not` compose in `matches` (a few bit-tests, not AST walks).
 
 **Const plan:** [`Gate::path_plan`]`<M>` and [`Walk::walk`]`<Ev>` intersect the node with the emit const `M::MASK` / `Ev::MASK`. A miss deletes the subtree. A hit does not re-test at runtime: [`Dense`] calls every child; [`Sparse`] lets each child repeat the same const test. [`Drive`] uses `walk::<Ev>` for the event passed to [`Tick::emit`]. Query `.map` still builds the flat list.
 
@@ -1328,52 +1329,30 @@ emit Main          // Graphics not emitted this tick
 .map(…)
 ```
 
-**Interrupt / “прыжок”:** leaving or skipping a level means **not scheduling** maps under the non-emitted node; control continues with other matching emitted paths in the tree. There is no silent transition onto an event that nobody emitted.
+**Interrupt / “jump”:** leaving or skipping a level means **not scheduling** maps under the non-emitted node; control continues with other matching emitted paths in the tree. There is no silent transition onto an event that nobody emitted.
 
 Compile-time graph/accessors still go only through `Descriptor` / `OpDesc`. Beans hold state; emit folds to a bit mask; the flat scheduler walks maps with `NEED` tests; path scheduling uses `Gate` + `DELTA` (rules above).
 
 ### Dispatch: direct and deferred
 
-Two channels, both **outside** (on `Tick`) and **inside** a system. Outside, direct may start a root such as `Update`. Inside, the current event is the innermost event of that map’s filter scope (`Here`), and direct may name only a child of `Here`.
+Two channels on `Tick`. A system is a pure function over its claim (rule 18) and does not emit.
 
-| Caller | Direct (now) | Defer (next tick) |
+| Channel | Call | When |
 | --- | --- | --- |
-| Outside | `Tick::emit(event, injects)` — any well-formed event, including a root | `Tick::defer(event)` — stored on that event's scope |
-| Inside | `Direct<E>::emit` — **child of `E` only** | `defer(event)` — stored on `E`, runs the next time `E` is entered |
+| Direct | `Tick::emit(event, &mut instance, injects)` — any well-formed event, including a root | now |
+| Defer | `Tick::defer(event, &mut instance)` — stored in the buffer of the scope event | next emit of the scope event |
 
-#### Direct
-
-`Direct<E, L, P>` is an argument of the map (rule 18: the system does not capture the tick). Generics: `E` current (innermost) event, `L` list, `P` filter path.
-
-```rust
-fn in_update(go: Direct<Update>) {
-    go.emit(Graphics::ON); // child of Update — direct call into that block
-    go.emit(Main::ON);     // also a child
-}
-```
-
-The call monomorphizes on the child the same way `Tick::emit(Update::ON[Graphics::ON], …)` keeps only the Graphics maps. The parent is already the current scope, so the specialization **is** the enter: no mask test, no walk of the other children.
-
-**Child** means one step down: `Child: EventInfo` and `E` is in `Child::Parents`. Not a grandchild (that child emits its own children), not a sibling, not a parent, not `E` itself.
-
-From inside `Update`, `Update` is not a child of `Update`, so a direct emit of `Update` does not compile. From inside `Main`, `Update` (parent) and `Graphics` (sibling) do not compile either. Only events that list `Main` in `Parents` do.
-
-Validation is a pipeline `Descriptor` status, same channel as other event errors:
-
-| Call | Status |
-| --- | --- |
-| `Child` lists `E` in `Parents` | allowed (`Direct<E>::emit`) |
-| self, parent, sibling, unrelated, ill-formed tree | `ErrNotChild` — no `emit` impl |
+By design a system never emits: not into its own module and not into a bean the module provides or injects. The earlier in-system `Direct<E>` / `.map_at` is removed.
 
 #### Deferred
 
-Defer does not enter the event. Each event is a bean ([`BeanInfo`](crate::BeanInfo)) and keeps its own buffer, one [`EmitMask`] slot keyed by [`EmitBit::BIT`](crate::EmitBit::BIT). A defer writes into **that scope's** slot. The bits run the next time that scope is entered (`Tick::emit` of that event, or a path whose outermost event it is), together with the scope's own mask — not as a root emit on an empty path.
+Defer does not enter the event. Each event is a bean ([`BeanInfo`](crate::BeanInfo)) and keeps its own buffer in its state: `type State = EventBuf`, or a struct that holds an [`EventBuf`](crate::EventBuf) and implements [`DeferState`](crate::DeferState). The module holds that event as a bean (`Provides`), so the buffer lives in the event's slot. A defer appends to the buffer of **its scope event**, the outermost event of the deferred path. The entries run the next time that event is emitted (`Tick::emit` of that event, or a path whose outermost event it is). That emit first runs its own maps with the const walk. Then it runs that event's buffer, oldest first: the order of the `defer` calls. One entry runs like a direct emit of its path inside the scope (the maps of the event and of its parents, in pipeline order); the path test is the only run-time check. The pipeline declares what can be deferred with `.emit(path)`: `Tick::defer` of another path is `FilterError<6>`, a scope event without a buffer is `FilterError<7>`, and a pipeline with no `.emit` reads no buffer. Both answers come from the tick's descriptor, the constant `Tick::DESC` (`ModuleDesc`), which stays readable through `impl Tick<M>`. An event deferred twice runs twice. It is not a root emit on an empty path.
 
-Outside, `Tick::defer(Update::ON[Main::ON])` stores the mask on `Update`. `tick.emit(Graphics::ON, …)` does not see it. `tick.emit(Update::ON, …)` does: Main's maps run inside Update. Inside a system, `go.defer(event)` writes the current `Here` slot.
+Outside, `Tick::defer(Update::ON[Main::ON])` stores the mask on `Update`. `tick.emit(Graphics::ON, …)` does not see it. `tick.emit(Update::ON, …)` does: Main's maps run inside Update.
 
-`*Ev::MUT` / `*Ev::T` are [`Mut`](crate::Mut)`<`[`State`](crate::State)`<Ev>>` / [`Get`](crate::Get)`<State<Ev>>`. [`ClaimDesc`](crate::ClaimDesc) forwards that to [`Mut`](crate::Mut) / [`Get`](crate::Get) of [`EventBuf`](crate::EventBuf)`<Ev::State>` (rule 23): the event's state plus its defer buffer. The claim is legal only while the pipeline scope contains `Ev` (`InScope`). [`Get`](crate::Get) / [`Mut`](crate::Mut) stay frozen.
+`*Ev::MUT` / `*Ev::T` are [`Mut`](crate::Mut)`<`[`State`](crate::State)`<Ev>>` / [`Get`](crate::Get)`<State<Ev>>`. An event is a bean, so that claim reads the state in `Ev`'s [`Slot`](crate::Slot), the same `ClaimLeaf` path as any `*X::T` (rule 23). The defer buffer is part of that state (`EventBuf`). [`Get`](crate::Get) / [`Mut`](crate::Mut) stay frozen.
 
-A repeated defer of the same bits in one visit stays one mask. No heap alloc (the slots are the event table, [`EmitMask::BITS`](crate::EmitMask::BITS) of them). Inject refs are still not stored in the buffer.
+An event deferred twice runs twice. Running the buffer does not allocate; only `defer` can grow it. Inject refs are still not stored in the buffer.
 
 ---
 
@@ -1383,7 +1362,7 @@ A repeated defer of the same bits in one visit stays one mask. No heap alloc (th
 
 ```rust
 #[derive(Module)]
-#[module(state = u8)]
+#[config(type = module, state = u8)]
 #[provide(Id::T, Keys::T)]
 struct App;
 
@@ -1392,7 +1371,7 @@ impl Setup for App {
         App::query()
             .inject_resources(Id::T & Keys::Mut)
             .init_state(|(id, keys)| keys[id])
-            // or .init_state_default() when State: Default
+            // or .init_state(|_| Default::default()) when State: Default
             .build()
     }
 }
@@ -1414,9 +1393,10 @@ impl Setup for App {
 ### Isolated module test
 
 ```rust
-let tick: impl Tick<Render> = Render::setup();
-tick.emit((), /* only Render’s #[inject] refs */);
-tick.defer(Update::ON); // next tick.emit drains it with that call's injects
+let tick: impl Tick<Render> = Render.setup();
+let mut instance = tick.init(/* only Render’s #[inject] refs */);
+tick.emit((), &mut instance, /* only Render’s #[inject] refs */);
+tick.defer(Update::ON, &mut instance); // next tick.emit drains it with that call's injects
 ```
 
 ## System callbacks

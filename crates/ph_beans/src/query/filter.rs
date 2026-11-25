@@ -9,6 +9,7 @@ use crate::context::CtxConfig;
 use crate::context::maps::Rescope;
 use crate::descriptor::live::AccSet;
 use crate::filter::ApplyFilter;
+use crate::filter::HostedBy;
 use crate::query::apply::ApplyPatch;
 use crate::query::init::Init;
 
@@ -22,6 +23,7 @@ pub trait SealFilter<F, E>: Sized {
     fn seal_filter(self) -> Self::Out;
 }
 
+// Generics: `B` module, `A` left child, `S` strategy, `T` operator, `F` filter, `E` event.
 impl<B, A, S, T, F, E> SealFilter<F, E> for Ctx<B, A, S, T>
 where
     A: AccSet,
@@ -39,8 +41,11 @@ where
 /// Config: new event path and the filter's rescoped tick.
 /// Generics: `F` filter, `E` event.
 #[doc(hidden)]
-pub struct SetFilter<F, E>(PhantomData<(F, E)>);
+pub struct SetFilter<F, E> {
+    _markers: PhantomData<(F, E)>,
+}
 
+// Generics: `C` context / claim / child, `F` filter, `E` event.
 impl<C, F, E> CtxConfig<C> for SetFilter<F, E>
 where
     C: Context + SealFilter<F, E>,
@@ -64,15 +69,18 @@ pub trait FilterStep<F> {
     fn filter(self, filter: F) -> Self::Out;
 }
 
+// Generics: `E` event, `C` context / claim / child, `F` filter.
 impl<E, C, F> FilterStep<F> for Init<E, C>
 where
+    C: Context,
+    F: HostedBy<C::Bean>,
     Self: ApplyPatch<SetFilter<F, E>>,
 {
     type Out = <Self as ApplyPatch<SetFilter<F, E>>>::Out;
 
     fn filter(self, filter: F) -> Self::Out {
         let _ = filter;
-        self.apply_patch(SetFilter(PhantomData))
+        self.apply_patch(SetFilter { _markers: PhantomData })
     }
 }
 

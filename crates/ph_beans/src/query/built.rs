@@ -8,18 +8,12 @@ use crate::context::Context;
 use crate::context::ContextTick;
 use crate::context::Ctx;
 use crate::context::CtxConfig;
-use crate::context::DefaultState;
-use crate::context::list::WalkStrategy;
 use crate::core::config::OfConfig;
 use crate::descriptor::Descriptor;
 use crate::descriptor::NeedBuild;
-use crate::descriptor::OpOk;
 use crate::descriptor::Valid;
 use crate::descriptor::live::AccSet;
-use crate::filter::eval::EmitMask;
-use crate::query::args::ClaimShape;
 use crate::query::init::Init;
-use crate::query::schedule::Drive;
 
 /// Replaces status on a concrete [`Ctx`] (hides `B`/`A`/`O`/`T` from [`CtxConfig`]).
 /// Generics: `S` status.
@@ -31,6 +25,7 @@ pub trait SealStatus<S>: Sized {
     fn seal_status(self) -> Self::Out;
 }
 
+// Generics: `B` module, `A` left child, `O` its result, `T` operator, `S` status.
 impl<B, A, O, T, S> SealStatus<S> for Ctx<B, A, O, T>
 where
     A: AccSet,
@@ -46,8 +41,11 @@ where
 /// Config: replace status with `S`.
 /// Generics: `S` status.
 #[doc(hidden)]
-pub struct SetStatus<S>(pub(crate) PhantomData<S>);
+pub struct SetStatus<S> {
+    pub(crate) _markers: PhantomData<S>,
+}
 
+// Generics: `C` context, `S` status.
 impl<C, S> CtxConfig<C> for SetStatus<S>
 where
     C: Context + SealStatus<S>,
@@ -62,19 +60,24 @@ where
 }
 
 /// Pipeline after `.build()`. Status is [`Valid`](crate::Valid).
+///
+/// It holds only systems. [`Tick::init`](crate::Tick::init) makes an instance
+/// with the state; one pipeline can run several instances.
 /// Generics: `E` event, `C` context.
-#[must_use = "the pipeline is ready to emit"]
+#[must_use = "call init, then emit into the instance"]
 pub struct Built<E, C> {
     context: C,
     _markers: PhantomData<E>,
 }
 
+// Generics: `E` event, `C` context.
 impl<E, C> Built<E, C> {
     fn new(context: C) -> Self {
         Self { context, _markers: PhantomData }
     }
 }
 
+// Generics: `E` event, `C` context.
 impl<E, C> Descriptor for Built<E, C>
 where
     C: Descriptor,
@@ -99,13 +102,15 @@ where
             With<SetStatus<Valid>> = OfConfig<ApplyCfg<SetStatus<Valid>, C>>,
         >,
     C::Bean: BeanInfo,
-    C::Args: ClaimShape<Status: OpOk>,
     SetStatus<Valid>: CtxConfig<C>,
 {
     type Out = Built<E, OfConfig<ApplyCfg<SetStatus<Valid>, C>>>;
 
     fn build(self) -> Self::Out {
-        Built::new(self.into_context().configure(SetStatus(PhantomData)))
+        Built::new(
+            self.into_context()
+                .configure(SetStatus { _markers: PhantomData }),
+        )
     }
 }
 
@@ -120,42 +125,12 @@ impl<E, C> Init<E, C> {
     }
 }
 
-impl<E, C> Built<E, C>
-where
-    C: Context<Status = Valid>,
-    C::Bean: BeanInfo<State = <C::Tick as DefaultState>::State>,
-    C::Tick: DefaultState,
-{
-    /// State created by [`init_state_default`](crate::Init::init_state_default).
-    #[must_use]
-    pub fn state(&self) -> &<C::Bean as BeanInfo>::State {
-        self.context.tick().state()
-    }
-}
-
 // Generics: `E` event, `C` context.
 impl<E, C> Built<E, C>
 where
     C: Context,
 {
-    pub(crate) fn drive<G: WalkStrategy + Copy>(&mut self, strategy: G)
-    where
-        C::Tick: Drive,
-    {
-        self.context.tick().drive(strategy);
-    }
-
-    pub(crate) fn defer_into(&mut self, bit: u32, mask: EmitMask)
-    where
-        C::Tick: Drive,
-    {
-        self.context.tick().defer_into(bit, mask);
-    }
-
-    pub(crate) fn take_scope(&mut self, bit: u32) -> EmitMask
-    where
-        C::Tick: Drive,
-    {
-        self.context.tick().take_scope(bit)
+    pub(crate) fn tick(&self) -> &C::Tick {
+        self.context.tick()
     }
 }

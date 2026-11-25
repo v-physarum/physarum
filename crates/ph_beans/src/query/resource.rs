@@ -7,34 +7,28 @@ use crate::context::Context;
 use crate::context::ContextTick;
 use crate::context::Ctx;
 use crate::context::CtxConfig;
-use crate::descriptor::OpOk;
 use crate::descriptor::live::AccSet;
 use crate::descriptor::live::{Idle, Live};
-use crate::filter::shape::{HasMut, JoinBoth, No, NodeForm, PairBody, Pass, Read, Scope, Yes};
+use crate::descriptor::{OpDesc, OpOk};
+use crate::filter::shape::{HasMut, JoinBoth, No, NodeForm, PairBody, Pass, Read, Yes};
 use crate::query::apply::ApplyPatch;
-use crate::query::args::Claim;
+use crate::query::claim::Claim;
 use crate::query::init::Init;
 
-/// Current event path contains `E` (innermost-first spine).
-/// Generics: `E` event scope.
-pub trait InScope<E> {}
-
-impl<E: crate::EventInfo> InScope<E> for E {}
-
-// Generics: `E` sought event, `H` inner event, `T` outer rest of the spine.
-impl<E, H, T> InScope<E> for (H, T) where T: InScope<E> {}
-
-/// Ordinary claims are not scoped. `*E::MUT` / `*E::T` must sit in `E`'s scope.
+/// A claim `.inject_resources` accepts: leaves (`X::T`, `*X::MUT`, …) joined by `&`.
 pub trait StateGate<E> {}
 
 /// [`NodeForm::Body`](NodeForm::Body) is allowed under scope `E`.
 #[doc(hidden)]
 pub trait GateParts<E> {}
 
+// Generics: `E` scope.
 impl<E> GateParts<E> for Pass {}
 
+// Generics: `E` scope.
 impl<E> GateParts<E> for Read {}
 
+// Generics: `E` scope.
 impl<E> GateParts<E> for Yes {}
 
 // Generics: `E` scope, `A` left operator, `B` right operator — And only ([`JoinBoth`]).
@@ -44,9 +38,6 @@ where
     B: StateGate<E>,
 {
 }
-
-// Generics: `E` scope, `P` event bean, `W` wait flag.
-impl<E, P, W> GateParts<E> for Scope<P, W> where E: InScope<P> {}
 
 // Generics: `E` scope, `T` operator ([`NodeForm`]).
 impl<E, T> StateGate<E> for T
@@ -66,6 +57,7 @@ pub trait SealArgs<A>: Sized {
     fn seal_args(self) -> Self::Out;
 }
 
+// Generics: `B` right operator — And only, `O` its result, `S` strategy, `T` operator, `A` new args.
 impl<B, O, S, T, A> SealArgs<A> for Ctx<B, O, S, T>
 where
     O: AccSet,
@@ -82,7 +74,9 @@ where
 /// Config: replace resource args with `A`.
 /// Replaces context args with claim set `A`. Generics: `A` new args.
 #[doc(hidden)]
-pub struct SetArgs<A>(pub(crate) PhantomData<A>);
+pub struct SetArgs<A> {
+    pub(crate) _markers: PhantomData<A>,
+}
 
 // Generics: `C` context, `A` new args.
 impl<C, A> CtxConfig<C> for SetArgs<A>
@@ -140,14 +134,14 @@ where
     Self: ApplyPatch<SetArgs<Live<R>>>,
     C: Context,
     C::Bean: BeanInfo,
-    R: Claim<C::Bean, Status: OpOk> + StateGate<E>,
+    R: Claim<C::Bean> + OpDesc<C::Bean, Status: OpOk> + StateGate<E>,
     C::Args: AllowInjectResources<R>,
 {
     type Out = <Self as ApplyPatch<SetArgs<Live<R>>>>::Out;
 
     fn inject_resources(self, resources: R) -> Self::Out {
         let _ = resources;
-        self.apply_patch(SetArgs(PhantomData))
+        self.apply_patch(SetArgs { _markers: PhantomData })
     }
 }
 

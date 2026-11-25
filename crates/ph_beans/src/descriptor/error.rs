@@ -17,4 +17,6 @@ pub struct PipelineError<const V: usize>;
 /// Claim-list failure for bean `T`.
 ///
 /// Generics: `T` bean, `V` code — see [`docs/errors.md`](../../docs/errors.md).
-pub struct ClaimError<T, const V: usize>(PhantomData<T>);
+pub struct ClaimError<T, const V: usize> {
+    _markers: PhantomData<T>,
+}

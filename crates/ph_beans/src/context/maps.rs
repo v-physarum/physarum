@@ -4,11 +4,9 @@ use core::marker::PhantomData;
 
 use crate::context::ContextTick;
 use crate::context::Pipe;
-use crate::context::direct::{DirectFn, TipEvent};
 use crate::core::list::PushEntry;
 
 use crate::context::list::EmptySlots;
-use crate::context::scope::ScopeBufs;
 use crate::core::config::Config;
 
 /// Hard cap on `.map` handlers in one pipeline.
@@ -24,6 +22,7 @@ pub struct MapEntry<F, H> {
     _markers: PhantomData<F>,
 }
 
+// Generics: `F` filter, `H` handler.
 impl<F, H> MapEntry<F, H> {
     /// Builds a map leaf (filter `F`, handler `H`).
     ///
@@ -41,7 +40,6 @@ impl<F, H> MapEntry<F, H> {
 /// Generics: `N` entries list, `E` event tip, `S` scope status.
 pub struct MapList<N, E, S> {
     pub(crate) entries: N,
-    pub(crate) scopes: ScopeBufs,
     _markers: PhantomData<(E, S)>,
 }
 
@@ -51,7 +49,7 @@ where
     EmptySlots: Config<Type = L>,
 {
     pub(crate) fn empty() -> Self {
-        Self { entries: EmptySlots::empty(), scopes: ScopeBufs::empty(), _markers: PhantomData }
+        Self { entries: EmptySlots::empty(), _markers: PhantomData }
     }
 }
 
@@ -61,46 +59,19 @@ impl<N, E, S> MapList<N, E, S> {
     where
         N: PushEntry<MapEntry<S, H>>,
     {
-        MapList {
-            entries: self.entries.push(MapEntry::new(handler)),
-            scopes: self.scopes,
-            _markers: PhantomData,
-        }
-    }
-
-    pub(crate) fn push_at<H>(self, handler: H) -> MapList<N::Out, E, S>
-    where
-        N: PushEntry<MapAt<S, H>>,
-    {
-        MapList {
-            entries: self.entries.push(MapAt::new(handler)),
-            scopes: self.scopes,
-            _markers: PhantomData,
-        }
+        MapList { entries: self.entries.push(MapEntry::new(handler)), _markers: PhantomData }
     }
 
     pub(crate) fn rescope<F>(self) -> MapList<N, E, F> {
-        MapList { entries: self.entries, scopes: self.scopes, _markers: PhantomData }
+        MapList { entries: self.entries, _markers: PhantomData }
     }
 
     pub(crate) fn reemit<T>(self) -> MapList<N, T, S> {
-        MapList { entries: self.entries, scopes: self.scopes, _markers: PhantomData }
+        MapList { entries: self.entries, _markers: PhantomData }
     }
 }
 
-/// One `.map_at` handler under filter `F`. Receives [`Direct`] for that scope.
-/// Generics: `F` filter, `H` handler.
-pub struct MapAt<F, H> {
-    pub(crate) handler: H,
-    _markers: PhantomData<F>,
-}
-
-impl<F, H> MapAt<F, H> {
-    pub(crate) const fn new(handler: H) -> Self {
-        Self { handler, _markers: PhantomData }
-    }
-}
-
+// Generics: `N` new / next, `E` event, `S` status / state / strategy.
 impl<N, E, S> ContextTick for MapList<N, E, S> {}
 
 /// Appends one map under the list's current filter.
@@ -118,6 +89,7 @@ pub trait PushMap<H> {
     fn push_map(self, handler: H) -> Self::Out;
 }
 
+// Generics: `H` handler, `I` inner / index, `N` new / next, `E` event, `S` status / state / strategy.
 impl<H, I, N, E, S> PushMap<H> for Pipe<I, MapList<N, E, S>>
 where
     I: ContextTick,
@@ -127,36 +99,6 @@ where
 
     fn push_map(self, handler: H) -> Self::Out {
         Pipe::new(self.init, self.list.push(handler))
-    }
-}
-
-/// Appends one `.map_at` handler under the list's current filter.
-#[doc(hidden)]
-#[diagnostic::on_unimplemented(
-    message = "map_at handler must implement DirectFn for this filter",
-    label = "impl DirectFn for the handler",
-    note = "direct emit from that handler reaches only a child of the current event"
-)]
-// Generics: `H` handler.
-pub trait PushAt<H> {
-    /// Tick after the push.
-    type Out: ContextTick;
-    /// Stores `handler` on the map tuple.
-    fn push_at(self, handler: H) -> Self::Out;
-}
-
-// Generics: `H` handler, `I` init slot, `N` list, `E` emit tree, `S` filter scope.
-impl<H, I, N, E, S> PushAt<H> for Pipe<I, MapList<N, E, S>>
-where
-    I: ContextTick,
-    N: PushEntry<MapAt<S, H>>,
-    S: TipEvent,
-    H: DirectFn<S::Tip, S>,
-{
-    type Out = Pipe<I, MapList<N::Out, E, S>>;
-
-    fn push_at(self, handler: H) -> Self::Out {
-        Pipe::new(self.init, self.list.push_at(handler))
     }
 }
 
@@ -170,6 +112,7 @@ pub trait Rescope<F> {
     fn rescope(self) -> Self::Out;
 }
 
+// Generics: `F` filter, `I` inner / index, `N` new / next, `E` event, `S` status / state / strategy.
 impl<F, I, N, E, S> Rescope<F> for Pipe<I, MapList<N, E, S>>
 where
     I: ContextTick,
@@ -203,6 +146,7 @@ pub trait Reemit<T> {
     fn reemit(self) -> Self::Out;
 }
 
+// Generics: `T` tick emit, `I` inner / index, `N` new / next, `E` event, `S` status / state / strategy.
 impl<T, I, N, E, S> Reemit<T> for Pipe<I, MapList<N, E, S>>
 where
     I: ContextTick,

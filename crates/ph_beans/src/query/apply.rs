@@ -17,6 +17,7 @@ pub trait ApplyPatch<G> {
     fn apply_patch(self, cfg: G) -> Self::Out;
 }
 
+// Generics: `E` event, `C` context, `G` config.
 impl<E, C, G> ApplyPatch<G> for Init<E, C>
 where
     C: Context<With<G> = OfConfig<ApplyCfg<G, C>>>,

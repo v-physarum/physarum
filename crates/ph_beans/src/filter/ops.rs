@@ -41,6 +41,7 @@ where
 {
 }
 
+// Generics: `T` claimed type, `R` RHS operand.
 impl<T, R> BitAnd<R> for Get<T>
 where
     R: FilterOperand,
@@ -64,6 +65,7 @@ where
     }
 }
 
+// Generics: `T` claimed type.
 impl<T> OpsNot for Get<T> {
     type Output = Not<Self>;
 
@@ -84,6 +86,7 @@ where
     }
 }
 
+// Generics: `T` claimed type, `R` RHS operand.
 impl<T, R> BitOr<R> for Mut<T>
 where
     R: FilterOperand,
@@ -104,6 +107,7 @@ impl<T> OpsNot for Mut<T> {
     }
 }
 
+// Generics: `A` left child, `B` right child, `R` RHS operand.
 impl<A, B, R> BitAnd<R> for And<A, B>
 where
     R: FilterOperand,
@@ -127,6 +131,7 @@ where
     }
 }
 
+// Generics: `A` left child, `B` right child.
 impl<A, B> OpsNot for And<A, B> {
     type Output = Not<Self>;
 
@@ -147,6 +152,7 @@ where
     }
 }
 
+// Generics: `A` left child, `B` right child, `R` RHS operand.
 impl<A, B, R> BitOr<R> for Or<A, B>
 where
     R: FilterOperand,
@@ -167,6 +173,7 @@ impl<A, B> OpsNot for Or<A, B> {
     }
 }
 
+// Generics: `A` left child, `R` RHS operand.
 impl<A, R> BitAnd<R> for Not<A>
 where
     R: FilterOperand,
@@ -190,6 +197,7 @@ where
     }
 }
 
+// Generics: `A` left child.
 impl<A> OpsNot for Not<A> {
     type Output = Not<Self>;
 
@@ -210,6 +218,7 @@ where
     }
 }
 
+// Generics: `E` event, `I` inner, `R` RHS operand.
 impl<E, I, R> BitOr<R> for On<E, I>
 where
     R: FilterOperand,

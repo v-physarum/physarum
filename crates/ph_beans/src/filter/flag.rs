@@ -22,6 +22,7 @@ impl OrWith<Yes> for No {
     type Out = Yes;
 }
 
+// Generics: `R` right flag.
 impl<R> OrWith<R> for Yes {
     type Out = Yes;
 }

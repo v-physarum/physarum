@@ -8,11 +8,18 @@ use super::{Ix, Off};
 /// Pulls slot `I` out of a fixed-width tuple.
 /// Generics: `I` index.
 #[doc(hidden)]
+#[diagnostic::on_unimplemented(
+    message = "pipeline not ready: Descriptor::Status = `PipelineError<4>` (slot `{I}`)",
+    label = "fix Descriptor::Status",
+    note = "a system claims a bean that `{Self}` does not hold; PipelineError<4> — docs/errors.md"
+)]
 pub trait Take<I> {
     /// The value that occupied slot `I`.
     type Out;
     /// `Self` with [`Off`] in slot `I`.
     type Rest;
+    /// `Self` with `X` in slot `I`. Generics: `X` the new slot.
+    type With<X>;
 
     /// Splits `self` into the slot and the tuple with that hole.
     #[must_use]
@@ -29,10 +36,12 @@ pub trait TakeMany<I, O> {
     fn take_many(self) -> O;
 }
 
+// Generics: `T` tuple.
 impl<T> TakeMany<(), ()> for T {
     fn take_many(self) {}
 }
 
+// Generics: `T` tuple, `I0` index 0, `O0` out 0.
 impl<T, I0, O0> TakeMany<(I0,), (O0,)> for T
 where
     T: Take<I0, Out = O0>,
@@ -56,6 +65,7 @@ where
     }
 }
 
+// Generics: `T` tuple, `I0` index 0, `I1` index 1, `I2` index 2, `O0` out 0, `O1` out 1, `O2` out 2.
 impl<T, I0, I1, I2, O0, O1, O2> TakeMany<(I0, I1, I2), (O0, O1, O2)> for T
 where
     T: Take<I0, Out = O0>,
@@ -74,6 +84,7 @@ where
 impl<T0> Take<Ix<0>> for (T0,) {
     type Out = T0;
     type Rest = (Off,);
+    type With<X> = (X,);
 
     fn take(self) -> (Self::Out, Self::Rest) {
         let (t0,) = self;
@@ -81,9 +92,11 @@ impl<T0> Take<Ix<0>> for (T0,) {
     }
 }
 
+// Generics: `T0` slot 0, `T1` slot 1.
 impl<T0, T1> Take<Ix<0>> for (T0, T1) {
     type Out = T0;
     type Rest = (Off, T1);
+    type With<X> = (X, T1);
 
     fn take(self) -> (Self::Out, Self::Rest) {
         let (t0, t1) = self;
@@ -95,6 +108,7 @@ impl<T0, T1> Take<Ix<0>> for (T0, T1) {
 impl<T0, T1> Take<Ix<1>> for (T0, T1) {
     type Out = T1;
     type Rest = (T0, Off);
+    type With<X> = (T0, X);
 
     fn take(self) -> (Self::Out, Self::Rest) {
         let (t1, t0) = (self.1, self.0);
@@ -102,9 +116,11 @@ impl<T0, T1> Take<Ix<1>> for (T0, T1) {
     }
 }
 
+// Generics: `T0` slot 0, `T1` slot 1, `T2` slot 2.
 impl<T0, T1, T2> Take<Ix<0>> for (T0, T1, T2) {
     type Out = T0;
     type Rest = (Off, T1, T2);
+    type With<X> = (X, T1, T2);
 
     fn take(self) -> (Self::Out, Self::Rest) {
         let (t0, t1, t2) = self;
@@ -116,6 +132,7 @@ impl<T0, T1, T2> Take<Ix<0>> for (T0, T1, T2) {
 impl<T0, T1, T2> Take<Ix<1>> for (T0, T1, T2) {
     type Out = T1;
     type Rest = (T0, Off, T2);
+    type With<X> = (T0, X, T2);
 
     fn take(self) -> (Self::Out, Self::Rest) {
         let (t0, t1, t2) = self;
@@ -123,9 +140,11 @@ impl<T0, T1, T2> Take<Ix<1>> for (T0, T1, T2) {
     }
 }
 
+// Generics: `T0` slot 0, `T1` slot 1, `T2` slot 2.
 impl<T0, T1, T2> Take<Ix<2>> for (T0, T1, T2) {
     type Out = T2;
     type Rest = (T0, T1, Off);
+    type With<X> = (T0, T1, X);
 
     fn take(self) -> (Self::Out, Self::Rest) {
         let (t0, t1, t2) = self;
@@ -137,6 +156,7 @@ impl<T0, T1, T2> Take<Ix<2>> for (T0, T1, T2) {
 impl<T0, T1, T2, T3> Take<Ix<0>> for (T0, T1, T2, T3) {
     type Out = T0;
     type Rest = (Off, T1, T2, T3);
+    type With<X> = (X, T1, T2, T3);
 
     fn take(self) -> (Self::Out, Self::Rest) {
         let (t0, t1, t2, t3) = self;
@@ -144,9 +164,11 @@ impl<T0, T1, T2, T3> Take<Ix<0>> for (T0, T1, T2, T3) {
     }
 }
 
+// Generics: `T0` slot 0, `T1` slot 1, `T2` slot 2, `T3` slot 3.
 impl<T0, T1, T2, T3> Take<Ix<1>> for (T0, T1, T2, T3) {
     type Out = T1;
     type Rest = (T0, Off, T2, T3);
+    type With<X> = (T0, X, T2, T3);
 
     fn take(self) -> (Self::Out, Self::Rest) {
         let (t0, t1, t2, t3) = self;
@@ -158,6 +180,7 @@ impl<T0, T1, T2, T3> Take<Ix<1>> for (T0, T1, T2, T3) {
 impl<T0, T1, T2, T3> Take<Ix<2>> for (T0, T1, T2, T3) {
     type Out = T2;
     type Rest = (T0, T1, Off, T3);
+    type With<X> = (T0, T1, X, T3);
 
     fn take(self) -> (Self::Out, Self::Rest) {
         let (t0, t1, t2, t3) = self;
@@ -165,9 +188,11 @@ impl<T0, T1, T2, T3> Take<Ix<2>> for (T0, T1, T2, T3) {
     }
 }
 
+// Generics: `T0` slot 0, `T1` slot 1, `T2` slot 2, `T3` slot 3.
 impl<T0, T1, T2, T3> Take<Ix<3>> for (T0, T1, T2, T3) {
     type Out = T3;
     type Rest = (T0, T1, T2, Off);
+    type With<X> = (T0, T1, T2, X);
 
     fn take(self) -> (Self::Out, Self::Rest) {
         let (t0, t1, t2, t3) = self;

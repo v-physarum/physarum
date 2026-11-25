@@ -36,7 +36,9 @@ pub trait StartDesc: BeanInfo + Sized {
 ///
 /// Generics: `H` bean.
 #[doc(hidden)]
-pub struct StartCfg<H>(PhantomData<H>);
+pub struct StartCfg<H> {
+    _markers: PhantomData<H>,
+}
 
 impl Config for NoSystems {
     type Type = Pipe<Self, OfConfig<EmptyMap>>;
@@ -56,7 +58,7 @@ where
     H: BeanInfo,
 {
     fn apply(self) -> OfConfig<Self> {
-        let StartCfg(_) = self;
+        let StartCfg { _markers: _ } = self;
         Ctx::new(Pipe::new(NoSystems, MapList::empty()))
     }
 }
@@ -69,6 +71,6 @@ where
     type Ctx = OfConfig<StartCfg<B>>;
 
     fn start_ctx() -> Self::Ctx {
-        StartCfg(PhantomData).apply()
+        StartCfg { _markers: PhantomData }.apply()
     }
 }

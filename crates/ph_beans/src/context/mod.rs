@@ -6,24 +6,26 @@ use crate::core::config::OfConfig;
 use crate::descriptor::Descriptor;
 use crate::descriptor::live::AccSet;
 
-pub(crate) mod direct;
+mod carrier;
 mod event_buf;
+mod hand_tuples;
 pub(crate) mod list;
 pub mod maps;
 mod patch;
 pub(crate) mod scope;
 mod start;
+pub(crate) mod sys;
 pub mod tick;
 
-pub use direct::{ChildOf, Direct, DirectFn, PushInner, WithChild};
-pub use event_buf::EventBuf;
-pub use list::{CarrierDesc, End, ExactDrive, Full, Group, Head, List};
+pub use event_buf::{DeferState, EventBuf};
+pub use list::{CarrierDesc, End, Full, Group, Head, List};
 pub use maps::{MAX_MAP_SYSTEMS, MapEntry, MapList};
 pub use patch::{ApplyCfg, CtxConfig};
 #[doc(hidden)]
-pub use scope::{ScopeBufs, ScopeHost};
+pub use scope::ScopeHost;
 pub use start::StartDesc;
-pub use tick::{ContextTick, DefaultState, FreshInit, NoSystems, Pipe, WithDefault, WithInit};
+pub use sys::{MapSys, Sys};
+pub use tick::{ContextTick, FreshInit, NoSystems, Owned, Pipe};
 
 /// Bean, resource args, pipeline status, and the systems.
 ///
@@ -35,12 +37,14 @@ pub struct Ctx<B, A, S, T> {
     _markers: PhantomData<(B, S, A)>,
 }
 
+// Generics: `B` bean, `A` args, `S` status, `T` tick.
 impl<B, A, S, T> Ctx<B, A, S, T> {
     pub(crate) fn new(tick: T) -> Self {
         Self { tick, _markers: PhantomData }
     }
 }
 
+// Generics: `B` bean, `A` args, `S` status, `T` tick.
 impl<B, A, S, T> Descriptor for Ctx<B, A, S, T>
 where
     A: AccSet,

@@ -6,10 +6,14 @@ use crate::filter::shape::{No, Yes};
 
 /// The claim `C` is live.
 /// Generics: `C` claim set.
-pub struct Live<C>(PhantomData<C>);
+pub struct Live<C> {
+    _markers: PhantomData<C>,
+}
 
 /// A wait cleared the live claim. `C` is remembered for the init function.
-pub struct Idle<C>(PhantomData<C>);
+pub struct Idle<C> {
+    _markers: PhantomData<C>,
+}
 
 /// Wrapper whose claim shape / indexes are those of [`Inner`](ClaimDesc::Inner).
 ///
@@ -26,6 +30,7 @@ impl<C> ClaimDesc for Live<C> {
     type Inner = C;
 }
 
+// Generics: `C` claim set.
 impl<C> ClaimDesc for Idle<C> {
     type Inner = C;
 }
@@ -36,6 +41,7 @@ pub trait AccSet {
     type Set;
 }
 
+// Generics: `C` claim set.
 impl<C> AccSet for Live<C> {
     type Set = C;
 }
@@ -55,10 +61,12 @@ pub trait WaitFlag<C> {
     type OnLive;
 }
 
+// Generics: `C` claim set.
 impl<C> WaitFlag<C> for Yes {
     type OnLive = Idle<C>;
 }
 
+// Generics: `C` claim set.
 impl<C> WaitFlag<C> for No {
     type OnLive = Live<C>;
 }
@@ -73,6 +81,7 @@ pub trait Rewait<F> {
     type Out;
 }
 
+// Generics: `C` claim set, `F` wait flag.
 impl<C, F> Rewait<F> for Live<C>
 where
     F: WaitFlag<C>,
@@ -80,6 +89,7 @@ where
     type Out = F::OnLive;
 }
 
+// Generics: `C` claim set, `F` wait flag.
 impl<C, F> Rewait<F> for Idle<C> {
     type Out = Idle<C>;
 }

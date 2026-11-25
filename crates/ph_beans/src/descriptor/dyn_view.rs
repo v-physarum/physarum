@@ -8,12 +8,31 @@
 
 use core::marker::PhantomData;
 
-/// Marker: `V` may view bean `T`.
+/// A trait object type that can be injected (`#[config(type = dynamic)]` on
+/// the trait), and the same trait object for the borrow `'a`.
 ///
-/// `dyn Trait` implements this only when the trait is marked for dyn inject
-/// (`#[config(type = dyn)]`). The claimed bean stays `T`.
-/// Generics: `T` concrete bean.
-pub trait DynView<T: ?Sized> {}
+/// A system takes `&mut dyn Trait`, whose object lives as long as the
+/// borrow. A generic type cannot name that on stable Rust, so the trait
+/// object states it once (the derive of a `dynamic` trait writes it):
+///
+/// ```
+/// use ph_beans::DynObject;
+/// trait Painter {}
+/// impl<'a> DynObject<'a> for dyn Painter {
+///     type Obj = dyn Painter + 'a;
+///     fn shared(&'a self) -> &'a Self::Obj { self }
+///     fn exclusive(&'a mut self) -> &'a mut Self::Obj { self }
+/// }
+/// ```
+/// Generics: `'a` the borrow.
+pub trait DynObject<'a>: 'static {
+    /// `dyn Trait + 'a`.
+    type Obj: ?Sized + 'a;
+    /// The object for the borrow `'a`.
+    fn shared(&'a self) -> &'a Self::Obj;
+    /// The object for the exclusive borrow `'a`.
+    fn exclusive(&'a mut self) -> &'a mut Self::Obj;
+}
 
 /// Type-level claim `C` viewed as `V` (derive / `Injects` encoding).
 ///
@@ -26,6 +45,7 @@ pub struct Dyn<C, V: ?Sized> {
     _markers: PhantomData<(C, fn() -> *const V)>,
 }
 
+// Generics: `C` context / claim / child, `V` view / via.
 impl<C, V: ?Sized> Dyn<C, V> {
     /// Type-level marker (not an inject call-site API).
     #[must_use]
