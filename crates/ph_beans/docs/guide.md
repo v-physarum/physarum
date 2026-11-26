@@ -3,7 +3,8 @@
 This guide has two parts. Part 1 is the API that exists in the crate today,
 written with manual impls; its full example (section 9) was compiled and run
 against the library. Part 2 is the planned `ph_derive` form of the same
-declarations; **none of Part 2 is implemented**. Section 13 lists what is
+declarations; **none of Part 2 is implemented**. Section 13 is the
+descriptor of a bean as an inject, which exists. Section 14 lists what is
 missing.
 
 Error codes are in [`errors.md`](errors.md), performance requirements in
@@ -504,7 +505,7 @@ trait Painter { fn paint(&self); }
 
 | Key | Where | Meaning |
 | --- | --- | --- |
-| `state = T` | any bean | `BeanInfo::State`; `()` without the key |
+| `state = T` | any bean | `BeanInfo::State`; `NoState` without the key |
 | `parents = X` / `(X, Y)` | `event` | `EventInfo::Parents` |
 | `events = (A, B, …)` | `module` | the module's events; the bit is the position in the list |
 | `proxy = X::T` | a bean under a proxy | the link to the proxy |
@@ -531,12 +532,72 @@ trait Painter { fn paint(&self); }
 Open: the type the parent's derive puts the parent-to-child binding in, and
 the format of derive errors.
 
-## 13. Not implemented
+## 13. The descriptor of a bean as an inject
+
+The descriptor of a bean is an ordinary bean, `Info<M>`. It is declared,
+held and claimed with the mechanism of sections 1, 2 and 5; nothing is
+added to claims or to the run.
+
+```rust
+#[derive(Default)]
+struct Logic;
+
+impl BeanInfo for Logic {
+    type Provides = (Get<Info<App>>, Get<Info<Logic>>);
+    type Injects = ();
+    type Beans = (Get<Info<App>>, Get<Info<Logic>>);
+    type State = NoState;
+}
+impl At<Info<App>> for Logic { type Ix = Ix<0>; }
+impl At<Info<Logic>> for Logic { type Ix = Ix<1>; }
+
+fn report(args: (&Info<App>, &Info<Logic>)) {
+    let (app, own) = args;
+    let draws = app.desc().declares::<On<Update, On<Draw, ()>>>();
+}
+
+Logic::query()
+    .inject_resources(Info::<App>::T & Info::<Logic>::T)
+    .map(report)
+    .build()
+```
+
+- `Info<M>` is the structure itself, with no state: `Info::<M>::T` lends
+  `&Info<M>`, the way `Id::T` lends the bean `Id`. In an attribute it is
+  written `Info<M>::T`.
+- **The descriptor is a constant.** `Info<M>` stores nothing (its size is
+  zero). `Info::<M>::DESC` is the constant of `M`'s pipeline, and
+  `info.desc()` returns it. `M` needs `Setup` only: its pipeline is not
+  built and not run, `setup` is named for the type of its tick.
+- It is held under `Get`: made by `init`, never changed. So the claim is
+  `T` only; `Info::<M>::MUT` is the existing `PipelineError<4>`.
+- A module takes it like any bean: it provides it, or injects it from its
+  parent, and names its slot with `At`.
+- A module can take its own descriptor: `Logic` holds `Info<Logic>` and a
+  system of `Logic` claims it. It is the same bean as for any other `M`.
+- The constant is the `ModuleDesc` of the pipeline, the same as
+  `Tick::DESC`: `systems()` stored by `.map`, `forwards()` stored by
+  `.forward`, `children()` made by `Tick::init`, the events its filters
+  name (`listens_to`) and the events it declares with `.emit`
+  (`declares`, `reads_queue`). It is asked at build time:
+  `const { assert!(Info::<App>::DESC.systems() == 3) }`.
+
+Open:
+
+- The facts not reported yet: which children a pipeline forwards to, the
+  claim of each system, the provides, the injects and their access,
+  whether the bean has a state.
+- A bean without a pipeline has no `Info` yet.
+- With `ph_derive`: the attribute that adds `Info<M>` to a module
+  (`#[provide(Info<App>::T)]`), so `At` is not written by hand.
+
+## 14. Not implemented
 
 In `ph_beans`:
 
-1. Limits of `.forward`. A child cannot inject its parent itself, nor a bean as a trait. The parent does not check that
-   the child's `EventReg` names the same registry.
+1. Limits of `.forward`. A child cannot inject its parent itself, nor a
+   bean as a trait. The parent does not check that the child's `EventReg`
+   names the same registry.
 2. A child names its registry by hand (`impl EventReg`). The derive of its
    parent will write it (section 12).
 3. `ph_derive` does not exist, so the `DynObject` impl of a `dynamic` trait
@@ -545,5 +606,7 @@ In `ph_beans`:
 5. A user state struct with `DeferState` has no test; `State = EventBuf` has.
 6. `FilterError<6>` is a `const` assert: `cargo build` reports it,
    `cargo check` does not, and no test asserts it.
+7. `Info<M>` reports the steps and the events of a pipeline, not its
+   claims, children by name, provides or injects (section 13).
 
 `ph_derive`: everything in Part 2.

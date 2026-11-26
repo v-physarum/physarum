@@ -15,6 +15,7 @@ mod patch;
 pub(crate) mod scope;
 pub(crate) mod stages;
 mod start;
+pub(crate) mod steps;
 mod strategy;
 pub(crate) mod sys;
 pub mod tick;

@@ -10,6 +10,7 @@
 use crate::context::list::{Hand, Pass};
 use crate::context::maps::MapList;
 use crate::context::stages::Makes;
+use crate::context::steps::Steps;
 use crate::context::{Owned, Pipe, Sys};
 use crate::descriptor::ModuleDesc;
 use crate::filter::eval::Collect;
@@ -63,8 +64,9 @@ where
     for<'s, 'x> A: Sees<B, <B as Beans<'s, 'x>>::Full>,
     N: for<'s, 'x> Hand<<B as Beans<'s, 'x>>::Full>,
     N: for<'s, 'x> Makes<<B as Beans<'s, 'x>>::Full>,
+    N: Steps,
 {
-    const DESC: ModuleDesc = ModuleDesc::new(E::MASK);
+    const DESC: ModuleDesc = N::DESC.declaring(E::MASK);
 
     // The provided states start at their defaults. Each forwarded child
     // then runs its own init system once, in the order the `.forward`

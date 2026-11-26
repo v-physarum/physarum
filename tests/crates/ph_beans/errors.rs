@@ -292,6 +292,35 @@ fn a_module_with_state_built_without_init_is_need_init() {
     init_fails("Kid", ".build()", "NeedInit");
 }
 
+/// A module that provides the descriptor of `described` and claims it
+/// with the marker `claim`.
+fn info_fails(described: &str, claim: &str, code: &str) {
+    let body = format!(
+        "{CHILDREN}
+         use ph_beans::{{Info, NoState}};
+         fn reads(_: &Info<{described}>) {{}}
+         struct Host; impl BeanInfo for Host {{ type Provides=(Get<Info<{described}>>,); type Injects=(); type Beans=(Get<Info<{described}>>,); type State=NoState; }}
+         impl At<Info<{described}>> for Host {{ type Ix = Ix<0>; }}
+         fn main() {{
+             let tick = Host::query().inject_resources(Info::<{described}>::{claim}).map(reads).build();
+             let _ = Tick::<Host>::init(&tick, ());
+         }}"
+    );
+    fail(&body, code);
+}
+
+// A descriptor is held under `Get`: it is made by `init` and never changes.
+#[test]
+fn mut_of_a_descriptor_is_pipeline_error_4() {
+    info_fails("Kid", "MUT", "PipelineError<4>");
+}
+
+// The descriptor is built from the pipeline of the bean. `Leaf` has none.
+#[test]
+fn a_descriptor_of_a_bean_without_a_pipeline_is_pipeline_error_3() {
+    info_fails("Leaf", "T", "PipelineError<3>");
+}
+
 #[test]
 fn two_owners_of_one_slot_conflict() {
     let source = format!(

@@ -6,8 +6,9 @@
 use core::cell::Cell;
 
 use ph_beans::{
-    At, BeanInfo, Bit, Ctx, Dense, EmitBit, EmitIx, EventBuf, EventInfo, EventReg, Gate, Init, Ix,
-    List, MapEntry, Marker, ModuleDesc, Mut, NoState, On, Pipe, Query, Setup, SlotOf, Sparse, Tick,
+    At, BeanInfo, Bit, Ctx, Dense, EmitBit, EmitIx, EventBuf, EventInfo, EventReg, Gate, Get, Info,
+    Init, Ix, List, MapEntry, Marker, ModuleDesc, Mut, NoState, On, Pipe, Query, Setup, Slot,
+    SlotOf, Sparse, Tick,
 };
 
 thread_local! {
@@ -18,6 +19,7 @@ thread_local! {
 /// Registry of the emit bits used here.
 struct Events;
 
+#[derive(Default)]
 struct Sched;
 #[derive(Default)]
 struct Update;
@@ -427,12 +429,107 @@ fn a_hidden_tick_still_describes_its_pipeline() {
     // An emit of the declared path itself has nothing left to defer into it.
     assert!(!desc.reads_queue::<On<Update, On<Main, ()>>>());
 
+    // The steps are part of the same constant.
+    assert_eq!(desc.systems(), 1);
+    assert!(desc.listens_to::<On<Update, On<Main, ()>>>());
+
     let desc = desc_of(&hidden_without_emit());
     assert!(!desc.declares::<On<Update, On<Main, ()>>>());
     assert!(!desc.reads_queue::<On<Update, ()>>());
 }
 
+impl Setup for Sched {
+    fn setup(self) -> impl Tick<Self> {
+        hidden_with_emit()
+    }
+}
+
+/// Holds the descriptor of `Sched` and its own.
+#[derive(Default)]
+struct Seer;
+
+impl BeanInfo for Seer {
+    type Provides = (Get<Info<Sched>>, Get<Info<Seer>>);
+    type Injects = ();
+    type Beans = (Get<Info<Sched>>, Get<Info<Seer>>);
+    type State = NoState;
+}
+
+impl At<Info<Sched>> for Seer {
+    type Ix = Ix<0>;
+}
+
+impl At<Info<Seer>> for Seer {
+    type Ix = Ix<1>;
+}
+
+thread_local! {
+    // Whether the pipeline of `Sched`, then of `Seer`, declares `Update[Main]`.
+    static DECLARED: Cell<[bool; 2]> = const { Cell::new([false, true]) };
+}
+
+fn sees(args: (&Info<Sched>, &Info<Seer>)) {
+    let (sched, own) = args;
+    let declared = [
+        sched.desc().declares::<On<Update, On<Main, ()>>>(),
+        own.desc().declares::<On<Update, On<Main, ()>>>(),
+    ];
+    DECLARED.with(|seen| seen.set(declared));
+}
+
+impl Setup for Seer {
+    fn setup(self) -> impl Tick<Self> {
+        Seer::query()
+            .inject_resources(Info::<Sched>::T & Info::<Seer>::T)
+            .map(sees)
+            .build()
+    }
+}
+
+// The descriptor of a bean is a bean: a system claims it with `Info::<M>::T`.
+// A module takes the descriptor of another module and its own.
+#[test]
+fn a_system_reads_the_descriptor_of_a_bean_and_its_own() {
+    let tick = Seer.setup();
+    let mut instance = tick.init(());
+    tick.emit((), &mut instance, ());
+    assert_eq!(DECLARED.with(Cell::get), [true, false]);
+}
+
+/// Injects the descriptor of `Sched`: its caller lends it.
+struct Reader;
+
+impl BeanInfo for Reader {
+    type Provides = ();
+    type Injects = Get<Info<Sched>>;
+    type Beans = Get<Info<Sched>>;
+    type State = NoState;
+}
+
+impl At<Info<Sched>> for Reader {
+    type Ix = Ix<0>;
+}
+
+fn reads(sched: &Info<Sched>) {
+    let declared = sched.desc().declares::<On<Update, On<Main, ()>>>();
+    DECLARED.with(|seen| seen.set([declared, false]));
+}
+
+// A descriptor is injected like any bean: the caller lends its slot.
+#[test]
+fn a_descriptor_is_injected_from_the_caller() {
+    let tick = Reader::query()
+        .inject_resources(Info::<Sched>::T)
+        .map(reads)
+        .build();
+    let lent = Slot::<Info<Sched>>::default();
+    let mut instance = Tick::<Reader>::init(&tick, &lent);
+    Tick::<Reader>::emit(&tick, (), &mut instance, &lent);
+    assert_eq!(DECLARED.with(Cell::get), [true, false]);
+}
+
 /// Provides `Leaf`, a bean with its own pipeline, and the event `Update`.
+#[derive(Default)]
 struct Host;
 #[derive(Default)]
 struct Leaf;
@@ -474,6 +571,46 @@ impl Setup for Leaf {
             .map(bump_main)
             .build()
     }
+}
+
+impl Setup for Host {
+    fn setup(self) -> impl Tick<Self> {
+        Host::query()
+            .filter(Update::ON)
+            .forward(Leaf::MUT)
+            .filter(Graphics::ON)
+            .forward(Leaf::MUT)
+            .build()
+    }
+}
+
+// The built pipeline reports its steps: the descriptor holds what `.map`
+// and `.forward` stored, and the events their filters name.
+#[test]
+fn a_descriptor_reports_the_steps_of_the_pipeline() {
+    // The descriptor is a constant: it is asked at build time, and the bean
+    // that carries it stores nothing.
+    const { assert!(Info::<Sched>::DESC.systems() == 1) };
+    const { assert!(Info::<Host>::DESC.children() == 1) };
+    assert_eq!(size_of::<Info<Sched>>(), 0);
+
+    let sched = Info::<Sched>::default().desc();
+    assert_eq!(
+        [sched.systems(), sched.forwards(), sched.children()],
+        [1, 0, 0]
+    );
+    assert!(sched.listens_to::<On<Update, On<Main, ()>>>());
+    assert!(!sched.listens_to::<On<Graphics, ()>>());
+
+    // Two `.forward` steps name one child: it is made once.
+    let host = Info::<Host>::default().desc();
+    assert_eq!(
+        [host.systems(), host.forwards(), host.children()],
+        [0, 2, 1]
+    );
+    assert!(host.listens_to::<On<Update, ()>>());
+    assert!(host.listens_to::<On<Graphics, ()>>());
+    assert!(!host.listens_to::<On<Update, On<Main, ()>>>());
 }
 
 // `Host` sends what it gets under `Update` on to `Leaf`. `Leaf` listens to

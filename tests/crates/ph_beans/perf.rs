@@ -72,6 +72,18 @@ fn perf_1_a_forward_into_a_child_is_a_direct_call() {
     });
 }
 
+// A descriptor read in a system is a constant of the build: the injected
+// slot is not read, and the only store is the system's.
+#[test]
+fn perf_1_a_descriptor_read_is_a_constant() {
+    on("emit_reads_info", |body| {
+        plain(body);
+        body.assert_no_branch();
+        body.assert_max_loads(0);
+        body.assert_max_stores(DIRECT_STORES);
+    });
+}
+
 // PERF-1, step 2: the queue is walked in a loop of plain compares and
 // stores. Nothing is called, allocated or unwound, in the loop or around it.
 #[test]

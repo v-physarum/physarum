@@ -5,7 +5,7 @@
 
 #![allow(unused)]
 
-use ph_beans::{At, BeanInfo, Bit, EmitBit, EventBuf, EventInfo, EventReg, Ix, Marker, Mut, Owned, Query, Node, Setup, SlotOf, Tick, NoState};
+use ph_beans::{At, BeanInfo, Bit, EmitBit, EventBuf, EventInfo, EventReg, Get, Info, Ix, Marker, Mut, Owned, Query, Node, Setup, Slot, SlotOf, Tick, NoState};
 
 #[derive(Default)]
 pub struct First;
@@ -213,4 +213,45 @@ pub fn emit_into_child(instance: &mut Owned<NoState, (Node<Inner>, Node<Second>)
         .forward(Inner::MUT)
         .build();
     Tick::<Shell>::emit(&tick, Update::ON, instance, ());
+}
+
+/// Provides `Second` and injects the descriptor of `Inner`.
+pub struct Watch;
+
+impl BeanInfo for Watch {
+    type Provides = (Mut<Second>,);
+    type Injects = Get<Info<Inner>>;
+    type Beans = (Mut<Second>, Get<Info<Inner>>);
+    type State = NoState;
+}
+
+impl At<Second> for Watch {
+    type Ix = Ix<0>;
+}
+
+impl At<Info<Inner>> for Watch {
+    type Ix = Ix<1>;
+}
+
+impl EventReg for Watch {
+    type Reg = Events;
+}
+
+/// What `write_steps` adds to the number of systems of `Inner`.
+const STEPS_BASE: u32 = 54;
+
+fn write_steps(args: (&Info<Inner>, &mut u32)) {
+    let (inner, second) = args;
+    *second = STEPS_BASE + inner.desc().systems() as u32;
+}
+
+/// The system reads the descriptor of `Inner`: one system, so it stores 55.
+#[unsafe(no_mangle)]
+pub fn emit_reads_info(instance: &mut Owned<NoState, (Node<Second>,)>, info: &Slot<Info<Inner>>) {
+    let tick = Watch::query()
+        .inject_resources(Info::<Inner>::T & *Second::MUT)
+        .filter(Update::ON)
+        .map(write_steps)
+        .build();
+    Tick::<Watch>::emit(&tick, Update::ON, instance, info);
 }

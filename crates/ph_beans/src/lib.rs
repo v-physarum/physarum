@@ -23,9 +23,9 @@ pub use context::{
     MAX_MAP_SYSTEMS, MapEntry, MapList, NoSystems, Owned, Pipe, ScopeHost, StartDesc,
 };
 pub use descriptor::{
-    Accessors, ClaimDesc, ClaimError, Descriptor, Dyn, DynObject, FilterError, Get, Idle, Live,
-    Marker, ModuleDesc, Mut, NeedBuild, NeedInit, OpDesc, OpOk, PipelineError, PipelineOk, State,
-    Valid, WarnUnusedArgs,
+    Accessors, ClaimDesc, ClaimError, Descriptor, Dyn, DynObject, FilterError, Get, Idle, Info,
+    Live, Marker, ModuleDesc, Mut, NeedBuild, NeedInit, OpDesc, OpOk, PipelineError, PipelineOk,
+    State, Valid, WarnUnusedArgs,
 };
 pub use filter::{
     And, ApplyFilter, Bit, BitIx, Dense, EmitBit, EmitIx, EmitMask, EventReg, Gate, HostedBy,
