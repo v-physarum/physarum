@@ -5,6 +5,7 @@ use crate::bean::BeanInfo;
 use crate::context::Context;
 use crate::context::Owned;
 use crate::context::ScopeHost;
+use crate::context::list::{ConstEmit, Pass};
 use crate::descriptor::ModuleDesc;
 use crate::filter::HostedBy;
 use crate::filter::NestOk;
@@ -46,6 +47,24 @@ where
         event: N,
         instance: &mut Self::Instance,
     );
+    /// The parts of a new instance. A parent keeps them in its own instance
+    /// for a bean it provides.
+    #[doc(hidden)]
+    fn boot_parts(
+        &self,
+        injects: <M::Injects as ClaimShape>::Lent<'_>,
+    ) -> Owned<M::State, <M as Stored>::States>
+    where
+        M: Stored;
+    /// Runs walk `W` over the provided states a parent keeps for `M`.
+    #[doc(hidden)]
+    fn drive_parts<W: Pass>(
+        &self,
+        states: &mut <M as Stored>::States,
+        injects: <M::Injects as ClaimShape>::Lent<'_>,
+        walk: W,
+    ) where
+        M: Stored;
 }
 
 // Generics: `E` builder event scope, `C` context, `M` module.
@@ -75,7 +94,8 @@ where
         injects: <M::Injects as ClaimShape>::Lent<'_>,
     ) {
         let _ = event;
-        self.tick().drive::<N>(instance, injects);
+        self.tick()
+            .pass(&mut instance.provides, injects, ConstEmit::<N>::new());
     }
 
     fn defer<N: Collect + NestOk + HostedBy<M> + DeferInto<M>>(
@@ -85,5 +105,21 @@ where
     ) {
         let _ = event;
         self.tick().defer::<N>(instance);
+    }
+
+    fn boot_parts(
+        &self,
+        injects: <M::Injects as ClaimShape>::Lent<'_>,
+    ) -> Owned<M::State, M::States> {
+        self.tick().boot(injects)
+    }
+
+    fn drive_parts<W: Pass>(
+        &self,
+        states: &mut M::States,
+        injects: <M::Injects as ClaimShape>::Lent<'_>,
+        walk: W,
+    ) {
+        self.tick().pass(states, injects, walk);
     }
 }

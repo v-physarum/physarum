@@ -5,7 +5,7 @@
 
 #![allow(unused)]
 
-use ph_beans::{At, BeanInfo, Dyn, DynObject, Ix, Marker, Mut, Owned, Query, Tick};
+use ph_beans::{At, BeanInfo, Dyn, DynObject, Ix, Marker, Mut, Owned, Query, Tick, NoState};
 
 pub trait Painter {
     fn tint(&mut self, by: u32);
@@ -23,7 +23,7 @@ impl BeanInfo for Draw {
     type Provides = ();
     type Injects = ();
     type Beans = ();
-    type State = ();
+    type State = NoState;
 }
 
 impl<'a> DynObject<'a> for dyn Painter {
@@ -44,14 +44,12 @@ impl BeanInfo for Ui {
     type Provides = ();
     type Injects = Dyn<Mut<Draw>, dyn Painter>;
     type Beans = Dyn<Mut<Draw>, dyn Painter>;
-    type State = ();
+    type State = NoState;
 }
 
 impl At<Draw> for Ui {
     type Ix = Ix<0>;
 }
-
-fn start(_: &mut dyn Painter) {}
 
 fn tint(painter: &mut dyn Painter) {
     painter.tint(7);
@@ -59,10 +57,9 @@ fn tint(painter: &mut dyn Painter) {
 
 /// The system takes `&mut dyn Painter`; the caller lends a `Draw`.
 #[unsafe(no_mangle)]
-pub fn emit_with_dyn_inject(instance: &mut Owned<(), ()>, draw: &mut Draw) {
+pub fn emit_with_dyn_inject(instance: &mut Owned<NoState, ()>, draw: &mut Draw) {
     let tick = Ui::query()
         .inject_resources(Draw::MUT)
-        .init_state(start)
         .map(tint)
         .build();
     Tick::<Ui>::emit(&tick, (), instance, draw);

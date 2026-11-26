@@ -10,14 +10,17 @@
 //! Entry points such as [`Query`](crate::query::Query) stay on separate traits.
 
 mod inject;
+mod state;
 
 pub use inject::{FromParent, Module, OfInject, OfParent, OfProvide};
+pub use state::{Blank, NoState};
 
 use crate::filter::On;
 
 /// Standard bean descriptor.
 ///
-/// Provides, injects, the combined bean list, and the owned state.
+/// Provides, injects, the combined bean list, and the owned state. A bean
+/// without state names [`NoState`].
 ///
 /// Meta trait — frozen without owner approval (rule 14). Use [`Query`](crate::Query)
 /// to start a pipeline.
@@ -28,7 +31,7 @@ pub trait BeanInfo: Sized {
     type Injects;
     /// Provides and injects together.
     type Beans;
-    /// Owned state of this bean only.
+    /// Owned state of this bean only. [`NoState`] when it owns none.
     type State;
 }
 

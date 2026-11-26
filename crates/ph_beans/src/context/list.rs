@@ -7,49 +7,12 @@
 pub use crate::core::list::{EmptySlots, End, Full, Group, Head, List};
 
 pub use crate::context::carrier::CarrierDesc;
-use crate::context::maps::MapEntry;
+use crate::context::maps::{Forward, MapEntry};
+pub(crate) use crate::context::strategy::{ConstEmit, Kept, Pass, WalkStrategy};
 use crate::context::sys::MapSys;
-use crate::filter::eval::{Collect, ConstMatch, MatchEmit};
+use crate::filter::eval::{Collect, MatchEmit};
 use crate::filter::{Gate, PathStep, PathStrategy};
-
-/// How one walk decides which maps run.
-///
-/// The const emit and the queued path are structs here.
-/// Tuple fan-out is one [`Hand::hand`] (rule 8) — not a method per mode.
-pub(crate) trait WalkStrategy {
-    /// Whether a plain map under filter `F` runs.
-    fn keep<F: Kept>(&self) -> bool;
-}
-
-/// Filter a walk strategy can test: the bound of [`WalkStrategy::keep`].
-pub(crate) trait Kept: crate::filter::eval::MatchEmit + Collect {}
-
-// Generics: `F` filter.
-impl<F: crate::filter::eval::MatchEmit + Collect> Kept for F {}
-
-/// Const plan: `F::Against::<E>::MATCHES`.
-/// Generics: `E` emit event.
-pub(crate) struct ConstEmit<E> {
-    pub(crate) _markers: core::marker::PhantomData<E>,
-}
-
-// Generics: `E` emit event.
-impl<E> Copy for ConstEmit<E> {}
-
-// Generics: `E` emit event.
-impl<E> Clone for ConstEmit<E> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-// Generics: `E` emit tree ([`Collect`]).
-impl<E: Collect> WalkStrategy for ConstEmit<E> {
-    fn keep<F: Kept>(&self) -> bool {
-        let _ = self;
-        const { F::Against::<E>::MATCHES }
-    }
-}
+use crate::query::child::Child;
 
 /// Presents a node to [`Visit`].
 ///
@@ -71,6 +34,12 @@ pub(crate) trait Visit<R> {
     where
         F: MatchEmit + Collect,
         H: MapSys<R>;
+
+    /// `.forward` leaf: a provided bean with its own pipeline.
+    fn on_forward<F, P, B>(&self, entry: &Forward<F, P, B>, res: &mut R)
+    where
+        F: MatchEmit + Collect,
+        P: Child<B, R>;
 
     /// Path gate. `M` is the op's emit const, not a parameter here.
     fn on_gate<P, S, C>(&self, gate: &Gate<P, S, C>, res: &mut R)
@@ -96,12 +65,34 @@ where
         }
     }
 
+    fn on_forward<F, P, B>(&self, _entry: &Forward<F, P, B>, res: &mut R)
+    where
+        F: MatchEmit + Collect,
+        P: Child<B, R>,
+    {
+        self.forward::<F, P, B, R>(res);
+    }
+
     fn on_gate<P, S2, C>(&self, _gate: &Gate<P, S2, C>, _res: &mut R)
     where
         P: PathStep,
         S2: PathStrategy,
         C: Hand<R>,
     {
+    }
+}
+
+// Generics: `R` resources, `F` filter, `P` child bean, `B` its parent.
+impl<R, F, P, B> Hand<R> for Forward<F, P, B>
+where
+    F: MatchEmit + Collect,
+    P: Child<B, R>,
+{
+    fn hand<V>(&self, op: V, res: &mut R)
+    where
+        V: Copy + Visit<R>,
+    {
+        op.on_forward(self, res);
     }
 }
 

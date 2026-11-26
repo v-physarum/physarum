@@ -96,9 +96,9 @@ where
 /// ```compile_fail
 /// use ph_beans::{At, BeanInfo, EventInfo, Ix, Marker, Query};
 /// struct Keys; struct Main; struct App;
-/// impl BeanInfo for Keys { type Provides=(); type Injects=(); type Beans=(); type State=(); }
-/// impl BeanInfo for Main { type Provides=(); type Injects=(); type Beans=(); type State=(); }
-/// impl EventInfo for Main { type Parents=(); } impl BeanInfo for App { type Provides=(); type Injects=(); type Beans=(); type State=(); }
+/// impl BeanInfo for Keys { type Provides=(); type Injects=(); type Beans=(); type State=ph_beans::NoState; }
+/// impl BeanInfo for Main { type Provides=(); type Injects=(); type Beans=(); type State=ph_beans::NoState; }
+/// impl EventInfo for Main { type Parents=(); } impl BeanInfo for App { type Provides=(); type Injects=(); type Beans=(); type State=ph_beans::NoState; }
 /// impl At<Keys> for App { type Ix = Ix<0>; }
 /// let _ = App::query().inject_resources(Keys::MUT).filter(Main::ON[Keys::T]).inject_resources(Keys::T);
 /// ```
@@ -151,9 +151,9 @@ impl<E, C> Init<E, C> {
     /// ```compile_fail
     /// use ph_beans::{BeanInfo, EventInfo, Marker, Query};
     /// struct Update; struct App;
-    /// impl BeanInfo for Update { type Provides=(); type Injects=(); type Beans=(); type State=(); }
+    /// impl BeanInfo for Update { type Provides=(); type Injects=(); type Beans=(); type State=ph_beans::NoState; }
     /// impl EventInfo for Update { type Parents=(); }
-    /// impl BeanInfo for App { type Provides=(); type Injects=(); type Beans=(); type State=(); }
+    /// impl BeanInfo for App { type Provides=(); type Injects=(); type Beans=(); type State=ph_beans::NoState; }
     /// let _ = App::query().inject_resources(*Update::MUT);
     /// ```
     #[allow(clippy::needless_pass_by_value)]

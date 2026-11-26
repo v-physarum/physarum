@@ -16,9 +16,9 @@ use library::{CRATE, library};
 const PRELUDE: &str = "
 #![allow(unused)]
 use ph_beans::{At, BeanInfo, Bit, EmitBit, EventInfo, EventReg, Ix, Marker, Query, SlotOf};
-struct App; impl BeanInfo for App { type Provides=(); type Injects=(); type Beans=(); type State=(); }
-struct Up; impl BeanInfo for Up { type Provides=(); type Injects=(); type Beans=(); type State=(); }
-struct Low; impl BeanInfo for Low { type Provides=(); type Injects=(); type Beans=(); type State=(); }
+struct App; impl BeanInfo for App { type Provides=(); type Injects=(); type Beans=(); type State=ph_beans::NoState; }
+struct Up; impl BeanInfo for Up { type Provides=(); type Injects=(); type Beans=(); type State=ph_beans::NoState; }
+struct Low; impl BeanInfo for Low { type Provides=(); type Injects=(); type Beans=(); type State=ph_beans::NoState; }
 impl EventInfo for Up { type Parents=(); }
 impl EventInfo for Low { type Parents=Up; }
 struct Events;
@@ -92,8 +92,8 @@ fn a_slot_of_another_event_is_a_type_mismatch() {
 fn a_provide_without_a_marker_is_pipeline_error_5() {
     fail(
         "#[derive(Default)] struct Dep; impl BeanInfo for Dep { type Provides=(); type Injects=(); type Beans=(); type State=u8; }
-         struct Host; impl BeanInfo for Host { type Provides=(Dep,); type Injects=(); type Beans=(Dep,); type State=(); }
-         fn boot(_: ()) {}
+         struct Host; impl BeanInfo for Host { type Provides=(Dep,); type Injects=(); type Beans=(Dep,); type State=u8; }
+         fn boot(_: ()) -> u8 { 0 }
          fn main() { let _ = Host::query().init_state(boot); }",
         "PipelineError<5>",
     );
@@ -104,8 +104,8 @@ fn a_provided_state_without_default_is_pipeline_error_3() {
     fail(
         "struct Raw;
          struct Dep; impl BeanInfo for Dep { type Provides=(); type Injects=(); type Beans=(); type State=Raw; }
-         struct Host; impl BeanInfo for Host { type Provides=(ph_beans::Mut<Dep>,); type Injects=(); type Beans=(ph_beans::Mut<Dep>,); type State=(); }
-         fn boot(_: ()) {}
+         struct Host; impl BeanInfo for Host { type Provides=(ph_beans::Mut<Dep>,); type Injects=(); type Beans=(ph_beans::Mut<Dep>,); type State=u8; }
+         fn boot(_: ()) -> u8 { 0 }
          fn main() { let _ = Host::query().init_state(boot); }",
         "PipelineError<3>",
     );
@@ -131,9 +131,8 @@ fn a_declared_emit_without_an_event_buffer_is_filter_error_7() {
          use ph_beans::Tick;
          impl SlotOf<Events> for Bit<1> {{ type Owner = Low; }}
          impl EmitBit for Low {{ type Reg = Events; type Slot = Bit<1>; }}
-         fn boot(_: ()) {{}}
          fn main() {{
-             let tick = App::query().init_state(boot).emit(Up::ON[Low::ON]).build();
+             let tick = App::query().emit(Up::ON[Low::ON]).build();
              let _ = Tick::<App>::init(&tick, ());
          }}"
     );
@@ -201,6 +200,96 @@ fn mut_of_a_shared_dyn_inject_is_pipeline_error_4() {
          fn main() { let _ = Host::query().inject_resources(Dep::MUT).init_state(boot); }",
         "PipelineError<4>",
     );
+}
+
+/// Children for the `.forward` and `.init_state` probes. `Leaf` has no
+/// pipeline. `Kid` has one and changes nothing of its own. `Grip` has one
+/// and provides a bean under `Mut`.
+const CHILDREN: &str = "
+use ph_beans::{Get, Mut, Setup, Tick};
+fn boot(_: ()) -> u8 { 0 }
+#[derive(Default)] struct Leaf; impl BeanInfo for Leaf { type Provides=(); type Injects=(); type Beans=(); type State=u8; }
+#[derive(Default)] struct Kid; impl BeanInfo for Kid { type Provides=(); type Injects=(); type Beans=(); type State=u8; }
+#[derive(Default)] struct Grip; impl BeanInfo for Grip { type Provides=(Mut<Leaf>,); type Injects=(); type Beans=(Mut<Leaf>,); type State=u8; }
+impl At<Leaf> for Grip { type Ix = Ix<0>; }
+impl Setup for Kid { fn setup(self) -> impl Tick<Self> { Kid::query().init_state(boot).build() } }
+impl Setup for Grip { fn setup(self) -> impl Tick<Self> { Grip::query().init_state(boot).build() } }
+";
+
+/// A `.forward` that does not compile: `Host` provides `child` under the
+/// marker type `provided` and names it with the marker `forward`.
+fn forward_fails(child: &str, provided: &str, forward: &str, code: &str) {
+    let body = format!(
+        "{CHILDREN}
+         struct Host; impl BeanInfo for Host {{ type Provides=({provided}<{child}>,); type Injects=(); type Beans=({provided}<{child}>,); type State=u8; }}
+         impl At<{child}> for Host {{ type Ix = Ix<0>; }}
+         fn main() {{
+             let tick = Host::query().init_state(boot).forward({child}::{forward}).build();
+             let _ = Tick::<Host>::init(&tick, ());
+         }}"
+    );
+    fail(&body, code);
+}
+
+// A forwarded bean runs its own pipeline: it needs `Setup`.
+#[test]
+fn a_forwarded_bean_without_a_pipeline_is_pipeline_error_6() {
+    forward_fails("Leaf", "Mut", "MUT", "PipelineError<6>");
+}
+
+// The marker of a `.forward` is the marker of the provide.
+#[test]
+fn a_forward_under_t_of_a_mut_provide_is_pipeline_error_8() {
+    forward_fails("Kid", "Mut", "T", "PipelineError<8>");
+}
+
+#[test]
+fn a_forward_under_mut_of_a_get_provide_is_pipeline_error_8() {
+    forward_fails("Kid", "Get", "MUT", "PipelineError<8>");
+}
+
+// A child under `Get` changes nothing of its own. A provide under `Mut` is
+// something it can change.
+#[test]
+fn a_child_with_a_mut_provide_forwarded_under_t_is_pipeline_error_7() {
+    forward_fails("Grip", "Get", "T", "PipelineError<7>");
+}
+
+/// A pipeline of `module` that does not compile because of its init step:
+/// `steps` is the chain after `query()`. `App` has no state, `Kid` a `u8`.
+fn init_fails(module: &str, steps: &str, code: &str) {
+    fail(
+        &format!("{CHILDREN}\nfn main() {{ let _ = {module}::query(){steps}; }}"),
+        code,
+    );
+}
+
+// A module without state names `NoState`. Nothing outside the library makes
+// that value, so it takes no init function.
+#[test]
+fn init_state_of_a_module_without_state_is_pipeline_error_9() {
+    init_fails("App", ".init_state(|_| ())", "PipelineError<9>");
+}
+
+#[test]
+fn a_default_init_of_a_module_without_state_is_rejected() {
+    init_fails(
+        "App",
+        ".init_state(|_| Default::default())",
+        "NoState: Default",
+    );
+}
+
+// An init function returns the state of its module, nothing else.
+#[test]
+fn an_init_that_returns_another_type_is_pipeline_error_9() {
+    init_fails("Kid", ".init_state(|_| 0u16)", "PipelineError<9>");
+}
+
+// A module with a state is not built without its init function.
+#[test]
+fn a_module_with_state_built_without_init_is_need_init() {
+    init_fails("Kid", ".build()", "NeedInit");
 }
 
 #[test]

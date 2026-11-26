@@ -1,7 +1,6 @@
-//! Makes one instance of a module: its provided states, then the init system once.
+//! The init system of a module: run once over the borrows of a new instance.
 
-use crate::bean::BeanInfo;
-use crate::context::Owned;
+use crate::bean::{BeanInfo, Blank, NoState};
 use crate::query::args::ClaimShape;
 use crate::query::claim::Claim;
 use crate::query::lend::Beans;
@@ -15,13 +14,27 @@ use crate::query::store::Stored;
 /// failure prints its coded message. Generics: `B` module, `A` claim.
 #[doc(hidden)]
 pub trait InitSys<B: BeanInfo, A> {
-    /// States the module owns for its provided beans.
-    type States;
-    /// The inject view the caller lends.
-    type Injects<'x>;
-    /// Creates the provided states, then runs the function once over its
-    /// claim: provided states and `injects`.
-    fn boot(&self, injects: Self::Injects<'_>) -> Owned<B::State, Self::States>;
+    /// Runs the function once over its claim, taken from the borrows of the
+    /// new instance: its provided states and the injects.
+    ///
+    /// Generics: `R` those borrows.
+    fn start<R>(&self, full: &mut R) -> B::State
+    where
+        A: Sees<B, R>;
+}
+
+/// The init system of a module whose state is [`NoState`]: it makes
+/// [`NoState`]. `.build()` stores it when no `.init_state` ran.
+pub struct NoInit;
+
+// Generics: `B` module without state, `A` claim.
+impl<B: BeanInfo<State = NoState>, A> InitSys<B, A> for NoInit {
+    fn start<R>(&self, _full: &mut R) -> NoState
+    where
+        A: Sees<B, R>,
+    {
+        NoState::blank()
+    }
 }
 
 // Generics: `B` module, `A` claim, `H` init handler.
@@ -31,12 +44,10 @@ where
     for<'s, 'x> A: Sees<B, <B as Beans<'s, 'x>>::Full>,
     H: for<'a> Fn(<A as Claim<B>>::Arg<'a>) -> B::State,
 {
-    type States = B::States;
-    type Injects<'x> = <B::Injects as ClaimShape>::Lent<'x>;
-
-    fn boot(&self, injects: Self::Injects<'_>) -> Owned<B::State, B::States> {
-        let mut provides: B::States = Default::default();
-        let state = A::call(&mut B::full(&mut provides, injects), self);
-        Owned::new(state, provides)
+    fn start<R>(&self, full: &mut R) -> B::State
+    where
+        A: Sees<B, R>,
+    {
+        A::call(full, self)
     }
 }

@@ -13,7 +13,9 @@ pub(crate) mod list;
 pub mod maps;
 mod patch;
 pub(crate) mod scope;
+pub(crate) mod stages;
 mod start;
+mod strategy;
 pub(crate) mod sys;
 pub mod tick;
 

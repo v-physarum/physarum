@@ -7,10 +7,10 @@ use crate::context::Context;
 use crate::context::Ctx;
 use crate::context::Pipe;
 use crate::context::maps::MapList;
+use crate::context::stages::EmptyStages;
 use crate::context::tick::NoSystems;
 use crate::core::config::Config;
 use crate::core::config::OfConfig;
-use crate::core::list::EmptySlots;
 use crate::descriptor::NeedInit;
 use crate::descriptor::live::Live;
 
@@ -18,7 +18,7 @@ use crate::descriptor::live::Live;
 pub struct EmptyMap;
 
 impl Config for EmptyMap {
-    type Type = MapList<OfConfig<EmptySlots>, (), ()>;
+    type Type = MapList<OfConfig<EmptyStages>, (), ()>;
 }
 
 /// Fresh context tip at [`Query`](crate::query::Query)`::query`.

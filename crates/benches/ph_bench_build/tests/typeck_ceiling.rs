@@ -10,7 +10,7 @@ use ph_bench_build::{
     Group, Growth, PassCeiling, RustcPass, Scale, Series, Solver, TYPE_CHECK_CRATE_LIMIT,
 };
 
-const USE_LINE: &str = "use ph_beans::{BeanInfo, Query, Update};\n\n";
+const USE_LINE: &str = "use ph_beans::{BeanInfo, Query, Update, NoState};\n\n";
 const BEAN: &str = "\
 struct App;
 
@@ -18,17 +18,14 @@ impl BeanInfo for App {
     type Provides = ();
     type Injects = ();
     type Beans = ();
-    type State = ();
+    type State = NoState;
 }
-
-fn idle(_: ()) {}
 ";
 const CHAIN_START: &str = "\
 pub fn chain() {
     let mut built = App::query()
 ";
 const CHAIN_END: &str = "\
-        .init_state(idle)
         .build();
     Update::<App>::update(&mut built, ());
 }
@@ -90,7 +87,6 @@ fn bean_map_source_is_a_function_item_chain() {
     assert!(source.contains("fn system_1() {}"));
     assert!(source.contains(".map(system_0)"));
     assert!(source.contains(".map(system_1)"));
-    assert!(source.contains(".init_state(idle)"));
     assert!(source.contains(".build()"));
     assert!(source.contains("Update::<App>::update"));
     assert!(!source.contains('|'), "{source}");

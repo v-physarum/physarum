@@ -1,4 +1,4 @@
-//! Map entries in the shared [`List`](super::list::List). At most [`MAX_MAP_SYSTEMS`] handlers.
+//! Map entries of a pipeline, kept in [`Stages`](super::stages::Stages). At most [`MAX_MAP_SYSTEMS`] handlers.
 
 use core::marker::PhantomData;
 
@@ -6,7 +6,7 @@ use crate::context::ContextTick;
 use crate::context::Pipe;
 use crate::core::list::PushEntry;
 
-use crate::context::list::EmptySlots;
+use crate::context::stages::{EmptyStages, Enlist};
 use crate::core::config::Config;
 
 /// Hard cap on `.map` handlers in one pipeline.
@@ -33,11 +33,28 @@ impl<F, H> MapEntry<F, H> {
     }
 }
 
-/// Shared [`List`](super::list::List) of entries, the emit tree, and the filter in scope.
+/// One `.forward`: under filter `F`, the pipeline of bean `P` runs for the
+/// event module `B` was emitted with.
 ///
-/// `N` is a [`List`](super::list::List): a [`Head`](super::list::Head) of closed
-/// [`Full`](super::list::Full) groups plus one open slot. It is not a cons spine.
-/// Generics: `N` entries list, `E` event tip, `S` scope status.
+/// Generics: `F` filter, `P` provided bean, `B` the module that provides it.
+pub struct Forward<F, P, B> {
+    _markers: PhantomData<(F, P, B)>,
+}
+
+// Generics: `F` filter, `P` provided bean, `B` module.
+impl<F, P, B> Forward<F, P, B> {
+    pub(crate) const fn new() -> Self {
+        Self { _markers: PhantomData }
+    }
+}
+
+/// The entries of a pipeline, the emit tree, and the filter in scope.
+///
+/// `N` is [`Stages`](super::stages::Stages): the children `Tick::init`
+/// makes, and the systems. The systems are a [`List`](super::list::List): a
+/// [`Head`](super::list::Head) of closed [`Full`](super::list::Full) groups
+/// plus one open slot. It is not a cons spine.
+/// Generics: `N` entries, `E` event tip, `S` scope status.
 pub struct MapList<N, E, S> {
     pub(crate) entries: N,
     _markers: PhantomData<(E, S)>,
@@ -46,10 +63,10 @@ pub struct MapList<N, E, S> {
 // Generics: `L` entries ([`Config::Type`](crate::core::config::Config::Type)).
 impl<L> MapList<L, (), ()>
 where
-    EmptySlots: Config<Type = L>,
+    EmptyStages: Config<Type = L>,
 {
     pub(crate) fn empty() -> Self {
-        Self { entries: EmptySlots::empty(), _markers: PhantomData }
+        Self { entries: EmptyStages::empty(), _markers: PhantomData }
     }
 }
 
@@ -60,6 +77,14 @@ impl<N, E, S> MapList<N, E, S> {
         N: PushEntry<MapEntry<S, H>>,
     {
         MapList { entries: self.entries.push(MapEntry::new(handler)), _markers: PhantomData }
+    }
+
+    // Generics: `P` child, `B` its parent.
+    pub(crate) fn push_forward<P, B>(self) -> MapList<N::Out, E, S>
+    where
+        N: Enlist<S, P, B>,
+    {
+        MapList { entries: self.entries.enlist(), _markers: PhantomData }
     }
 
     pub(crate) fn rescope<F>(self) -> MapList<N, E, F> {

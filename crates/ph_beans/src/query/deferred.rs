@@ -14,13 +14,14 @@
 use core::marker::PhantomData;
 
 use crate::bean::BeanInfo;
-use crate::context::list::{Kept, WalkStrategy};
+use crate::context::list::{Kept, Pass, WalkStrategy};
 use crate::context::{DeferState, EventBuf, ScopeHost};
 use crate::core::each::Each;
 use crate::descriptor::{Mut, State};
 use crate::filter::eval::{Collect, EmitMask};
 use crate::filter::shape::{Here, IdleEmit, NodeForm, PairBody, Skip};
 use crate::filter::{EmitBit, EmitIx, On};
+use crate::query::child::Child;
 use crate::query::claim::Claim;
 use crate::query::lend::Borrow;
 use crate::query::sees::Sees;
@@ -31,7 +32,7 @@ use crate::query::store::Stored;
 /// A map on the path of the emit `M` already ran in the direct walk; that is
 /// a constant per map. The path test is the one run-time check.
 /// Generics: `M` emit.
-pub(crate) struct Queued<M> {
+pub struct Queued<M> {
     path: EmitMask,
     _markers: PhantomData<M>,
 }
@@ -54,11 +55,25 @@ impl<M> Clone for Queued<M> {
 }
 
 // Generics: `M` emit.
-impl<M: Collect> WalkStrategy for Queued<M> {
+impl<M: Collect + ScopeHost> WalkStrategy for Queued<M> {
     fn keep<F: Kept>(&self) -> bool {
         let ran = const { M::MASK.contains(F::MASK) };
         !ran && F::matches(self.path)
     }
+
+    // A deferred event goes down like a direct one: each level forwards it
+    // to its child with a direct call. The child tests the same path.
+    fn forward<F: Kept, P: Child<B, R>, B, R>(&self, res: &mut R) {
+        if F::matches(self.path) {
+            P::run(res, *self);
+        }
+    }
+}
+
+// Generics: `M` emit.
+impl<M: Collect + ScopeHost> Pass for Queued<M> {
+    type Emit = M;
+    const DRAINS: bool = false;
 }
 
 /// The buffer of a scope event, reached through the borrows `R` of module `B`.

@@ -20,8 +20,8 @@ pub struct Ix<const V: usize>;
 /// `Self` provides `P` at [`At::Ix`] ([`Ix`]`<N>`, not a raw number).
 /// ```compile_fail
 /// use ph_beans::{BeanInfo, Marker, Query};
-/// struct Id; impl BeanInfo for Id { type Provides=(); type Injects=(); type Beans=(); type State=(); }
-/// struct App; impl BeanInfo for App { type Provides=(ph_beans::Get<Id>,); type Injects=(); type Beans=(ph_beans::Get<Id>,); type State=(); }
+/// struct Id; impl BeanInfo for Id { type Provides=(); type Injects=(); type Beans=(); type State=ph_beans::NoState; }
+/// struct App; impl BeanInfo for App { type Provides=(ph_beans::Get<Id>,); type Injects=(); type Beans=(ph_beans::Get<Id>,); type State=ph_beans::NoState; }
 /// let _ = App::query().inject_resources(Id::T);
 /// ```
 /// Generics: `P` provided bean.

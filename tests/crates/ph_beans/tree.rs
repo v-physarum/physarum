@@ -9,8 +9,8 @@
 use core::cell::Cell;
 
 use ph_beans::{
-    At, BeanInfo, EventInfo, Get, Ix, Marker, Module, Mut, OfInject, OfParent, OfProvide, Query,
-    Setup, Slot, Tick,
+    At, BeanInfo, EventInfo, Get, Ix, Marker, Module, Mut, NoState, OfInject, OfParent, OfProvide,
+    Query, Setup, Slot, Tick,
 };
 
 /// Beans are zero-sized. `Id::T` lends the bean, `*Id::T` its `u8` state.
@@ -46,7 +46,7 @@ impl BeanInfo for Update {
     type Provides = ();
     type Injects = ();
     type Beans = ();
-    type State = ();
+    type State = NoState;
 }
 
 impl EventInfo for Update {
@@ -164,28 +164,28 @@ impl BeanInfo for UsesApp {
     type Provides = ();
     type Injects = Get<App>;
     type Beans = Get<App>;
-    type State = ();
+    type State = NoState;
 }
 
 impl BeanInfo for UsesRender {
     type Provides = ();
     type Injects = Get<Render>;
     type Beans = Get<Render>;
-    type State = ();
+    type State = NoState;
 }
 
 impl BeanInfo for PairHost {
     type Provides = (Get<Id>, Mut<Keys>);
     type Injects = ();
     type Beans = (Get<Id>, Mut<Keys>);
-    type State = ();
+    type State = NoState;
 }
 
 impl BeanInfo for TakesKeys {
     type Provides = ();
     type Injects = Mut<Keys>;
     type Beans = Mut<Keys>;
-    type State = ();
+    type State = NoState;
 }
 
 impl At<Logic> for Render {
@@ -290,7 +290,6 @@ fn sum_into_keys(args: (&u8, &mut u8)) {
 fn a_module_owns_the_beans_it_provides_under_markers() {
     let tick = PairHost::query()
         .inject_resources(*Id::T & *Keys::MUT)
-        .init_state(|_| ())
         .map(sum_into_keys)
         .build();
     let mut instance = Tick::<PairHost>::init(&tick, ());
@@ -315,7 +314,7 @@ impl BeanInfo for UsesId {
     type Provides = ();
     type Injects = Get<Id>;
     type Beans = Get<Id>;
-    type State = ();
+    type State = NoState;
 }
 
 impl At<Id> for Solo {
@@ -342,7 +341,7 @@ impl BeanInfo for ReadsKeys {
     type Provides = ();
     type Injects = Get<Keys>;
     type Beans = Get<Keys>;
-    type State = ();
+    type State = NoState;
 }
 
 // `PairHost` provides `(Id::T, Keys::MUT)`.
@@ -362,7 +361,7 @@ impl BeanInfo for Trio {
     type Provides = (Get<Id>, Mut<Keys>, Get<Render>);
     type Injects = ();
     type Beans = (Get<Id>, Mut<Keys>, Get<Render>);
-    type State = ();
+    type State = NoState;
 }
 
 // The child check reads any slot of a provide list of any length.
@@ -382,6 +381,241 @@ fn a_hidden_tick_lends_the_module_state() {
     let tick = App.setup();
     let instance = tick.init(());
     assert_eq!(*tick.state(&instance), BOOT_STATE);
+}
+
+/// A child with its own pipeline. It injects `Keys` from its parent.
+#[derive(Default)]
+struct Panel;
+
+impl BeanInfo for Panel {
+    type Provides = ();
+    type Injects = Mut<Keys>;
+    type Beans = Mut<Keys>;
+    type State = u8;
+}
+
+impl At<Keys> for Panel {
+    type Ix = Ix<0>;
+}
+
+/// A child that changes nothing of its own.
+#[derive(Default)]
+struct Lamp;
+
+impl BeanInfo for Lamp {
+    type Provides = ();
+    type Injects = ();
+    type Beans = ();
+    type State = u8;
+}
+
+/// Provides both children and the `Keys` that `Panel` injects.
+struct Desk;
+
+impl BeanInfo for Desk {
+    type Provides = (Mut<Panel>, Get<Lamp>, Mut<Keys>);
+    type Injects = ();
+    type Beans = (Mut<Panel>, Get<Lamp>, Mut<Keys>);
+    type State = u8;
+}
+
+impl At<Panel> for Desk {
+    type Ix = Ix<0>;
+}
+
+impl At<Lamp> for Desk {
+    type Ix = Ix<1>;
+}
+
+impl At<Keys> for Desk {
+    type Ix = Ix<2>;
+}
+
+const PANEL_START: u8 = 40;
+const PANEL_STEP: u8 = 10;
+const PANEL_MARK: u32 = 1;
+const LAMP_MARK: u32 = 2;
+const TRACE_BASE: u32 = 10;
+
+thread_local! {
+    // The marks of the children that ran, oldest first, as decimal digits.
+    static TRACE: Cell<u32> = const { Cell::new(0) };
+}
+
+fn trace(mark: u32) {
+    TRACE.with(|seen| seen.set(seen.get() * TRACE_BASE + mark));
+}
+
+fn take_trace() -> u32 {
+    TRACE.with(Cell::take)
+}
+
+// The child's init takes its inject: the `Keys` its parent provides.
+fn panel_boot(keys: &mut u8) -> u8 {
+    trace(PANEL_MARK);
+    *keys = PANEL_START;
+    PANEL_START + 1
+}
+
+fn panel_press(keys: &mut u8) {
+    trace(PANEL_MARK);
+    *keys += PANEL_STEP;
+}
+
+fn lamp_boot(_: ()) -> u8 {
+    trace(LAMP_MARK);
+    0
+}
+
+fn lamp_runs(_: ()) {
+    trace(LAMP_MARK);
+}
+
+impl Setup for Panel {
+    fn setup(self) -> impl Tick<Self> {
+        Panel::query()
+            .inject_resources(*Keys::MUT)
+            .init_state(panel_boot)
+            .map(panel_press)
+            .build()
+    }
+}
+
+impl Setup for Lamp {
+    fn setup(self) -> impl Tick<Self> {
+        Lamp::query().init_state(lamp_boot).map(lamp_runs).build()
+    }
+}
+
+// The parent's init runs after its children: it sees what they made.
+fn desk_boot(args: (&u8, &u8)) -> u8 {
+    let (panel, keys) = args;
+    panel + keys
+}
+
+fn desk_reads(args: (&u8, &u8)) {
+    let (_, keys) = args;
+    SEEN_KEYS.with(|seen| seen.set(*keys));
+}
+
+const PANEL_MADE: u8 = 2 * PANEL_START + 1;
+const LAMP_THEN_PANEL: u32 = LAMP_MARK * TRACE_BASE + PANEL_MARK;
+
+/// What `init` and one `emit` of a `Desk` pipeline leave: the state of
+/// `Desk` and the children made, then the keys its system saw and the
+/// children that ran.
+fn check_desk(tick: &impl Tick<Desk>, state: u8, made: u32, keys: u8, ran: u32) {
+    let mut instance = Tick::<Desk>::init(tick, ());
+    assert_eq!(*Tick::<Desk>::state(tick, &instance), state);
+    assert_eq!(take_trace(), made);
+    Tick::<Desk>::emit(tick, (), &mut instance, ());
+    assert_eq!(SEEN_KEYS.with(Cell::get), keys);
+    assert_eq!(take_trace(), ran);
+}
+
+// Without `.forward` the child is not reached: its init and systems do not run.
+#[test]
+fn a_child_that_is_not_forwarded_does_not_run() {
+    let tick = Desk::query()
+        .inject_resources(*Panel::T & *Keys::T)
+        .init_state(desk_boot)
+        .map(desk_reads)
+        .build();
+    check_desk(&tick, 0, 0, 0, 0);
+}
+
+// The child's init runs before the parent's, its pipeline before the
+// systems placed after the step.
+#[test]
+fn a_forward_makes_and_runs_the_child() {
+    let tick = Desk::query()
+        .inject_resources(*Panel::T & *Keys::T)
+        .init_state(desk_boot)
+        .forward(Panel::MUT)
+        .map(desk_reads)
+        .build();
+    check_desk(
+        &tick,
+        PANEL_MADE,
+        PANEL_MARK,
+        PANEL_START + PANEL_STEP,
+        PANEL_MARK,
+    );
+}
+
+// Two `.forward` steps name one child. Its pipeline runs at each of them,
+// its init system runs once.
+#[test]
+fn a_child_forwarded_twice_is_initialised_once() {
+    let tick = Desk::query()
+        .inject_resources(*Panel::T & *Keys::T)
+        .init_state(desk_boot)
+        .forward(Panel::MUT)
+        .forward(Panel::MUT)
+        .map(desk_reads)
+        .build();
+    let ran = PANEL_MARK * TRACE_BASE + PANEL_MARK;
+    check_desk(
+        &tick,
+        PANEL_MADE,
+        PANEL_MARK,
+        PANEL_START + 2 * PANEL_STEP,
+        ran,
+    );
+}
+
+// A list sets the order of init and of the pipelines: not the order of
+// `Provides`. `T` names the child under `Get`, `MUT` the child under `Mut`.
+#[test]
+fn a_forward_list_sets_the_order_of_the_children() {
+    let tick = Desk::query()
+        .inject_resources(*Panel::T & *Keys::T)
+        .init_state(desk_boot)
+        .forward(Lamp::T & Panel::MUT)
+        .map(desk_reads)
+        .build();
+    check_desk(
+        &tick,
+        PANEL_MADE,
+        LAMP_THEN_PANEL,
+        PANEL_START + PANEL_STEP,
+        LAMP_THEN_PANEL,
+    );
+}
+
+// A child keeps the init place of the first `.forward` that names it.
+#[test]
+fn a_later_forward_does_not_move_the_init_of_a_child() {
+    let tick = Desk::query()
+        .inject_resources(*Panel::T & *Keys::T)
+        .init_state(desk_boot)
+        .forward(Lamp::T)
+        .forward(Panel::MUT & Lamp::T)
+        .map(desk_reads)
+        .build();
+    let ran = LAMP_THEN_PANEL * TRACE_BASE + LAMP_MARK;
+    check_desk(
+        &tick,
+        PANEL_MADE,
+        LAMP_THEN_PANEL,
+        PANEL_START + PANEL_STEP,
+        ran,
+    );
+}
+
+// A second emit runs the child again, over the state it kept.
+#[test]
+fn a_forwarded_child_keeps_its_state_between_emits() {
+    let tick = Desk::query()
+        .inject_resources(*Panel::T & *Keys::T)
+        .init_state(desk_boot)
+        .forward(Panel::MUT)
+        .map(desk_reads)
+        .build();
+    let mut instance = Tick::<Desk>::init(&tick, ());
+    Tick::<Desk>::emit(&tick, (), &mut instance, ());
+    Tick::<Desk>::emit(&tick, (), &mut instance, ());
+    assert_eq!(SEEN_KEYS.with(Cell::get), PANEL_START + 2 * PANEL_STEP);
 }
 
 #[test]

@@ -49,6 +49,7 @@ Aligned with `design.md` rules. Prefer these IDs in review notes. **R23 outranks
 | **R23** No copies | **One** descriptor names an operator set (`ClaimForm`, `ClaimDesc`, `CarrierDesc`, `FilterDesc`). The next trait is **one blanket**. Event state is `Get<State<Ev>>` / `Mut<State<Ev>>`: the state part of `Ev`'s slot (`ClaimLeaf`). This row wins over the others. | A second copy of `()` / `Get` / `Mut` / `Dyn` / `And` on the next trait; a `StateGet` / `StateMut` accessor; any new accessor that only repeats an existing one. |
 | **R24** One-line types | A type in a signature (`type` alias, associated type, return type) fits on **one** line at `max_width`. If it would wrap, name the inner piece on its owner until it fits. | Wrapping `Ctx<…>` / `Pipe<…>` / `MapList<…>` across lines instead of changing the signature. |
 | **R25** PhantomData | `PhantomData` is a **struct field** for a type the struct does not store. | `let _ = PhantomData::<T>` (or inside a discarded tuple) to pretend a generic is used. |
+| **R26** One-line `where` | Every `where` predicate fits on **one** line at `max_width`. Split a `+` chain or several bindings into separate predicates; name a long projection with an impl parameter or a small trait. | A predicate wrapped across lines (`T: Trait<\n …\n >,`, `F: A\n + B,`). |
 
 Also always: Borrowing (`At`/`Ix*`/`TakeMany`); no API `type` aliases; no god modules; one-crate PRs (`ph_beans`); push only when asked.
 
@@ -127,7 +128,7 @@ Do in this order. Each item is a small PR on `ph_beans` only.
 
 - Proc-macro derive: **only** `BeanInfo` + `At` / `EventInfo` / `ProxyInfo` (+ dyn/`proxy` links) — see design Derive + Proxy (**owner OK required** — R6). Not `Query` / `Setup` / `Module` / …
 - Root `physarum` package rewrite
-- Provided beans built by their own init system (today: `Default` only); injects in `init_state` (today: only on `emit`)
+- `.forward`: a child cannot inject its parent itself
 - `Dyn` views do not borrow resources yet; a module holds at most 4 beans (`Take` arity), 3 when it has injects (`AddItem` cap)
 - Derive for `EmitBit` (owner OK — R6); auto bit allocation. The clash check is done: `SlotOf` + `Bit<N>`
 

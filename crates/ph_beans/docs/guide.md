@@ -31,6 +31,10 @@ impl BeanInfo for Id {
 A bean a module provides needs `Default`, and so does its state: the module
 creates both when it makes an instance (`PipelineError<3>`).
 
+A bean without state names `NoState`: `type State = NoState;`. Only the
+library makes that value. `()` is not "no state": it is an ordinary state
+type, with an init function like any other.
+
 ### 2. Modules: provides and injects
 
 ```rust
@@ -123,6 +127,11 @@ changes the type, so a mistake is a build error with a code.
 
 - `.init_state` is called once (`PipelineError<1>`). A default state is
   `.init_state(|_| Default::default())`.
+- The init function returns the state of the module, nothing else
+  (`PipelineError<9>`). A module with a state is not built without it
+  (`NeedInit`).
+- A module with `State = NoState` takes no `.init_state`
+  (`PipelineError<9>`): it goes from its systems straight to `.build()`.
 - After an exclusive claim, the next `.inject_resources` needs a wait filter
   (`FilterError<2>`).
 - `Setup::setup` returns the pipeline as `impl Tick<Self>`.
@@ -191,7 +200,7 @@ impl BeanInfo for Ui {
     type Provides = ();
     type Injects = Dyn<Mut<Draw>, dyn Painter>; // #[inject(Draw::MUT as Painter)]
     type Beans = Dyn<Mut<Draw>, dyn Painter>;
-    type State = ();
+    type State = NoState;
 }
 impl At<Draw> for Ui { type Ix = Ix<0>; }
 
@@ -199,7 +208,6 @@ fn tint(painter: &mut dyn Painter) { painter.tint(5); }
 
 let tick = Ui::query()
     .inject_resources(Draw::MUT) // the ordinary claim
-    .init_state(|_| ())
     .map(tint)
     .build();
 
@@ -224,12 +232,70 @@ tick.emit((), &mut ui, &mut draw);
 - `Beans` must list the module's entries exactly: the view of a claim is read
   from the entry at the bean's `At` index.
 
+### 8b. Running a child
+
+A bean a module provides can have its own pipeline. The parent names it with
+`.forward`, and the library runs it: a system never emits.
+
+```rust
+// Desk provides Panel and the Keys that Panel injects.
+impl BeanInfo for Desk {
+    type Provides = (Mut<Panel>, Mut<Keys>);
+    type Injects = ();
+    type Beans = (Mut<Panel>, Mut<Keys>);
+    type State = u8;
+}
+
+impl Setup for Panel { /* its own pipeline; Injects = Mut<Keys> */ }
+
+Desk::query()
+    .inject_resources(*Panel::T & *Keys::T)
+    .init_state(desk_boot)
+    .filter(Update::ON)
+    .map(before)          // a system of Desk
+    .forward(Panel::MUT)  // the pipeline of Panel, for the same event
+    .map(after)
+    .build()
+```
+
+- `.forward(P::MUT)` sits under the current filter like a system. When the
+  filter matches the emitted event, the pipeline of `P` runs for that same
+  event; `P`'s own filters decide which of its systems run. A child is not
+  reached without this step.
+- A deferred event starts at the parent. When it runs, each level forwards
+  it to its child with a direct call; the child tests the same path against
+  its own filters.
+- `.forward` takes several children joined with `&`:
+  `.forward(Panel::T & Dock::MUT)`.
+- The marker of a `.forward` is the marker of the provide: `P::T` names a
+  child provided under `Get`, `P::MUT` a child provided under `Mut`
+  (`PipelineError<8>` otherwise). The call site then says what the child
+  can do. A child under `Get` changes nothing of its own: every bean it
+  provides is under `Get` too (`PipelineError<7>` otherwise), and its
+  systems can change only what it injects. A child under `Mut` may change
+  its provides. The state of a child is made by its init and no system
+  changes it, under either marker. The order written is the order their
+  pipelines run in, and the order of their init.
+- `Tick::init` of the parent runs the init system of every forwarded child
+  first, then the parent's own init function: the parent sees what its
+  children made. A child named by several `.forward` steps is initialised
+  once, at the place of the first step that names it; its pipeline runs at
+  each step.
+- The child's injects are beans of the parent: its provides or its own
+  injects. They are lent to the child's init and to its systems.
+- The parent keeps a node for each provide: the bean's slot and the nodes of
+  the bean's own provides. The whole tree of a module is one value.
+- `P` needs `Setup` and `Default`, and is provided under `Mut`. Anything else
+  is `PipelineError<6>`.
+- The child's systems are inlined into the parent's emit (PERF-1, probe
+  `emit_into_child`).
+
 ### 9. Full example
 
 ```rust
 use ph_beans::{
-    At, BeanInfo, Bit, EmitBit, EventBuf, EventInfo, EventReg, Get, Ix, Marker, Mut, Query,
-    Setup, Slot, SlotOf, Tick,
+    At, BeanInfo, Bit, EmitBit, EventBuf, EventInfo, EventReg, Get, Ix, Marker, Mut, NoState,
+    Query, Setup, Slot, SlotOf, Tick,
 };
 
 // Beans: zero-sized types. The data of a bean is its state.
@@ -268,7 +334,7 @@ impl BeanInfo for Draw {
     type Provides = ();
     type Injects = ();
     type Beans = ();
-    type State = ();
+    type State = NoState;
 }
 
 impl EventInfo for Update {
@@ -364,7 +430,7 @@ impl BeanInfo for Logic {
     type Provides = ();
     type Injects = Mut<Keys>;
     type Beans = Mut<Keys>;
-    type State = ();
+    type State = NoState;
 }
 
 impl At<Keys> for Logic {
@@ -379,7 +445,6 @@ impl Setup for Logic {
     fn setup(self) -> impl Tick<Self> {
         Logic::query()
             .inject_resources(*Keys::MUT)
-            .init_state(|_| ())
             .map(grow)
             .build()
     }
@@ -405,7 +470,7 @@ fn main() {
 
 Every failure is a build error that names a code; the tests match the code.
 The table is [`errors.md`](errors.md). Codes in use: `FilterError<1>`, `<2>`,
-`<4>`–`<7>`, `PipelineError<1>`–`<5>`, `ClaimError<T, 1>` (bean `T` named
+`<4>`–`<7>`, `PipelineError<1>`–`<6>`, `ClaimError<T, 1>` (bean `T` named
 twice in one claim list) and `ClaimError<T, 2>` (shared and exclusive).
 
 ## Part 2 — planned: `ph_derive`
@@ -455,6 +520,10 @@ trait Painter { fn paint(&self); }
 - The bit registry is generated through hidden macros: the event's derive
   emits a macro, and the module's derive calls it with the registry and the
   position.
+- A child takes the registry of its parent. `EventReg` stays in `ph_beans`:
+  it is what lets `Tick::emit` reject an event of another registry. The
+  derive of the parent writes `impl EventReg` for the module and for every
+  child it provides, so a child declares nothing.
 - `dynamic` is set on the trait. The inject is `#[inject(Draw::T as Painter)]`;
   the view is taken from the bean's state (`*Id::T`) when that state
   implements the trait.
@@ -466,10 +535,10 @@ the format of derive errors.
 
 In `ph_beans`:
 
-1. The module tree at run time. A parent keeps a bean and a state for each
-   provide. It does not run the provided bean's pipeline or its init system,
-   so a bean under `Get` starts at `Default` and nothing can set it.
-2. The registry of a child comes from its own `EventReg`, not from its parent.
+1. Limits of `.forward`. A child cannot inject its parent itself, nor a bean as a trait. The parent does not check that
+   the child's `EventReg` names the same registry.
+2. A child names its registry by hand (`impl EventReg`). The derive of its
+   parent will write it (section 12).
 3. `ph_derive` does not exist, so the `DynObject` impl of a `dynamic` trait
    is written by hand.
 4. Proxy: no code.

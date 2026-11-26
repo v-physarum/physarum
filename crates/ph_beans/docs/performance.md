@@ -76,6 +76,7 @@ allocation and no unwind path.
 | --- | --- | --- |
 | `emit_direct` | two maps under `Update`, emit `Update` | no branch, no load, 1 store (the two systems; no buffer is read) |
 | `emit_without_declared` | one map under `Update`, one under `Update[Main]`, no `.emit` | no branch, no load, 1 store: no buffer is read |
+| `emit_into_child` | `Shell` forwards `Update` to the `Inner` it provides | no branch, no load, 1 store: the child's system, inlined |
 | `emit_with_deferred` | the same maps and `.emit(Update[Main])`, emit `Update` | no virtual call, allocation or unwind path in the function and in the buffer loop |
 
 A call into a `ph_beans` helper that is not inlined shows up as extra stores

@@ -7,15 +7,13 @@ use core::cell::Cell;
 
 use ph_beans::{
     At, BeanInfo, Bit, Ctx, Dense, EmitBit, EmitIx, EventBuf, EventInfo, EventReg, Gate, Init, Ix,
-    List, MapEntry, Marker, ModuleDesc, Mut, On, Pipe, Query, SlotOf, Sparse, Tick,
+    List, MapEntry, Marker, ModuleDesc, Mut, NoState, On, Pipe, Query, Setup, SlotOf, Sparse, Tick,
 };
 
 thread_local! {
     static HITS: Cell<u8> = const { Cell::new(0) };
     static STEP: Cell<u8> = const { Cell::new(0) };
 }
-
-fn idle(_: ()) {}
 
 /// Registry of the emit bits used here.
 struct Events;
@@ -31,7 +29,7 @@ impl BeanInfo for Sched {
     type Provides = (Mut<Update>,);
     type Injects = ();
     type Beans = (Mut<Update>,);
-    type State = ();
+    type State = NoState;
 }
 
 impl EventReg for Sched {
@@ -63,7 +61,7 @@ impl BeanInfo for Graphics {
     type Provides = ();
     type Injects = ();
     type Beans = ();
-    type State = ();
+    type State = NoState;
 }
 
 impl EventInfo for Graphics {
@@ -83,7 +81,7 @@ impl BeanInfo for Main {
     type Provides = ();
     type Injects = ();
     type Beans = ();
-    type State = ();
+    type State = NoState;
 }
 
 impl EventInfo for Main {
@@ -105,7 +103,7 @@ impl BeanInfo for Sub {
     type Provides = ();
     type Injects = ();
     type Beans = ();
-    type State = ();
+    type State = NoState;
 }
 
 impl EventInfo for Sub {
@@ -125,7 +123,7 @@ impl BeanInfo for Keys {
     type Provides = ();
     type Injects = ();
     type Beans = ();
-    type State = ();
+    type State = NoState;
 }
 
 impl At<Keys> for Sched {
@@ -237,7 +235,6 @@ fn emitted_branch_runs_and_the_other_is_skipped() {
         .filter(Update::ON[Main::ON])
         .map(bump_main)
         .emit(Update::ON[Main::ON])
-        .init_state(idle)
         .build();
     let mut instance = Tick::<Sched>::init(&tick, ());
     Tick::<Sched>::emit(&tick, Update::ON[Main::ON], &mut instance, ());
@@ -260,7 +257,6 @@ fn nine_maps_run_across_two_groups() {
         .map(map_6)
         .map(map_7)
         .map(map_8)
-        .init_state(idle)
         .build();
     let mut instance = Tick::<Sched>::init(&tick, ());
     Tick::<Sched>::emit(&tick, (), &mut instance, ());
@@ -287,7 +283,6 @@ fn sixteen_maps_fit_in_the_list() {
         .map(map_13)
         .map(map_14)
         .map(map_15)
-        .init_state(idle)
         .build();
     let mut instance = Tick::<Sched>::init(&tick, ());
     Tick::<Sched>::emit(&tick, (), &mut instance, ());
@@ -303,7 +298,6 @@ fn a_deferred_event_runs_on_the_next_emit() {
         .filter(Update::ON[Main::ON])
         .map(bump_main)
         .emit(Update::ON[Main::ON])
-        .init_state(idle)
         .build();
     let mut instance = Tick::<Sched>::init(&tick, ());
     Tick::<Sched>::defer(&tick, Update::ON[Main::ON], &mut instance);
@@ -323,7 +317,6 @@ fn a_deferred_event_runs_after_the_direct_maps_and_each_map_runs_once() {
         .filter(Update::ON[Main::ON])
         .map(bump_main)
         .emit(Update::ON[Main::ON])
-        .init_state(idle)
         .build();
     let mut instance = Tick::<Sched>::init(&tick, ());
     Tick::<Sched>::defer(&tick, Update::ON[Main::ON], &mut instance);
@@ -346,7 +339,6 @@ fn deferred_events_run_in_defer_order() {
         .map(map_0)
         .emit(Update::ON[Main::ON])
         .emit(Update::ON[Graphics::ON])
-        .init_state(idle)
         .build();
     let mut instance = Tick::<Sched>::init(&tick, ());
     Tick::<Sched>::defer(&tick, Update::ON[Graphics::ON], &mut instance);
@@ -368,7 +360,6 @@ fn a_deferred_path_runs_the_maps_of_its_parents() {
         .filter(Update::ON[Graphics::ON])
         .map(bump_graphics)
         .emit(Update::ON[Main::ON[Sub::ON]])
-        .init_state(idle)
         .build();
     let mut instance = Tick::<Sched>::init(&tick, ());
     Tick::<Sched>::defer(&tick, Update::ON[Main::ON[Sub::ON]], &mut instance);
@@ -386,7 +377,6 @@ fn a_deferred_event_waits_for_its_own_scope() {
         .filter(Hi::ON)
         .map(bump_graphics)
         .emit(Update::ON[Main::ON])
-        .init_state(idle)
         .build();
     let mut instance = Tick::<Sched>::init(&tick, ());
     Tick::<Sched>::defer(&tick, Update::ON[Main::ON], &mut instance);
@@ -402,7 +392,6 @@ fn hidden_with_emit() -> impl Tick<Sched> {
         .filter(Update::ON[Main::ON])
         .map(bump_main)
         .emit(Update::ON[Main::ON])
-        .init_state(idle)
         .build()
 }
 
@@ -410,7 +399,6 @@ fn hidden_without_emit() -> impl Tick<Sched> {
     Sched::query()
         .filter(Update::ON[Main::ON])
         .map(bump_main)
-        .init_state(idle)
         .build()
 }
 
@@ -444,6 +432,89 @@ fn a_hidden_tick_still_describes_its_pipeline() {
     assert!(!desc.reads_queue::<On<Update, ()>>());
 }
 
+/// Provides `Leaf`, a bean with its own pipeline, and the event `Update`.
+struct Host;
+#[derive(Default)]
+struct Leaf;
+
+impl BeanInfo for Host {
+    type Provides = (Mut<Leaf>, Mut<Update>);
+    type Injects = ();
+    type Beans = (Mut<Leaf>, Mut<Update>);
+    type State = NoState;
+}
+
+impl BeanInfo for Leaf {
+    type Provides = ();
+    type Injects = ();
+    type Beans = ();
+    type State = NoState;
+}
+
+impl At<Leaf> for Host {
+    type Ix = Ix<0>;
+}
+
+impl At<Update> for Host {
+    type Ix = Ix<1>;
+}
+
+impl EventReg for Host {
+    type Reg = Events;
+}
+
+impl EventReg for Leaf {
+    type Reg = Events;
+}
+
+impl Setup for Leaf {
+    fn setup(self) -> impl Tick<Self> {
+        Leaf::query()
+            .filter(Update::ON[Main::ON])
+            .map(bump_main)
+            .build()
+    }
+}
+
+// `Host` sends what it gets under `Update` on to `Leaf`. `Leaf` listens to
+// `Update[Main]`: its own filter decides, for the same event.
+#[test]
+fn a_forward_passes_the_emitted_event_to_the_child() {
+    reset_hits();
+    let tick = Host::query().filter(Update::ON).forward(Leaf::MUT).build();
+    let mut instance = Tick::<Host>::init(&tick, ());
+    Tick::<Host>::emit(&tick, Update::ON[Main::ON], &mut instance, ());
+    assert_eq!(HITS.with(Cell::get), 10);
+    // The child gets the event and has no system under it.
+    Tick::<Host>::emit(&tick, Update::ON[Graphics::ON], &mut instance, ());
+    assert_eq!(HITS.with(Cell::get), 10);
+    // The forward is under `Update`: another root does not reach the child.
+    Tick::<Host>::emit(&tick, Graphics::ON, &mut instance, ());
+    assert_eq!(HITS.with(Cell::get), 10);
+}
+
+// A deferred event starts at the parent. When it runs, each level forwards
+// it to its child with a direct call, and the child tests the same path.
+#[test]
+fn a_deferred_event_is_forwarded_to_the_child() {
+    reset_hits();
+    let tick = Host::query()
+        .filter(Update::ON)
+        .forward(Leaf::MUT)
+        .emit(Update::ON[Main::ON])
+        .build();
+    let mut instance = Tick::<Host>::init(&tick, ());
+    Tick::<Host>::defer(&tick, Update::ON[Main::ON], &mut instance);
+    assert_eq!(HITS.with(Cell::get), 0);
+    // The direct `Update` reaches `Leaf` and runs nothing there. The
+    // deferred `Update[Main]` then goes the same way and runs `bump_main`.
+    Tick::<Host>::emit(&tick, Update::ON, &mut instance, ());
+    assert_eq!(HITS.with(Cell::get), 10);
+    // The buffer is empty again.
+    Tick::<Host>::emit(&tick, Update::ON, &mut instance, ());
+    assert_eq!(HITS.with(Cell::get), 10);
+}
+
 #[test]
 fn deferring_one_event_twice_runs_it_twice() {
     reset_hits();
@@ -451,7 +522,6 @@ fn deferring_one_event_twice_runs_it_twice() {
         .filter(Update::ON[Main::ON])
         .map(bump_main)
         .emit(Update::ON[Main::ON])
-        .init_state(idle)
         .build();
     let mut instance = Tick::<Sched>::init(&tick, ());
     Tick::<Sched>::defer(&tick, Update::ON[Main::ON], &mut instance);
@@ -465,8 +535,6 @@ fn touch_update(state: &mut EventBuf) {
     HITS.with(|hits| hits.set(hits.get() + 1));
 }
 
-fn idle_with_state(_: &mut EventBuf) {}
-
 #[test]
 fn star_mut_lends_the_event_state_from_its_slot() {
     reset_hits();
@@ -474,7 +542,6 @@ fn star_mut_lends_the_event_state_from_its_slot() {
         .filter(Update::ON)
         .inject_resources(*Update::MUT)
         .map(touch_update)
-        .init_state(idle_with_state)
         .build();
     let mut instance = Tick::<Sched>::init(&tick, ());
     Tick::<Sched>::emit(&tick, Update::ON, &mut instance, ());
@@ -487,7 +554,7 @@ impl BeanInfo for Hi {
     type Provides = ();
     type Injects = ();
     type Beans = ();
-    type State = ();
+    type State = NoState;
 }
 
 impl EventInfo for Hi {
@@ -510,7 +577,6 @@ fn a_high_emit_bit_still_selects_the_branch() {
         .filter(Update::ON[Hi::ON])
         .map(bump_graphics)
         .emit(Update::ON[Hi::ON])
-        .init_state(idle)
         .build();
     let mut instance = Tick::<Sched>::init(&tick, ());
     Tick::<Sched>::emit(&tick, Update::ON[Hi::ON], &mut instance, ());

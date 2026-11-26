@@ -100,15 +100,32 @@ pub trait InitStateStep<H> {
     fn init_state(self, handler: H) -> Self::Out;
 }
 
-// Generics: `E` event, `C` context, `H` init handler.
-impl<E, C, H> InitStateStep<H> for Init<E, C>
+/// What an init function returns, `Self`, is the state `S` of its module.
+///
+/// A module whose state is [`NoState`](crate::NoState) has no such
+/// function: nothing outside the library makes that value.
+/// Generics: `S` state of the module.
+#[doc(hidden)]
+#[diagnostic::on_unimplemented(
+    message = "pipeline not ready: Descriptor::Status = `PipelineError<9>` (init returns `{Self}`)",
+    label = "fix Descriptor::Status",
+    note = "the init function does not return the module state `{S}`; PipelineError<9> — docs/errors.md"
+)]
+pub trait InitOf<S> {}
+
+// Generics: `S` state.
+impl<S> InitOf<S> for S {}
+
+// Generics: `E` event, `C` context, `H` init handler, `R` what it returns.
+impl<E, C, H, R> InitStateStep<H> for Init<E, C>
 where
     Self: ApplyPatch<SetInit<H>>,
     C: Context,
     C::Bean: BeanInfo,
     C::Tick: FreshInit,
     C::Args: Claim<C::Bean>,
-    H: for<'a> Fn(<C::Args as Claim<C::Bean>>::Arg<'a>) -> <C::Bean as BeanInfo>::State,
+    H: for<'a> Fn(<C::Args as Claim<C::Bean>>::Arg<'a>) -> R,
+    R: InitOf<<C::Bean as BeanInfo>::State>,
 {
     type Out = <Self as ApplyPatch<SetInit<H>>>::Out;
 
@@ -124,6 +141,8 @@ impl<E, C> Init<E, C> {
     /// The function runs once per instance, in [`Tick::init`](crate::Tick::init):
     /// it sees the provided states and the injects passed there.
     /// A default state is `.init_state(|_| Default::default())`.
+    /// A module with `State = NoState` takes no init function
+    /// ([`PipelineError`](crate::PipelineError)`<9>`) and is built without one.
     /// A second call is [`PipelineError`](crate::PipelineError)`<1>` (see `docs/errors.md`).
     /// ```compile_fail
     /// use ph_beans::{BeanInfo, Query};

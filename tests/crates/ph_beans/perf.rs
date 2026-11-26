@@ -60,6 +60,18 @@ fn perf_1_a_pipeline_without_emit_never_reads_the_queue() {
     });
 }
 
+// PERF-1 holds across beans: a `.forward` into a provided bean is the
+// child's system, inlined into the parent's emit.
+#[test]
+fn perf_1_a_forward_into_a_child_is_a_direct_call() {
+    on("emit_into_child", |body| {
+        plain(body);
+        body.assert_no_branch();
+        body.assert_max_loads(0);
+        body.assert_max_stores(DIRECT_STORES);
+    });
+}
+
 // PERF-1, step 2: the queue is walked in a loop of plain compares and
 // stores. Nothing is called, allocated or unwound, in the loop or around it.
 #[test]

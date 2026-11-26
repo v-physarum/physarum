@@ -16,7 +16,7 @@ pub mod descriptor;
 pub mod filter;
 pub mod query;
 
-pub use bean::{BeanInfo, EventInfo, FromParent, Module, OfInject, OfParent, OfProvide};
+pub use bean::{BeanInfo, EventInfo, FromParent, Module, NoState, OfInject, OfParent, OfProvide};
 pub use borrow::{At, Ix, Off, Take, TakeMany};
 pub use context::{
     CarrierDesc, Context, ContextTick, Ctx, DeferState, End, EventBuf, Full, Group, Head, List,
@@ -31,4 +31,4 @@ pub use filter::{
     And, ApplyFilter, Bit, BitIx, Dense, EmitBit, EmitIx, EmitMask, EventReg, Gate, HostedBy,
     InReg, NestOk, Not, On, Or, PathNode, PathStep, PathStrategy, SlotOf, Sparse,
 };
-pub use query::{Built, Claim, ClaimShape, Init, Query, Setup, Slot, Tick, Update};
+pub use query::{Built, Claim, ClaimShape, Init, Node, Query, Setup, Slot, Tick, Update};

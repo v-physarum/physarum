@@ -5,13 +5,34 @@
 //! every provide names its access ([`Marked`]), and every provided bean can
 //! be created ([`Creates`]). The borrows of one call are in `query/lend.rs`.
 
-use crate::bean::BeanInfo;
+use crate::bean::{BeanInfo, Blank};
 use crate::core::shape::{Shape, SlotType};
 use crate::descriptor::{Exclusive, Named, Provided, Shared, Unmarked};
-use crate::query::lend::Held;
+use crate::query::lend::{Cold, Held};
 use crate::query::slot::Slot;
 
-/// Type map: the slot a module owns for one provided bean.
+/// What a module owns for one provided bean: the bean's slot, and what that
+/// bean owns for its own provides.
+///
+/// The tree of a module's beans is one value: a parent holds the nodes of its
+/// children, and each child holds its own. Generics: `P` bean ([`Stored`]).
+#[doc(hidden)]
+pub struct Node<P: Stored> {
+    pub(crate) slot: Slot<P>,
+    pub(crate) provides: P::States,
+}
+
+// Generics: `P` bean.
+impl<P> Default for Node<P>
+where
+    P: Stored<State: Blank> + Default,
+{
+    fn default() -> Self {
+        Self { slot: Slot::default(), provides: Default::default() }
+    }
+}
+
+/// Type map: the node a module owns for one provided bean.
 pub struct StateOf;
 
 /// How a module keeps the slot of a provide with access `Self`.
@@ -19,28 +40,48 @@ pub struct StateOf;
 pub trait Keeps {
     /// The kept form of slot `S`.
     type Kept<S>;
+    /// How one call sees slot `S`: what `.forward` takes for the child in
+    /// it. Generics: `'a` the call.
+    type Seen<'a, S: 'a>;
+    /// The slot of a child, for the run of that child.
+    fn open<'a, S: 'a>(seen: Self::Seen<'a, S>) -> &'a mut S;
 }
 
 // A shared provide is made by `init` and never changes.
 impl Keeps for Shared {
     type Kept<S> = Frozen<S>;
+    type Seen<'a, S: 'a> = Cold<'a, S>;
+
+    fn open<'a, S: 'a>(seen: Self::Seen<'a, S>) -> &'a mut S {
+        seen.open()
+    }
 }
 
 impl Keeps for Exclusive {
     type Kept<S> = S;
+    type Seen<'a, S: 'a> = &'a mut S;
+
+    fn open<'a, S: 'a>(seen: Self::Seen<'a, S>) -> &'a mut S {
+        seen
+    }
 }
 
 // Never built: [`Marked`] rejects the module first.
 impl Keeps for Unmarked {
     type Kept<S> = S;
+    type Seen<'a, S: 'a> = &'a mut S;
+
+    fn open<'a, S: 'a>(seen: Self::Seen<'a, S>) -> &'a mut S {
+        seen
+    }
 }
 
 // Generics: `E` entry of `Provides` ([`Provided`]).
 impl<E> SlotType<E> for StateOf
 where
-    E: Provided<Bean: BeanInfo<State: Default> + Default, Access: Keeps>,
+    E: Provided<Bean: Stored<State: Blank> + Default, Access: Keeps>,
 {
-    type Out = <E::Access as Keeps>::Kept<Slot<E::Bean>>;
+    type Out = <E::Access as Keeps>::Kept<Node<E::Bean>>;
 }
 
 /// A slot provided under [`Get`](crate::Get): it is lent shared only. Generics: `S` slot.
@@ -59,7 +100,7 @@ pub trait Owns<'a> {
 }
 
 // Generics: `P` bean.
-impl<'a, P: BeanInfo + 'a> Owns<'a> for Slot<P> {
+impl<'a, P: Stored + 'a> Owns<'a> for Node<P> {
     type Lent = Held<'a, Self>;
 
     fn lend(&'a mut self) -> Self::Lent {
@@ -69,10 +110,10 @@ impl<'a, P: BeanInfo + 'a> Owns<'a> for Slot<P> {
 
 // Generics: `S` slot.
 impl<'a, S: 'a> Owns<'a> for Frozen<S> {
-    type Lent = &'a S;
+    type Lent = Cold<'a, S>;
 
     fn lend(&'a mut self) -> Self::Lent {
-        &self.0
+        Cold::new(&mut self.0)
     }
 }
 
@@ -95,6 +136,28 @@ pub trait Marked: BeanInfo {}
 // Generics: `B` module.
 #[diagnostic::do_not_recommend]
 impl<B> Marked for B where B: BeanInfo<Provides: Shape<MarkOf>> {}
+
+/// Type map: an entry of `Provides` under [`Get`](crate::Get).
+pub struct ReadOf;
+
+// Generics: `E` entry of `Provides` ([`Provided`]).
+impl<E: Provided<Access = Shared>> SlotType<E> for ReadOf {
+    type Out = ();
+}
+
+/// A module that changes nothing of its own after `init`: every entry of
+/// [`BeanInfo::Provides`] is `Get<P>`. Its systems can change only what the
+/// module injects. `.forward(P::T)` asks this of the child `P`.
+#[diagnostic::on_unimplemented(
+    message = "pipeline not ready: Descriptor::Status = `PipelineError<7>` (child `{Self}`)",
+    label = "fix Descriptor::Status",
+    note = "a child forwarded under `T` provides a bean under `Mut`; PipelineError<7> — docs/errors.md"
+)]
+pub trait ReadOnly: BeanInfo {}
+
+// Generics: `B` module.
+#[diagnostic::do_not_recommend]
+impl<B> ReadOnly for B where B: BeanInfo<Provides: Shape<ReadOf>> {}
 
 /// A module can create the slots of its provides.
 #[diagnostic::on_unimplemented(

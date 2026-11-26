@@ -37,8 +37,8 @@ impl OfInject<0> {
 /// ```compile_fail
 /// use ph_beans::{BeanInfo, FromParent, Get, Mut, OfProvide};
 /// struct Logic; struct App;
-/// impl BeanInfo for Logic { type Provides=(); type Injects=(); type Beans=(); type State=(); }
-/// impl BeanInfo for App { type Provides=(Get<Logic>,); type Injects=(); type Beans=(Get<Logic>,); type State=(); }
+/// impl BeanInfo for Logic { type Provides=(); type Injects=(); type Beans=(); type State=ph_beans::NoState; }
+/// impl BeanInfo for App { type Provides=(Get<Logic>,); type Injects=(); type Beans=(Get<Logic>,); type State=ph_beans::NoState; }
 /// fn mount<C: FromParent<App, OfProvide>>() {}
 /// mount::<Mut<Logic>>();
 /// ```

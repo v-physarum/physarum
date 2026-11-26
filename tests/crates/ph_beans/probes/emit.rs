@@ -5,7 +5,7 @@
 
 #![allow(unused)]
 
-use ph_beans::{At, BeanInfo, Bit, EmitBit, EventBuf, EventInfo, EventReg, Ix, Marker, Mut, Owned, Query, Slot, SlotOf, Tick};
+use ph_beans::{At, BeanInfo, Bit, EmitBit, EventBuf, EventInfo, EventReg, Ix, Marker, Mut, Owned, Query, Node, Setup, SlotOf, Tick, NoState};
 
 #[derive(Default)]
 pub struct First;
@@ -43,14 +43,14 @@ impl BeanInfo for Main {
     type Provides = ();
     type Injects = ();
     type Beans = ();
-    type State = ();
+    type State = NoState;
 }
 
 impl BeanInfo for App {
     type Provides = (Mut<First>, Mut<Second>, Mut<Update>);
     type Injects = ();
     type Beans = (Mut<First>, Mut<Second>, Mut<Update>);
-    type State = ();
+    type State = NoState;
 }
 
 impl At<First> for App {
@@ -96,7 +96,7 @@ impl EventReg for App {
 }
 
 /// One instance of `App`.
-pub type Instance = Owned<(), (Slot<First>, Slot<Second>, Slot<Update>)>;
+pub type Instance = Owned<NoState, (Node<First>, Node<Second>, Node<Update>)>;
 
 fn write_first(states: (&mut u32, &mut u32)) {
     *states.0 = 11;
@@ -115,7 +115,6 @@ fn write_main(states: (&mut u32, &mut u32)) {
 pub fn emit_direct(instance: &mut Instance) {
     let tick = App::query()
         .inject_resources(*First::MUT & *Second::MUT)
-        .init_state(|_| ())
         .filter(Update::ON)
         .map(write_first)
         .map(write_second)
@@ -129,7 +128,6 @@ pub fn emit_direct(instance: &mut Instance) {
 pub fn emit_with_deferred(instance: &mut Instance) {
     let tick = App::query()
         .inject_resources(*First::MUT & *Second::MUT)
-        .init_state(|_| ())
         .filter(Update::ON)
         .map(write_first)
         .filter(Update::ON[Main::ON])
@@ -145,11 +143,74 @@ pub fn emit_with_deferred(instance: &mut Instance) {
 pub fn emit_without_declared(instance: &mut Instance) {
     let tick = App::query()
         .inject_resources(*First::MUT & *Second::MUT)
-        .init_state(|_| ())
         .filter(Update::ON)
         .map(write_first)
         .filter(Update::ON[Main::ON])
         .map(write_main)
         .build();
     Tick::<App>::emit(&tick, Update::ON, instance, ());
+}
+
+/// A child with its own pipeline: it writes into the `Second` it injects.
+#[derive(Default)]
+pub struct Inner;
+/// Provides `Inner` and the `Second` that `Inner` injects.
+pub struct Shell;
+
+impl BeanInfo for Inner {
+    type Provides = ();
+    type Injects = Mut<Second>;
+    type Beans = Mut<Second>;
+    type State = NoState;
+}
+
+impl BeanInfo for Shell {
+    type Provides = (Mut<Inner>, Mut<Second>);
+    type Injects = ();
+    type Beans = (Mut<Inner>, Mut<Second>);
+    type State = NoState;
+}
+
+impl At<Second> for Inner {
+    type Ix = Ix<0>;
+}
+
+impl At<Inner> for Shell {
+    type Ix = Ix<0>;
+}
+
+impl At<Second> for Shell {
+    type Ix = Ix<1>;
+}
+
+impl EventReg for Inner {
+    type Reg = Events;
+}
+
+impl EventReg for Shell {
+    type Reg = Events;
+}
+
+fn write_inner(second: &mut u32) {
+    *second = 33;
+}
+
+impl Setup for Inner {
+    fn setup(self) -> impl Tick<Self> {
+        Inner::query()
+            .inject_resources(*Second::MUT)
+            .filter(Update::ON)
+            .map(write_inner)
+            .build()
+    }
+}
+
+/// `Shell` sends `Update` on to the `Inner` it provides.
+#[unsafe(no_mangle)]
+pub fn emit_into_child(instance: &mut Owned<NoState, (Node<Inner>, Node<Second>)>) {
+    let tick = Shell::query()
+        .filter(Update::ON)
+        .forward(Inner::MUT)
+        .build();
+    Tick::<Shell>::emit(&tick, Update::ON, instance, ());
 }

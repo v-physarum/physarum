@@ -7,8 +7,10 @@
 
 use core::marker::PhantomData;
 
-use crate::bean::BeanInfo;
+use crate::bean::{BeanInfo, Blank};
 use crate::borrow::{Ix, Lend, Take, TakeView};
+use crate::query::lend::Cold;
+use crate::query::store::{Node, Stored};
 
 /// A bean and its state.
 ///
@@ -32,10 +34,10 @@ impl<P: BeanInfo> Slot<P> {
 impl<P> Default for Slot<P>
 where
     P: BeanInfo + Default,
-    P::State: Default,
+    P::State: Blank,
 {
     fn default() -> Self {
-        Self { bean: P::default(), state: P::State::default() }
+        Self { bean: P::default(), state: P::State::blank() }
     }
 }
 
@@ -114,6 +116,32 @@ where
 
     fn project(self) -> Self::Out {
         K::get_mut(self)
+    }
+}
+
+// A provided bean is kept as a [`Node`]: the claim reads its slot. Under
+// `Get` the node is lent [`Cold`], and a claim reads it shared.
+// Generics: `P` bean, `K` part.
+impl<'a, P: Stored, K: Part> Project<K> for Cold<'a, Node<P>>
+where
+    K::Of<P>: 'a,
+{
+    type Out = &'a K::Of<P>;
+
+    fn project(self) -> Self::Out {
+        K::get(&self.read().slot)
+    }
+}
+
+// Generics: `P` bean, `K` part.
+impl<'a, P: Stored, K: Part> Project<K> for &'a mut Node<P>
+where
+    K::Of<P>: 'a,
+{
+    type Out = &'a mut K::Of<P>;
+
+    fn project(self) -> Self::Out {
+        K::get_mut(&mut self.slot)
     }
 }
 

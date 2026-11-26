@@ -7,11 +7,9 @@
 //! is the entry's path against the map's filter.
 //! Path gates use the same const ([`crate::Gate::path_plan`]).
 
-use core::marker::PhantomData;
-
-use crate::context::ScopeHost;
-use crate::context::list::{ConstEmit, Hand};
+use crate::context::list::{Hand, Pass};
 use crate::context::maps::MapList;
+use crate::context::stages::Makes;
 use crate::context::{Owned, Pipe, Sys};
 use crate::descriptor::ModuleDesc;
 use crate::filter::eval::Collect;
@@ -20,6 +18,7 @@ use crate::query::args::ClaimShape;
 use crate::query::boot::InitSys;
 use crate::query::deferred::{DeferInto, Drain, Queued};
 use crate::query::lend::Beans;
+use crate::query::sees::Sees;
 use crate::query::store::Stored;
 
 /// The systems of module `B`, run over one instance at a time.
@@ -35,15 +34,17 @@ where
     /// Makes one instance: provided states, then the init system once.
     fn boot(&self, injects: <B::Injects as ClaimShape>::Lent<'_>) -> Owned<B::State, B::States>;
 
-    /// Runs emit `M` over `owned`: first the maps `M` matches (const), then
-    /// the maps of events deferred into `M`'s scope (run-time bits). Each map
-    /// borrows from the provided states of `owned` and from `injects`.
+    /// Runs walk `W` over the provided `states` of one instance: the maps
+    /// the walk keeps, then, after a direct emit, the maps of the events
+    /// deferred into its scope (run-time bits). Each map borrows from
+    /// `states` and `injects`.
     ///
-    /// Generics: `M` emit tree ([`Collect`]).
-    fn drive<M: Collect + ScopeHost>(
+    /// Generics: `W` walk ([`Pass`]).
+    fn pass<W: Pass>(
         &self,
-        owned: &mut Owned<B::State, B::States>,
+        states: &mut B::States,
         injects: <B::Injects as ClaimShape>::Lent<'_>,
+        walk: W,
     );
 
     /// Queues `M` in `owned`. The pipeline's `.emit` must declare it (`FilterError<6>`).
@@ -58,30 +59,40 @@ impl<B, A, H, N, E, S> Drive<B> for Pipe<Sys<B, A, H>, MapList<N, E, S>>
 where
     E: Collect + for<'s, 'x> Drain<B, <B as Beans<'s, 'x>>::Full>,
     B: Stored<Injects: ClaimShape> + for<'s, 'x> Beans<'s, 'x>,
-    for<'x> H:
-        InitSys<B, A, States = B::States, Injects<'x> = <B::Injects as ClaimShape>::Lent<'x>>,
+    H: InitSys<B, A>,
+    for<'s, 'x> A: Sees<B, <B as Beans<'s, 'x>>::Full>,
     N: for<'s, 'x> Hand<<B as Beans<'s, 'x>>::Full>,
+    N: for<'s, 'x> Makes<<B as Beans<'s, 'x>>::Full>,
 {
     const DESC: ModuleDesc = ModuleDesc::new(E::MASK);
 
+    // The provided states start at their defaults. Each forwarded child
+    // then runs its own init system once, in the order the `.forward`
+    // steps first name them. The module's init function runs last: it
+    // sees what the children made.
     fn boot(&self, injects: <B::Injects as ClaimShape>::Lent<'_>) -> Owned<B::State, B::States> {
-        self.init.handler.boot(injects)
+        let mut states = B::States::default();
+        let state = {
+            let mut full = B::full(&mut states, injects);
+            self.list.entries.make_all(&mut full);
+            self.init.handler.start(&mut full)
+        };
+        Owned::new(state, states)
     }
 
-    fn drive<M: Collect + ScopeHost>(
+    fn pass<W: Pass>(
         &self,
-        owned: &mut Owned<B::State, B::States>,
+        states: &mut B::States,
         injects: <B::Injects as ClaimShape>::Lent<'_>,
+        walk: W,
     ) {
-        let mut full = B::full(&mut owned.provides, injects);
-        self.list
-            .entries
-            .hand(ConstEmit::<M> { _markers: PhantomData }, &mut full);
+        let mut full = B::full(states, injects);
+        self.list.entries.hand(walk, &mut full);
         // The descriptor answers at build time: with no declared event to
-        // defer into `M`, no buffer is read.
-        if const { Self::DESC.reads_queue::<M>() } {
-            E::drain::<M, _>(&mut full, &mut |full, path| {
-                self.list.entries.hand(Queued::<M>::new(path), full);
+        // defer into the emit, no buffer is read.
+        if const { W::DRAINS && Self::DESC.reads_queue::<W::Emit>() } {
+            E::drain::<W::Emit, _>(&mut full, &mut |full, path| {
+                self.list.entries.hand(Queued::<W::Emit>::new(path), full);
             });
         }
     }

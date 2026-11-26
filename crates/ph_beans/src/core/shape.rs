@@ -95,13 +95,13 @@ where
 // Generics: `F` type map, `E0`…`E6` slots.
 impl<F, E0, E1, E2, E3, E4, E5, E6> Shape<F> for (E0, E1, E2, E3, E4, E5, E6)
 where
-    F: SlotType<E0>
-        + SlotType<E1>
-        + SlotType<E2>
-        + SlotType<E3>
-        + SlotType<E4>
-        + SlotType<E5>
-        + SlotType<E6>,
+    F: SlotType<E0>,
+    F: SlotType<E1>,
+    F: SlotType<E2>,
+    F: SlotType<E3>,
+    F: SlotType<E4>,
+    F: SlotType<E5>,
+    F: SlotType<E6>,
 {
     type Out = (
         <F as SlotType<E0>>::Out,
@@ -117,14 +117,14 @@ where
 // Generics: `F` type map, `E0`…`E7` slots.
 impl<F, E0, E1, E2, E3, E4, E5, E6, E7> Shape<F> for (E0, E1, E2, E3, E4, E5, E6, E7)
 where
-    F: SlotType<E0>
-        + SlotType<E1>
-        + SlotType<E2>
-        + SlotType<E3>
-        + SlotType<E4>
-        + SlotType<E5>
-        + SlotType<E6>
-        + SlotType<E7>,
+    F: SlotType<E0>,
+    F: SlotType<E1>,
+    F: SlotType<E2>,
+    F: SlotType<E3>,
+    F: SlotType<E4>,
+    F: SlotType<E5>,
+    F: SlotType<E6>,
+    F: SlotType<E7>,
 {
     type Out = (
         <F as SlotType<E0>>::Out,

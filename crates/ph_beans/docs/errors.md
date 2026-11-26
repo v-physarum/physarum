@@ -16,6 +16,10 @@ Pipeline and operator failures are zero-sized types with a numeric code. Workflo
 | `PipelineError` | 3 | no default | A provided bean or its state has no `Default`, so the module cannot create its slot. |
 | `PipelineError` | 4 | not in reach | A system claims a bean it cannot borrow: `Mut` of a shared inject (plain or `Dyn`), `Mut` of a bean provided under `Get`, or a bean the module's `Beans` does not hold at its `At` index. |
 | `PipelineError` | 5 | no marker | An entry of `Provides` is a bare bean. A provide names its access: `Get<P>` or `Mut<P>`. |
+| `PipelineError` | 6 | not a child | A `.forward` names a bean the module cannot run: no `Setup` or `Default`, or it injects a bean the module does not hold. |
+| `PipelineError` | 7 | child not read-only | `.forward(P::T)` names a child that provides a bean under `Mut`. A child under `Get` changes nothing of its own: provide its beans under `Get`. |
+| `PipelineError` | 8 | wrong forward marker | The marker of a `.forward` is not the marker of the provide: `P::T` names a child provided under `Get`, `P::MUT` one provided under `Mut`. Also a bean the module does not provide. |
+| `PipelineError` | 9 | not the module state | The init function does not return the state of its module. A module with `State = NoState` takes no `.init_state`: nothing outside the library makes `NoState`. |
 | `ClaimError<T>` | 1 | duplicate | Bean `T` named twice with the same access in one claim list. |
 | `ClaimError<T>` | 2 | conflict | Bean `T` named shared and exclusive in one claim list. |
 

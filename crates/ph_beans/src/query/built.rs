@@ -2,60 +2,79 @@
 
 use core::marker::PhantomData;
 
-use crate::bean::BeanInfo;
+use crate::bean::{BeanInfo, NoState};
 use crate::context::ApplyCfg;
 use crate::context::Context;
 use crate::context::ContextTick;
 use crate::context::Ctx;
 use crate::context::CtxConfig;
+use crate::context::{FreshInit, Sys};
 use crate::core::config::OfConfig;
 use crate::descriptor::Descriptor;
 use crate::descriptor::NeedBuild;
+use crate::descriptor::NeedInit;
 use crate::descriptor::Valid;
 use crate::descriptor::live::AccSet;
+use crate::query::boot::NoInit;
 use crate::query::init::Init;
 
-/// Replaces status on a concrete [`Ctx`] (hides `B`/`A`/`O`/`T` from [`CtxConfig`]).
-/// Generics: `S` status.
+/// Seals a concrete [`Ctx`] for `.build()` (hides `B`/`A`/`T` from
+/// [`CtxConfig`]).
 #[doc(hidden)]
-pub trait SealStatus<S>: Sized {
-    /// Context after the seal.
+#[diagnostic::on_unimplemented(
+    message = "pipeline not ready: Descriptor::Status = `NeedInit` (tip `{Self}`)",
+    label = "fix Descriptor::Status",
+    note = "the pipeline of a module with a state has no init function"
+)]
+pub trait SealBuilt: Sized {
+    /// Context after the seal: status [`Valid`].
     type Out: Context;
-    /// Installs status `S`.
-    fn seal_status(self) -> Self::Out;
+    /// Installs [`Valid`].
+    fn seal_built(self) -> Self::Out;
 }
 
-// Generics: `B` module, `A` left child, `O` its result, `T` operator, `S` status.
-impl<B, A, O, T, S> SealStatus<S> for Ctx<B, A, O, T>
+// `init_state` has run. Generics: `B` module, `A` args, `T` tick.
+impl<B, A, T> SealBuilt for Ctx<B, A, NeedBuild, T>
 where
     A: AccSet,
     T: ContextTick,
 {
-    type Out = Ctx<B, A, S, T>;
+    type Out = Ctx<B, A, Valid, T>;
 
-    fn seal_status(self) -> Self::Out {
+    fn seal_built(self) -> Self::Out {
         Ctx::new(self.tick)
     }
 }
 
-/// Config: replace status with `S`.
-/// Generics: `S` status.
-#[doc(hidden)]
-pub struct SetStatus<S> {
-    pub(crate) _markers: PhantomData<S>,
+// A module without state has no init function: the library makes its
+// `NoState`. Generics: `B` module, `A` args, `T` tick.
+impl<B, A, T> SealBuilt for Ctx<B, A, NeedInit, T>
+where
+    A: AccSet,
+    T: FreshInit,
+    B: BeanInfo<State = NoState>,
+{
+    type Out = Ctx<B, A, Valid, T::Ready<Sys<B, A, NoInit>>>;
+
+    fn seal_built(self) -> Self::Out {
+        Ctx::new(self.tick.install(Sys::new(NoInit)))
+    }
 }
 
-// Generics: `C` context, `S` status.
-impl<C, S> CtxConfig<C> for SetStatus<S>
+/// Config: seal the pipeline.
+#[doc(hidden)]
+pub struct SetBuilt;
+
+// Generics: `C` context.
+impl<C> CtxConfig<C> for SetBuilt
 where
-    C: Context + SealStatus<S>,
+    C: Context + SealBuilt,
 {
     type Out = C::Out;
     type ScopeOf<E> = E;
 
     fn apply(self, ctx: C) -> Self::Out {
-        let _ = self;
-        ctx.seal_status()
+        ctx.seal_built()
     }
 }
 
@@ -97,26 +116,22 @@ pub trait BuildStep {
 // Generics: `E` event, `C` context.
 impl<E, C> BuildStep for Init<E, C>
 where
-    C: Context<
-            Status = NeedBuild,
-            With<SetStatus<Valid>> = OfConfig<ApplyCfg<SetStatus<Valid>, C>>,
-        >,
-    C::Bean: BeanInfo,
-    SetStatus<Valid>: CtxConfig<C>,
+    C: Context<With<SetBuilt> = OfConfig<ApplyCfg<SetBuilt, C>>>,
+    SetBuilt: CtxConfig<C>,
 {
-    type Out = Built<E, OfConfig<ApplyCfg<SetStatus<Valid>, C>>>;
+    type Out = Built<E, OfConfig<ApplyCfg<SetBuilt, C>>>;
 
     fn build(self) -> Self::Out {
-        Built::new(
-            self.into_context()
-                .configure(SetStatus { _markers: PhantomData }),
-        )
+        Built::new(self.into_context().configure(SetBuilt))
     }
 }
 
 // Generics: `E` event, `C` context.
 impl<E, C> Init<E, C> {
     /// Seals the pipeline. Status becomes [`Valid`](crate::Valid).
+    ///
+    /// A module with a state calls `.init_state` first. A module whose
+    /// state is [`NoState`](crate::NoState) is built without it.
     pub fn build(self) -> <Self as BuildStep>::Out
     where
         Self: BuildStep,

@@ -105,11 +105,11 @@ where
 // Generics: `F` strategy, `E0`…`E4` slots.
 impl<'a, F, E0, E1, E2, E3, E4> Each<F> for &'a mut (E0, E1, E2, E3, E4)
 where
-    F: SlotFn<&'a mut E0>
-        + SlotFn<&'a mut E1>
-        + SlotFn<&'a mut E2>
-        + SlotFn<&'a mut E3>
-        + SlotFn<&'a mut E4>,
+    F: SlotFn<&'a mut E0>,
+    F: SlotFn<&'a mut E1>,
+    F: SlotFn<&'a mut E2>,
+    F: SlotFn<&'a mut E3>,
+    F: SlotFn<&'a mut E4>,
 {
     type Out = (
         <F as SlotFn<&'a mut E0>>::Out,
@@ -133,12 +133,12 @@ where
 // Generics: `F` strategy, `E0`…`E5` slots.
 impl<'a, F, E0, E1, E2, E3, E4, E5> Each<F> for &'a mut (E0, E1, E2, E3, E4, E5)
 where
-    F: SlotFn<&'a mut E0>
-        + SlotFn<&'a mut E1>
-        + SlotFn<&'a mut E2>
-        + SlotFn<&'a mut E3>
-        + SlotFn<&'a mut E4>
-        + SlotFn<&'a mut E5>,
+    F: SlotFn<&'a mut E0>,
+    F: SlotFn<&'a mut E1>,
+    F: SlotFn<&'a mut E2>,
+    F: SlotFn<&'a mut E3>,
+    F: SlotFn<&'a mut E4>,
+    F: SlotFn<&'a mut E5>,
 {
     type Out = (
         <F as SlotFn<&'a mut E0>>::Out,
@@ -164,13 +164,13 @@ where
 // Generics: `F` strategy, `E0`…`E6` slots.
 impl<'a, F, E0, E1, E2, E3, E4, E5, E6> Each<F> for &'a mut (E0, E1, E2, E3, E4, E5, E6)
 where
-    F: SlotFn<&'a mut E0>
-        + SlotFn<&'a mut E1>
-        + SlotFn<&'a mut E2>
-        + SlotFn<&'a mut E3>
-        + SlotFn<&'a mut E4>
-        + SlotFn<&'a mut E5>
-        + SlotFn<&'a mut E6>,
+    F: SlotFn<&'a mut E0>,
+    F: SlotFn<&'a mut E1>,
+    F: SlotFn<&'a mut E2>,
+    F: SlotFn<&'a mut E3>,
+    F: SlotFn<&'a mut E4>,
+    F: SlotFn<&'a mut E5>,
+    F: SlotFn<&'a mut E6>,
 {
     type Out = (
         <F as SlotFn<&'a mut E0>>::Out,
@@ -198,14 +198,14 @@ where
 // Generics: `F` strategy, `E0`…`E7` slots.
 impl<'a, F, E0, E1, E2, E3, E4, E5, E6, E7> Each<F> for &'a mut (E0, E1, E2, E3, E4, E5, E6, E7)
 where
-    F: SlotFn<&'a mut E0>
-        + SlotFn<&'a mut E1>
-        + SlotFn<&'a mut E2>
-        + SlotFn<&'a mut E3>
-        + SlotFn<&'a mut E4>
-        + SlotFn<&'a mut E5>
-        + SlotFn<&'a mut E6>
-        + SlotFn<&'a mut E7>,
+    F: SlotFn<&'a mut E0>,
+    F: SlotFn<&'a mut E1>,
+    F: SlotFn<&'a mut E2>,
+    F: SlotFn<&'a mut E3>,
+    F: SlotFn<&'a mut E4>,
+    F: SlotFn<&'a mut E5>,
+    F: SlotFn<&'a mut E6>,
+    F: SlotFn<&'a mut E7>,
 {
     type Out = (
         <F as SlotFn<&'a mut E0>>::Out,

@@ -12,11 +12,12 @@
 use core::marker::PhantomData;
 
 use crate::context::list::{Hand, Visit};
-use crate::context::maps::MapEntry;
+use crate::context::maps::{Forward, MapEntry};
 use crate::context::sys::MapSys;
 use crate::filter::EmitMask;
 use crate::filter::eval::{Collect, ConstMatch, MatchEmit};
 use crate::filter::slot::{EmitBit, EmitIx};
+use crate::query::child::Child;
 
 /// Bits this path step adds relative to its parent (one event bit, typically).
 #[doc(hidden)]
@@ -121,6 +122,13 @@ where
         H: MapSys<()>,
     {
         S::run_map::<M, F, H>(&entry.handler);
+    }
+
+    fn on_forward<F, P, B>(&self, _entry: &Forward<F, P, B>, _res: &mut ())
+    where
+        F: MatchEmit + Collect,
+        P: Child<B, ()>,
+    {
     }
 
     fn on_gate<P, St, C>(&self, gate: &Gate<P, St, C>, res: &mut ())

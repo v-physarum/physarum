@@ -23,6 +23,26 @@ impl<'x, S: ?Sized> Held<'x, S> {
     }
 }
 
+/// The borrow of a slot provided under [`Get`](crate::Get), held for one
+/// call. A claim reads it shared. Only `.forward` opens it: the child in
+/// that slot is run over its own node. Generics: `S` borrowed slot.
+pub struct Cold<'x, S: ?Sized>(&'x mut S);
+
+// Generics: `S` borrowed slot.
+impl<'x, S: ?Sized> Cold<'x, S> {
+    pub(crate) fn new(slot: &'x mut S) -> Self {
+        Self(slot)
+    }
+
+    pub(crate) fn open(self) -> &'x mut S {
+        self.0
+    }
+
+    pub(crate) fn read(self) -> &'x S {
+        self.0
+    }
+}
+
 /// Walk: one borrow per owned slot, exclusive unless the slot is [`Frozen`].
 pub struct Borrow;
 
@@ -44,6 +64,15 @@ impl<'a, S: ?Sized> SlotFn<&'a mut Held<'_, S>> for Reborrow {
 
     fn slot(item: &'a mut Held<'_, S>) -> Self::Out {
         item.0
+    }
+}
+
+// Generics: `S` slot provided under `Get`.
+impl<'a, S: ?Sized> SlotFn<&'a mut Cold<'_, S>> for Reborrow {
+    type Out = Cold<'a, S>;
+
+    fn slot(item: &'a mut Cold<'_, S>) -> Self::Out {
+        Cold(item.0)
     }
 }
 
