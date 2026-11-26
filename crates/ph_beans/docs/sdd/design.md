@@ -29,7 +29,7 @@ Layout of `crates/ph_beans/src/`. Keep the surface readable: **small files**, **
 | `borrow/` | Slot story: `At`, `Ix*`, `Off`, `Take` / `TakeMany`. One Borrowing vocabulary for provides and claims. |
 | `descriptor/` | Pipeline lens: `Descriptor`, named `Status` types, `PipelineOk`, `Accessors`, `Get`/`Mut`/`Marker`. Split files (`status.rs`, `accessors.rs`, …). |
 | `context/` | Linear `Ctx`, `Context`, `ContextTick` layout (init slot + map list). |
-| `bean/` | `BeanInfo`, `EventInfo`, DI (`FromParent` / `Module`, provide–inject). |
+| `bean/` | The descriptors of a bean in `info.rs`: `BeanInfo`, `EventInfo`, and `Info<M>`, the descriptor of a pipeline as a bean. DI (`FromParent` / `Module`, provide–inject), `NoState`. |
 | `query/` | Operators and steps: `Init`, `Built`, `Setup`/`Tick`, `Tick::emit`, `.inject_resources`, `.map`, `.filter`, `.emit` — **separate files**, shallow `impl` heads (rule 8). |
 | `filter/` | Predicate AST: `And` / `Or` / `Not` / `On`, shape / eval — not dumped into `init.rs`. |
 | `context/` | `Ctx`, `Pipe`, map list as **`List` / `Leaf` / `Grow`** (rules 7, 11–13); push in **one** `push.rs` — not cons spines / `MapNode`+`room_*`, not flat 9…16 impls, not `push/{leaf,group,wide}`. |

@@ -9,40 +9,10 @@
 //! (rule 14): do not add methods or associated types without owner approval.
 //! Entry points such as [`Query`](crate::query::Query) stay on separate traits.
 
+mod info;
 mod inject;
 mod state;
 
+pub use info::{BeanInfo, EventInfo, Info};
 pub use inject::{FromParent, Module, OfInject, OfParent, OfProvide};
 pub use state::{Blank, NoState};
-
-use crate::filter::On;
-
-/// Standard bean descriptor.
-///
-/// Provides, injects, the combined bean list, and the owned state. A bean
-/// without state names [`NoState`].
-///
-/// Meta trait — frozen without owner approval (rule 14). Use [`Query`](crate::Query)
-/// to start a pipeline.
-pub trait BeanInfo: Sized {
-    /// Beans this type provides.
-    type Provides;
-    /// Beans this type injects from its parent.
-    type Injects;
-    /// Provides and injects together.
-    type Beans;
-    /// Owned state of this bean only. [`NoState`] when it owns none.
-    type State;
-}
-
-/// Extra descriptor for an event, beside [`BeanInfo`].
-///
-/// An event may list several parents. Meta trait — frozen without owner
-/// approval (rule 14).
-pub trait EventInfo: BeanInfo {
-    /// Parent events of this event.
-    type Parents;
-
-    /// `Ev::ON[inner]` starts an event node.
-    const ON: On<Self, ()> = On::new();
-}

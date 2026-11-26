@@ -3,7 +3,6 @@
 mod accessors;
 mod dyn_view;
 pub(crate) mod error;
-mod info;
 pub(crate) mod live;
 mod module;
 pub(crate) mod op_desc;
@@ -13,7 +12,6 @@ mod status;
 pub use accessors::{Accessors, Get, Marker, Mut, State};
 pub use dyn_view::{Dyn, DynObject};
 pub use error::{ClaimError, FilterError, PipelineError};
-pub use info::Info;
 pub use live::{AccSet, ClaimDesc, Idle, Live};
 pub use module::ModuleDesc;
 pub use op_desc::{JoinStatus, OpDesc, OpOk};

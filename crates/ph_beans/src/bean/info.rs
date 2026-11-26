@@ -1,10 +1,42 @@
-//! [`Info`]: the descriptor of a bean, held and claimed like any bean.
+//! The descriptors of a bean: [`BeanInfo`] and [`EventInfo`] declare it,
+//! [`Info`] carries the descriptor of its pipeline as a bean.
 
 use core::marker::PhantomData;
 
-use crate::bean::{BeanInfo, NoState};
+use crate::bean::NoState;
 use crate::descriptor::ModuleDesc;
+use crate::filter::On;
 use crate::query::{ClaimShape, Setup, Tick};
+
+/// Standard bean descriptor.
+///
+/// Provides, injects, the combined bean list, and the owned state. A bean
+/// without state names [`NoState`].
+///
+/// Meta trait — frozen without owner approval (rule 14). Use [`Query`](crate::Query)
+/// to start a pipeline.
+pub trait BeanInfo: Sized {
+    /// Beans this type provides.
+    type Provides;
+    /// Beans this type injects from its parent.
+    type Injects;
+    /// Provides and injects together.
+    type Beans;
+    /// Owned state of this bean only. [`NoState`] when it owns none.
+    type State;
+}
+
+/// Extra descriptor for an event, beside [`BeanInfo`].
+///
+/// An event may list several parents. Meta trait — frozen without owner
+/// approval (rule 14).
+pub trait EventInfo: BeanInfo {
+    /// Parent events of this event.
+    type Parents;
+
+    /// `Ev::ON[inner]` starts an event node.
+    const ON: On<Self, ()> = On::new();
+}
 
 /// The descriptor of bean `M` as a bean.
 ///
