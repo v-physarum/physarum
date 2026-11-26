@@ -4,7 +4,7 @@ This guide has two parts. Part 1 is the API that exists in the crate today,
 written with manual impls; its full example (section 9) was compiled and run
 against the library. Part 2 is the planned `ph_derive` form of the same
 declarations; **none of Part 2 is implemented**. Section 13 lists what is
-missing.
+missing; section 14 is the planned filter-as-module shape.
 
 Error codes are in [`errors.md`](errors.md), performance requirements in
 [`performance.md`](performance.md), the design rules in
@@ -491,6 +491,10 @@ struct App;
 #[config(type = event, parents = Update, state = EventBuf)]
 struct Draw;
 
+#[derive(Component)]
+#[config(type = filter)]
+struct CustomFilter;
+
 #[config(type = dynamic)]
 trait Painter { fn paint(&self); }
 ```
@@ -498,7 +502,8 @@ trait Painter { fn paint(&self); }
 | `type` | On | Emits |
 | --- | --- | --- |
 | `module` | zero-sized struct | `BeanInfo`, one `At` per bean; with `events`, the registry |
-| `event` | zero-sized struct | `BeanInfo`, `EventInfo`, a hidden slot macro |
+| `event` | zero-sized struct | `BeanInfo`, `EventInfo`, a hidden slot macro; a filter module |
+| `filter` | zero-sized struct | `BeanInfo`; a filter module without an emit bit |
 | `proxy` | zero-sized struct | `BeanInfo`, `ProxyInfo` |
 | `dynamic` | trait | `DynObject` for the trait object |
 
@@ -546,4 +551,103 @@ In `ph_beans`:
 6. `FilterError<6>` is a `const` assert: `cargo build` reports it,
    `cargo check` does not, and no test asserts it.
 
-`ph_derive`: everything in Part 2.
+`ph_derive`: everything in Part 2, including section 14.
+
+### 14. Filters as configurable modules
+
+**Not implemented.** Part 1 filters are event paths and wait markers
+(`Update::ON`, `Update::ON[Draw::ON]`, `Update::ON[Keys::MUT]`, combined with
+`&` `|` `!`). This section is the planned shape: a **filter is a module**.
+Event filters are the same thing; their derive type is `event`.
+
+#### Main concept
+
+1. **Highly configurable.** A filter is not a hard-coded predicate. It is a
+   bean with `Setup`, the same pipeline language as any module: claims,
+   filters, maps, build. What it matches, what it waits on, and what it
+   touches are written in that pipeline, not in a separate filter API.
+
+| Derive `type` | Filter module | Extra |
+| --- | --- | --- |
+| `event` | yes | emit bit, `EventInfo` / parents, usable as `Ev::ON[…]` |
+| `filter` | yes | no emit bit; a predicate leaf in a path |
+
+```rust
+#[derive(Component)]
+#[config(type = event, parents = Update, state = EventBuf)]
+struct Draw;
+
+impl Setup for Draw {
+    fn setup(self) -> impl Tick<Self> {
+        Draw::query()
+            .inject_resources(Id::MUT)
+            .filter(Update::ON)
+            .build()
+    }
+}
+
+#[derive(Component)]
+#[config(type = filter)]
+struct CustomFilter;
+
+impl Setup for CustomFilter {
+    fn setup(self) -> impl Tick<Self> {
+        CustomFilter::query()
+            .inject_resources(Id::MUT)
+            .filter(Update::ON)
+            .build()
+    }
+}
+```
+
+- `type = event` and `type = filter` are both filter modules. The difference
+  is the role in the registry: an event owns a bit and nests under
+  `parents`; a plain filter does not.
+- `Setup` configures the filter. The pipeline is the configuration: which
+  claims it needs, which event scope it sits under, which wait markers it
+  clears. There is no second builder for filters.
+- A filter with no state uses `NoState` like any other bean. A filter that
+  keeps match state names `state = …` on the derive.
+
+#### Use
+
+An event filter is the path head / nest today (`Update::ON`,
+`Update::ON[Draw::ON]`). A plain filter is a leaf under that path, or a
+predicate on the current scope:
+
+```rust
+App::query()
+    .inject_resources(*Id::T & *Keys::MUT)
+    .init_state(boot)
+    .filter(Update::ON[Draw::ON])           // event filter modules
+    .map(on_draw)
+    .filter(Update::ON[CustomFilter::T])    // plain filter leaf
+    .map(on_match)
+    .build()
+```
+
+- `Draw::ON` / `CustomFilter::T` / `CustomFilter::MUT` are the leaf markers.
+  For a plain filter the marker says whether it may change its own state
+  while it matches; for an event the nest is still `Ev::ON[…]`.
+- Filters still combine with `&`, `|` and `!`:
+  `.filter(Update::ON[CustomFilter::T & Alive::T])`,
+  `.filter(CustomFilter::T | Other::T)`.
+
+#### Why a module
+
+| Today (Part 1) | Planned |
+| --- | --- |
+| Events are beans with `EventInfo` only | Events are filter modules (`type = event`) with `Setup` |
+| Path leaves are wait markers | Path leaves may also be `type = filter` beans |
+| Wait / scope policy is fixed by the AST node | Policy comes from the filter's `Setup` |
+| One shared language for app modules only | The same language configures event and plain filters |
+
+A filter that needs resources injects them. A filter that should run only
+on `Draw` under `Update` says so with `.filter(Update::ON[Draw::ON])`
+inside its own `setup`. A filter that clears a live `Mut` before the next
+claim names that wait in its pipeline. The caller's `.filter(…)` then
+names the filter module; it does not restate that configuration.
+
+Open: how a filter's `Tick` participates in emit (inline vs gate), whether
+a filter may `.forward` children, and the exact meta trait the derive
+emits for an event vs a plain filter leaf.
